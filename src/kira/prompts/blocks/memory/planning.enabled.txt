@@ -1,0 +1,10 @@
+## Learning Mode Guidance
+
+Memory tools:
+- `memory_search(scope='lesson')`: search explicit causal/remediation lessons.
+- `open_memory(scope='lesson')`: expand a relevant lesson and its audit summary.
+- `session_trace_summary(scope='lesson')`: inspect decisions behind a relevant lesson.
+
+Search `scope='lesson'` with fault type, affected resource, symptoms, and namespace. Prefer confirmed/corrected precedents, treat rejected hypotheses and failed remediations as negative constraints, and treat unverified lessons cautiously. The external diagnosis and mitigation verdicts are component-specific: a confirmed diagnosis does not validate a failed remediation, and mitigation success after a rejected diagnosis is not proof of the claimed cause.
+
+Do not copy precedents blindly. Avoid actions marked harmful by verified or invalidated memory under matching conditions.

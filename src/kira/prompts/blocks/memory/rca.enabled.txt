@@ -1,0 +1,10 @@
+## Memory Guidance
+
+After gathering current evidence, search past incidents with `memory_search`. Open a lesson only for a result you may use.
+
+Memory is historical context, never current-cluster evidence. A prior condition or fix may be stale or unrelated. For any remembered cause:
+1. State the condition that must be true now.
+2. Verify it with current read-only tool evidence.
+3. Check for evidence that contradicts it.
+
+Reject the cause if it is unverified or contradicted. Base the submitted diagnosis and evidence on current observations, not memory.
