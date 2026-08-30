@@ -1,0 +1,173 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kira"
+version = "0.1.0"
+description = "Kubernetes Incident Recovery Agent: a memory-augmented multi-agent pipeline for autonomous microservice incident recovery with privately served language models."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "Yifeng Guo", email = "even0758@gmail.com" }]
+keywords = [
+    "kubernetes",
+    "incident-response",
+    "llm-agents",
+    "site-reliability-engineering",
+    "root-cause-analysis",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Systems Administration",
+]
+
+dependencies = [
+    # Service
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    # Model provider routing
+    "litellm>=1.70",
+    # Graph execution. Kept shallow on purpose: see STYLE_GUIDE.md.
+    "langgraph>=1.0",
+    # Cluster and telemetry access for the default (direct) transport
+    "kubernetes>=31.0",
+    "httpx>=0.28",
+    # Scheduling for the asynchronous Learning stage and approval timeouts
+    "apscheduler>=3.11",
+    # Configuration and CLI
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "typer>=0.15",
+    # Observability, present in every stage
+    "opentelemetry-api>=1.30",
+    "opentelemetry-sdk>=1.30",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.30",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.2"]
+vector = ["chromadb>=1.0"]
+kafka = ["aiokafka>=0.12"]
+sregym = ["mcp>=1.9", "httpx-sse>=0.4"]
+all = ["kira[postgres,vector,kafka,sregym]"]
+
+[project.scripts]
+kira = "kira.cli:app"
+
+# Extension seams. A third party ships a role, tool, transport or environment
+# adapter by declaring an entry point in these groups; no fork required.
+[project.entry-points."kira.roles"]
+
+[project.entry-points."kira.tools"]
+
+[project.entry-points."kira.transports"]
+
+[project.entry-points."kira.adapters"]
+
+[project.urls]
+Homepage = "https://github.com/evenodderguy/kira"
+Repository = "https://github.com/evenodderguy/kira"
+Issues = "https://github.com/evenodderguy/kira/issues"
+
+[dependency-groups]
+dev = [{ include-group = "lint" }, { include-group = "test" }]
+lint = ["ruff==0.16.5", "mypy>=1.15"]
+test = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "pytest-cov>=6.0",
+    "respx>=0.22",
+]
+
+[tool.uv]
+required-version = ">=0.9"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kira"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "I",      # isort
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "SIM",    # flake8-simplify
+    "C4",     # flake8-comprehensions
+    "D",      # pydocstyle
+    "TID",    # flake8-tidy-imports (layer boundaries, see below)
+    "PLC0415", # import at non-top-level
+    "RUF",
+]
+ignore = [
+    "E501",   # line length is handled by the formatter
+    "D203",   # incompatible with D211
+    "D213",   # incompatible with D212
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D"]
+"src/kira/prompts/*" = ["D"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["kira"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+# Layer boundaries, enforced. The core must never know which benchmark or
+# environment it is running under; an adapter supplies its transport instead.
+# See STYLE_GUIDE.md "Layer boundaries".
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"kira.adapters.sregym".msg = "Core modules must not import an adapter. Adapters register via the kira.adapters entry-point group and supply their own transport."
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.mypy]
+files = ["src"]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+
+[[tool.mypy.overrides]]
+module = ["litellm.*", "langgraph.*", "chromadb.*", "apscheduler.*", "kubernetes.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers", "--strict-config", "-ra"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: requires a live cluster, database or model endpoint",
+    "slow: deselect with -m 'not slow'",
+]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+
+[tool.coverage.report]
+exclude_also = [
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@overload",
+]

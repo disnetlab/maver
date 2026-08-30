@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Local runtime state (see settings.workspace.dir)
+.local-workspace/
+*.db
+*.sqlite3
+
+# Environment
+.env
+.env.local
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+
+# Local-only deployment helpers, machine specific
+update-vm.sh
