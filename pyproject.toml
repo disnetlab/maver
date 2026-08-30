@@ -122,6 +122,10 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["D"]
 "src/kira/prompts/*" = ["D"]
+# Field descriptions in the artifact schemas are shipped to the model as its
+# submission tool's JSON Schema and are carried over verbatim. Their typographic
+# characters are part of the frozen contract, not a style choice.
+"src/kira/contracts/artifacts.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["kira"]
