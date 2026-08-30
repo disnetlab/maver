@@ -18,9 +18,7 @@ SHIPPED_ROLES = ["rca", "planning", "execution"]
 
 @pytest.mark.parametrize("role", SHIPPED_ROLES)
 @pytest.mark.parametrize("memory_enabled", [True, False])
-def test_every_shipped_role_composes_in_both_memory_states(
-    role: str, memory_enabled: bool
-) -> None:
+def test_every_shipped_role_composes_in_both_memory_states(role: str, memory_enabled: bool) -> None:
     """A role whose blocks are missing would only fail at incident time."""
     prompt = compose_role_prompt(role, memory_enabled=memory_enabled)
     assert prompt.strip()
