@@ -104,12 +104,10 @@ async def memory_search(
     if n_results is not None and n_results > 0:
         hits = hits[:n_results]
     if not hits:
-        # A real answer, not a failure. Retrieval that can only ever return its top-k
-        # cannot say this, and five unrelated incidents get read as evidence.
-        return (
-            f"No comparable prior incident found in memory for this {scope} query. "
-            "Proceed on the current evidence."
-        )
+        # Carried verbatim. It now occurs for a second reason — nothing cleared the
+        # relevance floor — and that is the point: retrieval that can only ever return
+        # its top-k cannot say this, and five unrelated incidents get read as evidence.
+        return "no relevant past sessions found"
 
     fields = _EVIDENCE_FIELDS if scope == "evidence" else _LESSON_FIELDS
     lines: list[str] = []

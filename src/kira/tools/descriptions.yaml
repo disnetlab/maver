@@ -208,7 +208,7 @@ get_label_values:
 
 memory_search:
   default: >-
-    Hybrid search over one scoped projection of distilled past sessions.
+    Lexical BM25 search over one scoped projection of distilled past sessions.
     scope='evidence' returns observations only; scope='lesson' returns explicitly
     confirmed, corrected, rejected, failed, or unverified causal/action lessons.
   agents:
