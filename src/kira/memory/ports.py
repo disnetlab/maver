@@ -16,10 +16,14 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from kira.contracts.lifecycle import LifecycleState, RunStatus
 
 __all__ = [
+    "AgentRunEventDraft",
     "AgentRunEventRecord",
     "AgentRunRecord",
+    "AgentRunStatus",
+    "ApprovalRecord",
     "ApprovalStatus",
     "ApprovalStore",
+    "DecisionStatus",
     "RunStore",
     "SearchHit",
     "SearchScope",
@@ -40,6 +44,13 @@ before it resembles it by its cause.
 
 ApprovalStatus = Literal["pending", "approved", "denied", "answered", "timed_out", "cancelled"]
 
+DecisionStatus = Literal["approved", "denied", "answered", "timed_out", "cancelled"]
+"""What a pending request can become.
+
+:data:`ApprovalStatus` minus ``pending``, so that a decision *into* the state a request
+is already in cannot be expressed. There is no such thing as deciding to keep waiting.
+"""
+
 AgentRunStatus = Literal["running", "succeeded", "failed", "halted", "awaiting_human", "cancelled"]
 
 
@@ -47,9 +58,11 @@ AgentRunStatus = Literal["running", "succeeded", "failed", "halted", "awaiting_h
 class SessionRecord:
     """One incident, from the alert that raised it to the artefacts it produced.
 
-    The prototype also carried a ``transcript`` field. Nothing ever wrote it and every
-    read hard-coded it to empty, so it is dropped: a field that is always empty is worse
-    than absent, because it reads as "this run produced no conversation".
+    The prototype also carried ``transcript`` and ``agent_trace_summaries``. Nothing
+    ever wrote the first and no method here can write the second, so both are dropped:
+    a field that is always empty is worse than absent, because it reads as "this run
+    produced no conversation" rather than "nobody recorded one". What each role did is
+    on :class:`AgentRunRecord.trace_summary`, reachable through :meth:`RunStore.runs_for`.
     """
 
     session_id: str
@@ -65,7 +78,6 @@ class SessionRecord:
     root_cause: dict[str, Any] | None = None
     plan: dict[str, Any] | None = None
     execution_result: dict[str, Any] | None = None
-    agent_trace_summaries: list[dict[str, Any]] = field(default_factory=list)
     distilled: bool = False
     notes: str | None = None
 
@@ -110,8 +122,28 @@ class AgentRunRecord:
 
 
 @dataclass
+class AgentRunEventDraft:
+    """An event on its way in, before the store has given it a place in the order.
+
+    Identical to :class:`AgentRunEventRecord` without ``seq``, because the sequence is
+    the store's to allocate and a caller that could set it could also collide with
+    another caller writing to the same run.
+    """
+
+    event_id: str
+    agent_run_id: str
+    pipeline_id: str | None
+    event_type: str
+    payload: dict[str, Any]
+    created_at: str
+    role: str | None = None
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+
+
+@dataclass
 class AgentRunEventRecord:
-    """One ordered event inside a role's execution."""
+    """One ordered event inside a role's execution, as stored."""
 
     event_id: str
     agent_run_id: str
@@ -225,6 +257,10 @@ class SessionStore(Protocol):
     ) -> None:
         """Attach what a role produced to its session.
 
+        Partial. A ``None`` leaves that artefact unchanged, so Planning attaching a
+        plan cannot erase the diagnosis it was given. Contrast :meth:`set_run_status`,
+        where a ``None`` clears.
+
         Args:
             session_id: Which session.
             root_cause: The diagnosis, when one was submitted.
@@ -254,12 +290,21 @@ class SessionStore(Protocol):
     ) -> None:
         """Record where a run is, and enough to resume it.
 
+        All four values move together, in one write. A ``None`` therefore clears rather
+        than leaving alone, which is the opposite of :meth:`update_artefacts` and is the
+        point: a reader must never see ``awaiting_human`` without the checkpoint that
+        belongs to it, and a run that has resumed must not still advertise the
+        checkpoint it has already consumed.
+
+        ``ended_at`` is stamped the first time a terminal status (``completed``,
+        ``failed``, ``cancelled``) is recorded, and never moves again.
+
         Args:
             session_id: Which session.
             status: The operational status.
-            current_stage: The role that was running.
-            checkpoint: State to resume from.
-            awaiting_request_id: The approval being waited on, when parked.
+            current_stage: The role that was running, cleared when None.
+            checkpoint: State to resume from, cleared when None.
+            awaiting_request_id: The approval being waited on, cleared when None.
         """
         ...
 
@@ -318,7 +363,7 @@ class ApprovalStore(Protocol):
         self,
         request_id: str,
         *,
-        status: ApprovalStatus,
+        status: DecisionStatus,
         decided_by: str,
         reason: str | None = None,
     ) -> ApprovalRecord | None:
@@ -340,6 +385,15 @@ class ApprovalStore(Protocol):
 
     def expire_due(self, *, now: str) -> list[ApprovalRecord]:
         """Time out every request past its expiry.
+
+        Timestamps are ISO-8601 UTC and must be compared as parsed instants, not as
+        strings: ``"...00Z"`` and ``"...00+00:00"`` are the same moment and sort
+        differently, because ``"+"`` orders before ``"Z"``. A request whose
+        ``expires_at`` cannot be parsed stays pending, since a malformed expiry is not
+        evidence that anything has expired.
+
+        Only ``decided_at`` is set, to ``now``. Nobody decided, so ``decided_by`` and
+        ``reason`` are left as they were.
 
         Args:
             now: The current timestamp.
@@ -382,11 +436,49 @@ class RunStore(Protocol):
         """
         ...
 
-    def append_event(self, record: AgentRunEventRecord) -> None:
-        """Append one ordered event.
+    def get_run(self, agent_run_id: str) -> AgentRunRecord | None:
+        """Read one run.
 
         Args:
-            record: The event.
+            agent_run_id: Which run.
+
+        Returns:
+            The record, or None when it does not exist.
+        """
+        ...
+
+    def runs_for(self, session_id: str) -> list[AgentRunRecord]:
+        """Read every role's run within one incident, oldest first.
+
+        Matched on ``AgentRunRecord.pipeline_id``, which is the incident a run belongs
+        to. This is the only way to reach what a role produced: ``output``,
+        ``trace_summary``, ``error`` and ``metadata`` are otherwise write-only.
+
+        Args:
+            session_id: Which incident.
+
+        Returns:
+            The runs, ordered by start time.
+        """
+        ...
+
+    def append_event(self, event: AgentRunEventDraft) -> AgentRunEventRecord:
+        """Append one event, giving it the next place in the run's order.
+
+        The sequence is allocated here, inside the write, and is monotonic per
+        ``agent_run_id`` starting at 1. That is why the draft has no ``seq``: a caller
+        that could choose one could also collide with another caller writing to the
+        same run.
+
+        Note that :mod:`kira.audit.journal` stamps a sequence of its own, per
+        ``session_id`` rather than per run. The two are different orderings and are not
+        yet reconciled; that happens when the journal is wired to a store.
+
+        Args:
+            event: The event to append.
+
+        Returns:
+            The stored record, carrying the sequence it was given.
         """
         ...
 
@@ -456,8 +548,12 @@ class TextSearch(Protocol):
         *,
         n_results: int = 5,
         scope: SearchScope = "evidence",
-    ) -> list[SearchHit]:
+    ) -> list[SessionMemory]:
         """Return only records matching a regular expression.
+
+        Records rather than hits, so that :class:`SearchHit` is built in exactly one
+        place. A backend that returned hits would have to reproduce the retriever's
+        metadata layout, and two copies of that would drift.
 
         Args:
             pattern: A case-insensitive regular expression.
@@ -465,12 +561,15 @@ class TextSearch(Protocol):
             scope: Which projection to match.
 
         Returns:
-            Matching hits, possibly none.
+            Matching records, possibly none.
         """
         ...
 
-    def get_session(self, session_id: str) -> SessionMemory | None:
-        """Read one stored record whole.
+    def open_record(self, session_id: str) -> SessionMemory | None:
+        """Read one stored record whole, including what retrieval withholds.
+
+        Named apart from :meth:`SessionStore.get_session` because a deployment may put
+        both ports on one object, and they answer with different types.
 
         Args:
             session_id: Which session.
@@ -534,8 +633,8 @@ class VectorSearch(Protocol):
         """
         ...
 
-    def get_session(self, session_id: str) -> SessionMemory | None:
-        """Read one stored record whole.
+    def open_record(self, session_id: str) -> SessionMemory | None:
+        """Read one stored record whole, including what retrieval withholds.
 
         Args:
             session_id: Which session.

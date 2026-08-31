@@ -152,9 +152,10 @@ class Retriever:
             scope: Which projection to match.
 
         Returns:
-            Matching hits, possibly none.
+            Matching hits, unscored because nothing ranked them.
         """
-        return self.text.scan_summaries(pattern, n_results=self.k, scope=scope)
+        found = self.text.scan_summaries(pattern, n_results=self.k, scope=scope)
+        return [_to_hit(memory, scope) for memory in found]
 
     def open(self, session_id: str) -> SessionMemory | None:
         """Read one stored record whole, including what retrieval withholds.
@@ -165,7 +166,7 @@ class Retriever:
         Returns:
             The record, or None.
         """
-        return self.text.get_session(session_id)
+        return self.text.open_record(session_id)
 
 
 def _document(memory: SessionMemory, scope: SearchScope) -> str:
@@ -178,7 +179,7 @@ def _document(memory: SessionMemory, scope: SearchScope) -> str:
     return memory.lesson_text if scope == "lesson" else memory.evidence_text
 
 
-def _to_hit(memory: SessionMemory, scope: SearchScope, score: float) -> SearchHit:
+def _to_hit(memory: SessionMemory, scope: SearchScope, score: float | None = None) -> SearchHit:
     return SearchHit(
         session_id=memory.session_id,
         summary=_document(memory, scope),

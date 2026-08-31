@@ -4,7 +4,7 @@ import pathlib
 import pytest
 
 from kira.memory import bm25
-from kira.memory.ports import SearchHit, SearchScope, SessionMemory
+from kira.memory.ports import SearchScope, SessionMemory
 from kira.memory.retrieval import Retriever, build_query
 
 FIXTURE = json.loads(
@@ -51,10 +51,10 @@ class FakeText:
         self.asked_for.append(text)
         return [m for m in self.memories if m.session_id not in exclude][:limit]
 
-    def scan_summaries(self, pattern, *, n_results=5, scope="evidence") -> list[SearchHit]:
+    def scan_summaries(self, pattern, *, n_results=5, scope="evidence") -> list[SessionMemory]:
         return []
 
-    def get_session(self, session_id: str) -> SessionMemory | None:
+    def open_record(self, session_id: str) -> SessionMemory | None:
         return next((m for m in self.memories if m.session_id == session_id), None)
 
     def upsert_summary(self, memory: SessionMemory) -> None: ...

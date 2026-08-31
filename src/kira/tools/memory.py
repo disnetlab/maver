@@ -251,7 +251,10 @@ async def session_trace_summary(ctx: ToolContext, session_id: str, agent: str | 
     if record is None:
         return json.dumps({"error": "not found", "ref": session_id})
 
-    summaries = record.agent_trace_summaries
+    runs = ctx.runs.runs_for(resolved) if ctx.runs is not None else []
+    summaries = [
+        {"agent": run.agent_name, **run.trace_summary} for run in runs if run.trace_summary
+    ]
     if agent:
         summaries = [s for s in summaries if s.get("agent") == agent or s.get("role") == agent]
     if not summaries:

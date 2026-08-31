@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from kira.audit.journal import Journal
-from kira.memory.ports import SessionStore
+from kira.memory.ports import RunStore, SessionStore
 from kira.memory.retrieval import Retriever
 from kira.settings.groups import ToolSettings
 from kira.tools.transport.base import ToolTransport
@@ -107,6 +107,8 @@ class ToolContext:
     memory: Retriever | None = None
     """The experience store, or None when this configuration has none."""
     sessions: SessionStore | None = None
+    runs: RunStore | None = None
+    """Role runs and their traces, when this deployment records them."""
     memory_exclude: tuple[str, ...] = ()
     """Session ids retrieval must withhold, supplied per run by an evaluation harness."""
     memory_aliases: dict[str, str] = field(default_factory=dict)
