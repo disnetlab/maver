@@ -98,6 +98,10 @@ packages = ["src/kira"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
+# Local working state, not source. Ruff formats Python blocks inside Markdown, and
+# reflowing the survey notes would destroy the aligned annotations that make them
+# readable. The directory is gitignored and deleted once the specs land.
+extend-exclude = ["refactor"]
 
 [tool.ruff.lint]
 select = [

@@ -32,3 +32,7 @@ htmlcov/
 
 # Local-only deployment helpers, machine specific
 update-vm.sh
+
+# Rebuild working state: deep-read notes, design specs in progress, workflow
+# scripts. Deleted once the rebuild is done; never part of the published artifact.
+refactor/
