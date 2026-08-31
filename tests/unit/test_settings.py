@@ -302,3 +302,53 @@ class TestRealDeployments:
         # it carries no KIRA_ prefix it must not stop the process either.
         assert "PROMPT_VARIANT" not in legacy_names_in_use()
         assert load_settings().pipeline.mode == "multi"
+
+
+# The prototype performs cluster writes from these two stages.
+WRITE_STAGES = ["execution", "single.mitigation"]
+
+
+class TestAuthorityGateCoverage:
+    """The gate must not fail open on a stage nobody remembered to list."""
+
+    @pytest.mark.parametrize("stage", WRITE_STAGES)
+    def test_every_write_capable_stage_is_gated_by_default(self, stage: str) -> None:
+        """The prototype writes to the cluster from two stages, not one.
+
+        A default naming only the execution role let the entire single-agent
+        configuration write to a cluster without any write reaching the gate, and
+        nothing reported it. A control keyed on an enumeration of stage-name strings
+        fails silently whenever a stage is added or renamed.
+        """
+        assert load_settings().authority.requires_approval(stage)
+
+    def test_an_unknown_future_stage_is_gated_too(self) -> None:
+        assert load_settings().authority.requires_approval("some.stage.added.later")
+
+    def test_narrowing_the_gate_is_possible_but_explicit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("KIRA_AUTHORITY__REQUIRE_APPROVAL_STAGES", "execution")
+        authority = load_settings().authority
+        assert authority.requires_approval("execution")
+        assert not authority.requires_approval("single.mitigation")
+
+
+class TestRetiredDeliveryMode:
+    def test_critique_is_refused_at_startup_with_a_reason(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A startup error beats a composition failure in the middle of an incident."""
+        monkeypatch.setenv("MEMORY_SECOND_OPINION_MODE", "critique")
+        with pytest.raises(ValidationError, match="not a shipped mechanism"):
+            load_settings()
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("context", "context"), ("memory", "assignment"), ("resample", "none")],
+    )
+    def test_the_shipped_modes_still_resolve(
+        self, value: str, expected: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MEMORY_SECOND_OPINION_MODE", value)
+        assert load_settings().secondpass.delivery == expected
