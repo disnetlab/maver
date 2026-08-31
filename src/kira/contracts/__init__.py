@@ -8,6 +8,7 @@ refactor. See STYLE_GUIDE.md, "Typed artifacts are frozen".
 
 from kira.contracts.artifacts import (
     ExecutionResult,
+    LearningPacket,
     LearningResult,
     Plan,
     PlanStep,
@@ -28,6 +29,7 @@ from kira.contracts.events import (
     SubmissionEvent,
     ToolCallEvent,
 )
+from kira.contracts.lifecycle import LifecycleState, RunStatus
 from kira.contracts.state import IncidentState, TargetStage
 
 __all__ = [
@@ -36,13 +38,16 @@ __all__ = [
     "ExecutionResult",
     "IncidentState",
     "InterventionEvent",
+    "LearningPacket",
     "LearningResult",
+    "LifecycleState",
     "ModelCallEvent",
     "Plan",
     "PlanStep",
     "PolicyDecisionEvent",
     "RoleTraceSummary",
     "RootCause",
+    "RunStatus",
     "SingleDiagnosis",
     "SingleResult",
     "StageEvent",

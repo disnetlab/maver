@@ -27,6 +27,7 @@ from kira.contracts.parsing import (
 
 __all__ = [
     "ExecutionResult",
+    "LearningPacket",
     "LearningResult",
     "Plan",
     "PlanStep",
@@ -561,3 +562,39 @@ class RoleTraceSummary(BaseModel):
     errors_or_uncertainties: list[str] = Field(default_factory=list)
     output_summary: str = ""
     omitted_details_hint: str = ""
+
+
+class LearningPacket(BaseModel):
+    """What an offline learning pass receives about one completed incident.
+
+    Assembled from stored records rather than from live state, because learning runs
+    after the incident has closed.
+    """
+
+    session_id: str
+    lifecycle_state: str
+    alert: dict[str, Any]
+    root_cause: dict[str, Any] | None = None
+    plan: dict[str, Any] | None = None
+    execution_result: dict[str, Any] | None = None
+    verify_result: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The system's own end-to-end recovery verdict, when verification ran. "
+            "The prototype's packet omitted this, so the learning pass judged an "
+            "incident's outcome without the one role that had actually checked "
+            "whether the system recovered. Populating it changes what learning sees, "
+            "so the role that consumes this decides how to use it."
+        ),
+    )
+    trace_summaries: list[RoleTraceSummary] = Field(default_factory=list)
+    operator_notes: str | None = None
+    external_feedback: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "External evaluation of this session, when a source of truth is "
+            "available, such as a benchmark oracle or a human grader. A neutral "
+            "slot: the producer decides what goes here and the learning pass treats "
+            "it as ground truth."
+        ),
+    )
