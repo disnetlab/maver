@@ -15,7 +15,7 @@ import json
 import logging
 from typing import Any
 
-from kira.settings.profiles import EXTRA_BODY_PROVIDERS, ModelProfile
+from kira.settings.profiles import EXTRA_BODY_PROVIDERS, ModelProfile, SamplingSet
 from kira.settings.root import Settings
 
 __all__ = [
@@ -146,6 +146,34 @@ def resolve_sampling(profile: ModelProfile, settings: Settings) -> SamplingResol
             continue
         (extra_body if name in extra_fields else top_level)[name] = value
     return SamplingResolution(profile.name, values, top_level, extra_body, overrides)
+
+
+def split_sampling(sampling: SamplingSet, profile: ModelProfile) -> SamplingResolution:
+    """Split an explicit sampling set for the request, without consulting settings.
+
+    Used for an auxiliary call that supplies its own set — a quality gate, a nominator,
+    a selector — so it runs on what it asked for rather than on the agent's profile.
+    Environment overrides deliberately do not apply: they exist so a run script can
+    displace the *agent's* sampling, and letting them reach a gate would make the gate's
+    determinism depend on a variable set for something else.
+
+    Args:
+        sampling: The complete set to apply.
+        profile: The profile, consulted only for which fields the provider needs routed
+            through its native extension.
+
+    Returns:
+        The resolved sampling configuration.
+    """
+    values = sampling.model_dump()
+    extra_fields = profile.quirks.extra_body_fields
+    top_level: dict[str, Any] = {}
+    extra_body: dict[str, Any] = {}
+    for name, value in values.items():
+        if value is None:
+            continue
+        (extra_body if name in extra_fields else top_level)[name] = value
+    return SamplingResolution(profile.name, values, top_level, extra_body, {})
 
 
 def assert_sampling_is_pinned(profile: ModelProfile, resolution: SamplingResolution) -> None:

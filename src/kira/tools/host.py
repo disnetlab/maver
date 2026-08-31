@@ -21,7 +21,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from kira.tools.context import ToolContext
+from kira.tools.context import ToolContext, redact
 from kira.tools.errors import EXEC_OUTPUT_LIMIT, tool_error
 from kira.tools.policy import always_writes
 from kira.tools.registry import Authority, tool
@@ -121,8 +121,8 @@ async def ssh_exec(ctx: ToolContext, node: str, command: str) -> str:
         process.kill()
         return tool_error(f"ssh_exec timed out after {_TIMEOUT_SECONDS}s")
 
-    rendered = ctx.evidence.filter_result(
-        f"exit_code={process.returncode}\n{stdout.decode(errors='replace')}"
+    rendered = redact(
+        ctx.evidence, f"exit_code={process.returncode}\n{stdout.decode(errors='replace')}"
     )
     return ctx.workspace.save_tool_output(rendered, "host_recovery", EXEC_OUTPUT_LIMIT)
 

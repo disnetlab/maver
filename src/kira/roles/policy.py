@@ -16,9 +16,11 @@ Two departures from the prototype, both deliberate:
 
 import hashlib
 import json
-from collections.abc import Sequence
+import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 from kira.llm.types import Message, ToolCall
 from kira.prompts.loader import read_asset, render
@@ -34,6 +36,7 @@ __all__ = [
     "finalizer_rescue_message",
     "mixed_submit_message",
     "no_tool_nudge_message",
+    "repair_submission",
     "repeat_breaker_message",
     "role_system_prompt",
     "truncate_text",
@@ -327,6 +330,40 @@ def compact_rescue_context(
     sections.append(control("finalizer_call_now", SUBMIT_TOOL=submit_tool))
 
     return [*opening, {"role": "user", "content": "\n\n".join(sections)}]
+
+
+def repair_submission(arguments: Mapping[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Repair only the narrow, telemetry-visible schema slips worth repairing.
+
+    Exactly one: a confidence outside its range is clipped. The alternative is to hand
+    it back, which costs one of three shared submission retries and, three times over,
+    ends the stage — so a model writing 1.4 instead of 0.9 loses the whole cell, and the
+    loss is indistinguishable in the results from a model that had nothing to say.
+
+    The repair is recorded rather than silent, so the number a run reports is never
+    quietly different from the number the model produced.
+
+    Args:
+        arguments: The submitted arguments.
+
+    Returns:
+        The arguments to validate, and a list of the repairs applied.
+    """
+    if "confidence" not in arguments:
+        return dict(arguments), []
+    raw = arguments["confidence"]
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return dict(arguments), []
+    if not math.isfinite(value) or 0.0 <= value <= 1.0:
+        return dict(arguments), []
+    clipped = max(0.0, min(1.0, value))
+    repaired = dict(arguments)
+    repaired["confidence"] = clipped
+    return repaired, [
+        {"field": "confidence", "original": raw, "repaired": clipped, "reason": "clipped_to_0_1"}
+    ]
 
 
 @dataclass(frozen=True, slots=True)

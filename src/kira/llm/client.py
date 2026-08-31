@@ -19,7 +19,12 @@ from typing import Any
 
 from kira.contracts.events import ModelCallEvent
 from kira.llm.errors import RETRYABLE, ErrorClass, ModelCallError, classify
-from kira.llm.sampling import SamplingResolution, is_token_limit_finish, resolve_sampling
+from kira.llm.sampling import (
+    SamplingResolution,
+    is_token_limit_finish,
+    resolve_sampling,
+    split_sampling,
+)
 from kira.llm.types import Message, ModelRequest, ModelResponse, ToolCall, ToolSpec, Usage
 from kira.prompts.loader import read_asset
 from kira.settings.profiles import ModelProfile
@@ -164,6 +169,12 @@ def serialise_assistant(response: ModelResponse) -> Message:
 
     if truncated and calls:
         calls = []
+        # Fold the reasoning forward here too, not only on the no-call branch below. The
+        # loop answers this turn with a nudge telling the model to continue from the
+        # state it was cut off in — and if the visible content was empty, that state is
+        # otherwise just the discard note, which is the stall the fold exists to prevent.
+        if not content:
+            content = (response.reasoning or "").strip()
         note = read_asset("control/truncated_tool_call_note.txt").strip()
         content = f"{content}\n\n{note}".strip() if content else note
 
@@ -346,8 +357,15 @@ class LLMClient:
             messages.append({"role": "system", "content": request.system})
         messages.extend(request.messages)
 
-        top_level = dict(self.sampling.top_level)
-        extra_body = dict(self.sampling.extra_body)
+        # A request may carry its own sampling set, which is how an auxiliary call —
+        # a quality gate, a nominator, a selector — runs deterministically while the
+        # agent's own profile stays as measured. Declared and never read, this field
+        # would silently run every gate on the agent's sampling, which is the failure it
+        # exists to prevent: a gate at temperature 1.0 with a presence penalty answers
+        # differently each time it is asked the same question.
+        applied = split_sampling(request.sampling, profile) if request.sampling else self.sampling
+        top_level = dict(applied.top_level)
+        extra_body = dict(applied.extra_body)
 
         if request.lite_reasoning:
             # A rescue turn asks only for a schema-valid submission, and a greedy local

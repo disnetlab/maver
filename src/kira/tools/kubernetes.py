@@ -16,7 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from kira.tools.context import ToolContext
+from kira.tools.context import ToolContext, redact
 from kira.tools.errors import tool_error
 from kira.tools.policy import ActionClass, ToolPolicy, always_writes, read_only, register_policy
 from kira.tools.registry import Authority, tool
@@ -373,7 +373,7 @@ async def exec_kubectl_cmd_safely(ctx: ToolContext, cmd: str, save_as: str | Non
         return refusal
 
     argv = _append_delete_wait_false(_bound_blocking_wait(argv, ctx.transport.timeout_seconds))
-    filtered = ctx.evidence.filter_result(await ctx.transport.kubectl(argv))
+    filtered = redact(ctx.evidence, await ctx.transport.kubectl(argv))
     if save_as:
         return ctx.workspace.save_named_output(filtered, save_as)
     return ctx.workspace.save_tool_output(filtered, "kubectl", OUTPUT_LIMIT)
@@ -400,7 +400,7 @@ async def read_kubectl(ctx: ToolContext, cmd: str) -> str:
         return tool_error("unsupported kubectl command shape for read-only snapshot")
     if classify(argv, DEFAULT_POLICY) != "read":
         return tool_error("read_kubectl only runs read-only kubectl")
-    return ctx.evidence.filter_result(await ctx.transport.kubectl(argv))
+    return redact(ctx.evidence, await ctx.transport.kubectl(argv))
 
 
 _ACTION_BY_AUTHORITY = {

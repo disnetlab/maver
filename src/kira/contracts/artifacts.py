@@ -23,7 +23,14 @@ constant. See STYLE_GUIDE.md, "Typed artifacts are frozen".
 
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, Field, GetJsonSchemaHandler, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    GetJsonSchemaHandler,
+    field_validator,
+    model_validator,
+)
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema
 
@@ -64,6 +71,14 @@ class SubmissionModel(BaseModel):
     docstrings are free to say whatever a reader needs.
     """
 
+    model_config = ConfigDict(extra="forbid")
+    """Reject a field the schema does not declare.
+
+    Pydantic's default silently discards one, so a model inventing a field, or a schema
+    that drifts from what a role is prompted to produce, looks exactly like a clean
+    submission. The settings layer already forbids extras for the same reason.
+    """
+
     schema_description: ClassVar[str | None] = None
 
     @classmethod
@@ -71,6 +86,13 @@ class SubmissionModel(BaseModel):
         cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler
     ) -> JsonSchemaValue:
         """Emit only the description this class declares, never its docstring.
+
+        Also drops the ``additionalProperties`` that ``extra="forbid"`` would otherwise
+        add. Rejecting an undeclared field is a validation decision and must not change
+        the schema the model is sent: that schema is a held-constant input to every
+        published measurement, and it already lists exactly the properties that exist,
+        so the keyword tells the model nothing it does not already know while changing
+        the bytes on the wire.
 
         Args:
             core_schema: The validated core schema.
@@ -81,6 +103,7 @@ class SubmissionModel(BaseModel):
         """
         schema = handler(core_schema)
         schema.pop("description", None)
+        schema.pop("additionalProperties", None)
         if cls.schema_description is not None:
             schema["description"] = cls.schema_description
         return schema

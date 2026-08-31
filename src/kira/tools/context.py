@@ -9,6 +9,7 @@ The context grows as the subsystems it carries land; it is deliberately built fr
 exists rather than stubbed ahead of them.
 """
 
+import logging
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -19,7 +20,9 @@ from kira.settings.groups import ToolSettings
 from kira.tools.transport.base import ToolTransport
 from kira.tools.workspace import SessionWorkspace
 
-__all__ = ["EvidencePolicy", "NullEvidencePolicy", "ToolContext"]
+__all__ = ["EvidencePolicy", "NullEvidencePolicy", "ToolContext", "redact", "redact_query"]
+
+_log = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -84,6 +87,48 @@ class NullEvidencePolicy:
             The same query.
         """
         return query
+
+
+def redact(policy: EvidencePolicy, content: str) -> str:
+    """Apply an evidence policy, failing open.
+
+    Deliberately the opposite of how an authority failure is handled. A policy that
+    cannot answer has not authorised anything, so a write is refused; but a filter that
+    raises has not found anything to hide, and turning a good tool result into an error
+    would cost the role a real observation over a bug in an adapter's redaction.
+
+    Args:
+        policy: The evidence policy.
+        content: A tool result.
+
+    Returns:
+        The filtered result, or the original when filtering failed.
+    """
+    try:
+        return policy.filter_result(content)
+    except Exception as exc:  # a redaction bug must not destroy the observation
+        _log.warning("evidence policy failed and the result was passed through: %s", exc)
+        return content
+
+
+def redact_query(policy: EvidencePolicy, query: str) -> str:
+    """Apply an evidence policy to a query, failing **closed**.
+
+    The mirror of :func:`redact`, and closed rather than open on purpose: a query that
+    was not rewritten reaches somewhere the environment meant to hide, and a model that
+    can ask about a hidden namespace learns it exists from the shape of the answer.
+
+    Args:
+        policy: The evidence policy.
+        query: The query the model wrote.
+
+    Returns:
+        The rewritten query.
+
+    Raises:
+        Exception: Whatever the policy raised. The caller turns it into a tool error.
+    """
+    return policy.filter_query(query)
 
 
 @dataclass(frozen=True)

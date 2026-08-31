@@ -46,6 +46,7 @@ from kira.roles.policy import (
     finalizer_rescue_message,
     mixed_submit_message,
     no_tool_nudge_message,
+    repair_submission,
     repeat_breaker_message,
 )
 
@@ -555,9 +556,23 @@ async def run_until_submit(
                     )
                     continue
 
+            # Repair the narrow slips that are worth repairing before validating. A
+            # confidence of 1.4 is a formatting mistake, not a failure to diagnose, and
+            # handing it back spends one of three shared retries.
+            arguments, repairs = repair_submission(call_.arguments)
+            if repairs:
+                log.record(
+                    SubmissionEvent(
+                        artifact=call_.name,
+                        accepted=True,
+                        attempt=state.submit_rejections + 1,
+                        validation_error=f"repaired: {repairs}",
+                    )
+                )
+
             if submit_validator is not None:
                 try:
-                    submit_validator(dict(call_.arguments))
+                    submit_validator(arguments)
                 except Exception as exc:  # handed back to the model for repair
                     state.submit_rejections += 1
                     detail = f"{type(exc).__name__}: {exc}"
@@ -592,7 +607,7 @@ async def run_until_submit(
                     artifact=call_.name, accepted=True, attempt=state.submit_rejections + 1
                 )
             )
-            return finish("submitted", submission=dict(call_.arguments))
+            return finish("submitted", submission=arguments)
 
         results = await execute_all(response.tool_calls)
         state.tool_calls_made += len(results)
