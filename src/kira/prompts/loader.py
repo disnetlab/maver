@@ -36,6 +36,10 @@ _ROLE_MARKERS: dict[str, str] = {
 }
 """Marker name to the block family that fills it."""
 
+FILLABLE_MARKERS: frozenset[str] = frozenset(_ROLE_MARKERS)
+"""Markers the loader can fill. A role prompt declaring any other composes to a
+template with a literal ``{{MARKER}}`` still in it, which then reaches the model."""
+
 # Which kubectl guidance a role receives. Roles absent from this map hold no
 # cluster tools and must not declare the marker.
 _KUBECTL_BLOCK: dict[str, str] = {
