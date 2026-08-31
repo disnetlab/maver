@@ -68,7 +68,11 @@ def read_asset(relative_path: str) -> str:
     for part in relative_path.split("/"):
         resource = resource / part
     try:
-        return resource.read_text(encoding="utf-8")
+        # Stripped on load, matching the prototype's own loader. Every asset ships with
+        # a trailing newline, and a block substituted into a template unstripped adds a
+        # blank line the measured prompts did not have. Composition is a held-constant
+        # input, so this single .strip() is load-bearing rather than cosmetic.
+        return resource.read_text(encoding="utf-8").strip()
     except (FileNotFoundError, NotADirectoryError) as exc:
         raise PromptError(f"prompt asset not found: {relative_path}") from exc
 

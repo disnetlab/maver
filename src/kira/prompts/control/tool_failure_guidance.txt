@@ -1,0 +1,5 @@
+## Tool-call protocol
+When you are ready to finish, call your submit tool as the only tool call in that assistant turn. Do not combine a submit call with read, write, rollback, memory, or other investigation tools. If another tool result is still useful, call that tool first, wait for its result, and submit on a later turn.
+
+## Handling tool failures
+If a tool call is rejected or returns an error, do not repeat the same call or a trivial variant of it — tool failures are usually deterministic and will recur. If you still need that information, get it a different way: a different query, a different tool, or a different resource. Only once you have genuinely exhausted your options, call your submit tool with your best current result rather than retrying the failing call.

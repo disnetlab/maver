@@ -1,0 +1,1 @@
+The previous turn reached `{{REASON}}`. The investigation is complete enough to finalize, but the harness can only continue through a valid `{{SUBMIT_TOOL}}` tool call. Do not call investigation tools. Convert your existing evidence and conclusion into exactly one `{{SUBMIT_TOOL}}` call now. Do not add prose.

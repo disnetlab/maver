@@ -1,0 +1,1 @@
+You emitted {{CALL_COUNT}} tool calls in one turn, above the limit of {{LIMIT}}; none ran. Choose only the few calls needed for the next step, then wait for their results.

@@ -27,7 +27,6 @@ Anti-patterns that FAIL (the sandbox has no cluster credentials) — never do th
 - `bash_exec` running `kubectl get ... > file`.
 Both are rejected; run kubectl via `exec_kubectl_cmd_safely` instead.
 
-
 Your hidden reasoning is discarded between turns. Every tool takes a required `rationale` argument — use it to carry which step you are on and how you will verify it.
 
 ## Submit

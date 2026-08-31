@@ -1,0 +1,1 @@
+You did not call a tool. Every turn must invoke a tool. Either call an investigation tool or call `{{SUBMIT_TOOL}}` to finish. Do not respond with plain text.
