@@ -42,7 +42,8 @@ _KUBECTL_BLOCK: dict[str, str] = {
     "planning": "planning",
     "execution": "execution",
     "verify": "read_only",
-    "single": "execution",
+    "learning": "read_only",
+    "single": "single",
 }
 
 
@@ -120,8 +121,10 @@ def render(template: str, values: Mapping[str, str]) -> str:
         values: Marker name to replacement text.
 
     Returns:
-        The rendered prompt, with surrounding blank lines collapsed where a block
-        rendered empty.
+        The rendered prompt, byte-identical to what the prototype's loader produced.
+        Substitution is literal: no stripping and no collapsing of blank runs, because
+        the composed string is a held-constant input and tidying it would change what
+        the measured baseline was measured on.
 
     Raises:
         PromptError: When a marker has no value, or a value has no marker.
@@ -134,13 +137,12 @@ def render(template: str, values: Mapping[str, str]) -> str:
         raise PromptError(f"value supplied for absent prompt marker(s): {sorted(unused)}")
 
     def _replace(match: re.Match[str]) -> str:
-        return values[match.group(1)].strip()
+        return values[match.group(1)]
 
-    rendered = _MARKER.sub(_replace, template)
-    return re.sub(r"\n{3,}", "\n\n", rendered).strip() + "\n"
+    return _MARKER.sub(_replace, template)
 
 
-def _block_for(marker: str, role: str, *, memory_enabled: bool) -> str:
+def _block_for(marker: str, role: str, *, retrieval_enabled: bool) -> str:
     family = _ROLE_MARKERS.get(marker)
     if family == "kubectl":
         variant = _KUBECTL_BLOCK.get(role)
@@ -148,7 +150,7 @@ def _block_for(marker: str, role: str, *, memory_enabled: bool) -> str:
             raise PromptError(f"role {role!r} declares {{{{{marker}}}}} but holds no cluster tools")
         return read_asset(f"blocks/kubectl/{variant}.txt")
     if family == "memory":
-        state = "enabled" if memory_enabled else "disabled"
+        state = "enabled" if retrieval_enabled else "disabled"
         # An intentionally empty block is valid: the memory-off variant of a role
         # may add nothing rather than say something. Emptiness is carried over
         # deliberately, because inserting guidance here would change the behaviour
@@ -160,14 +162,20 @@ def _block_for(marker: str, role: str, *, memory_enabled: bool) -> str:
 def compose_role_prompt(
     role: str,
     *,
-    memory_enabled: bool,
+    retrieval_enabled: bool,
     override: str | None = None,
 ) -> str:
     """Build a role's system prompt from its template and the applicable blocks.
 
     Args:
         role: The role name, matching a file under ``prompts/roles``.
-        memory_enabled: Whether the role may retrieve past incidents.
+        retrieval_enabled: Whether the role can actually retrieve a past incident.
+            This is a conjunction, not the memory setting alone: the memory-on block
+            prescribes the retrieval tools by name, so emitting it for a role whose
+            toolset withholds them tells the model to call a tool it does not have.
+            The prototype gated on memory being on **and** the retrieval tool being
+            enabled, and the configuration where those disagree is a real one: the
+            second-pass control deliberately runs with memory on and no retrieval.
         override: Replacement template text, supplied by configuration.
 
     Returns:
@@ -178,7 +186,7 @@ def compose_role_prompt(
     """
     template = override if override is not None else read_asset(f"roles/{role}.txt")
     values = {
-        marker: _block_for(marker, role, memory_enabled=memory_enabled)
+        marker: _block_for(marker, role, retrieval_enabled=retrieval_enabled)
         for marker in markers(template)
     }
     return render(template, values)
