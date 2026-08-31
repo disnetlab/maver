@@ -1,0 +1,77 @@
+{
+  "_source": "agent/memory/projections.py :: build_memory_projections",
+  "_source_sha256": "7aa637533071661c77d06849ee3cbfbd0a32c9e4c377011dac732f2997d1894c",
+  "_inputs": "tests/unit/test_projections.py :: CASES",
+  "expected": {
+    "no_feedback_with_discriminator": {
+      "evidence_text": "Incident observations:\nIdentifiers: alert=TargetDown; namespace=social-network; service=user-service\n- 0/3 pods ready in social-network\n- probe :8081 connection refused",
+      "lesson_text": "DISCRIMINATOR — which observation separated the correct cause from the plausible wrong one, and how to tell them apart here: Ready=False with the container process healthy points at the probe.\nINCIDENT-BOUND (this incident only — not an answer for yours):\nUnverified hypothesis: The checkout readiness probe pointed at port 8081.\nAttempted action: Patched the readiness probe to port 8080.\nUnverified remediation outcome: Pods became ready and the 5xx rate fell back to baseline.\nCase-specific negative constraints:\n- Do not restart the deployment before reading the probe spec.",
+      "corrected_cause": "the model's own account of what the cause turned out to be",
+      "feedback_depth": "none",
+      "authoritative_correction": false
+    },
+    "no_feedback_without_discriminator": {
+      "evidence_text": "Incident observations:\nIdentifiers: alert=TargetDown; namespace=social-network; service=user-service\n- 0/3 pods ready in social-network\n- probe :8081 connection refused",
+      "lesson_text": "Unverified hypothesis: The checkout readiness probe pointed at port 8081.\nAttempted action: Patched the readiness probe to port 8080.\nUnverified remediation outcome: Pods became ready and the 5xx rate fell back to baseline.",
+      "corrected_cause": "the model's own account of what the cause turned out to be",
+      "feedback_depth": "none",
+      "authoritative_correction": false
+    },
+    "empty_feedback_dict_is_no_feedback": {
+      "evidence_text": "Incident observations:\nIdentifiers: alert=TargetDown; namespace=social-network; service=user-service\n- 0/3 pods ready in social-network\n- probe :8081 connection refused",
+      "lesson_text": "Unverified hypothesis: The checkout readiness probe pointed at port 8081.\nAttempted action: Patched the readiness probe to port 8080.\nUnverified remediation outcome: Pods became ready and the 5xx rate fell back to baseline.",
+      "corrected_cause": "the model's own account of what the cause turned out to be",
+      "feedback_depth": "none",
+      "authoritative_correction": false
+    },
+    "scores_rejected_diagnosis_with_mitigation_success": {
+      "evidence_text": "Incident observations:\nIdentifiers: alert=TargetDown; namespace=social-network; service=user-service\n- 0/3 pods ready in social-network\n- probe :8081 connection refused",
+      "lesson_text": "DISCRIMINATOR — which observation separated the correct cause from the plausible wrong one, and how to tell them apart here: Probe port, not image tag.\nINCIDENT-BOUND (this incident only — not an answer for yours):\nRejected hypothesis (external evaluation): The checkout readiness probe pointed at port 8081.\nAttempted action: Patched the readiness probe to port 8080.\nObserved mitigation success, but not a causally validated fix because the diagnosis was rejected: Pods became ready and the 5xx rate fell back to baseline.",
+      "corrected_cause": "",
+      "feedback_depth": "scores",
+      "authoritative_correction": false
+    },
+    "details_rejected_diagnosis": {
+      "evidence_text": "Incident observations:\nIdentifiers: alert=TargetDown; namespace=social-network; service=user-service\n- 0/3 pods ready in social-network\n- probe :8081 connection refused",
+      "lesson_text": "Rejected hypothesis (external evaluation): The checkout readiness probe pointed at port 8081.\nAttempted action: Patched the readiness probe to port 8080.\nFailed remediation (external evaluation): Pods became ready and the 5xx rate fell back to baseline.\nCase-specific negative constraints:\n- Do not restart the deployment before reading the probe spec.",
+      "corrected_cause": "[fault_spec] component=user-service; the service port was renamed",
+      "feedback_depth": "details",
+      "authoritative_correction": true
+    },
+    "confirmed_diagnosis_and_mitigation": {
+      "evidence_text": "Incident observations:\nIdentifiers: alert=TargetDown; namespace=social-network; service=user-service\n- 0/3 pods ready in social-network\n- probe :8081 connection refused",
+      "lesson_text": "Confirmed diagnosis (external evaluation): The checkout readiness probe pointed at port 8081.\nAttempted action: Patched the readiness probe to port 8080.\nSuccessful remediation (external evaluation): Pods became ready and the 5xx rate fell back to baseline.",
+      "corrected_cause": "",
+      "feedback_depth": "scores",
+      "authoritative_correction": false
+    },
+    "details_but_diagnosis_confirmed": {
+      "evidence_text": "Incident observations:\nIdentifiers: alert=TargetDown; namespace=social-network; service=user-service\n- 0/3 pods ready in social-network\n- probe :8081 connection refused",
+      "lesson_text": "Confirmed diagnosis (external evaluation): The checkout readiness probe pointed at port 8081.\nAttempted action: Patched the readiness probe to port 8080.\nUnverified remediation outcome: Pods became ready and the 5xx rate fell back to baseline.",
+      "corrected_cause": "",
+      "feedback_depth": "details",
+      "authoritative_correction": false
+    },
+    "explicit_empty_observations": {
+      "evidence_text": "Incident observations:\nIdentifiers: alert=TargetDown; namespace=social-network; service=user-service",
+      "lesson_text": "Unverified hypothesis: The checkout readiness probe pointed at port 8081.\nAttempted action: Patched the readiness probe to port 8080.\nUnverified remediation outcome: Pods became ready and the 5xx rate fell back to baseline.",
+      "corrected_cause": "",
+      "feedback_depth": "none",
+      "authoritative_correction": false
+    },
+    "no_identifiers_and_model_observations": {
+      "evidence_text": "Incident observations:\n- model-written observation, visible only when none are supplied",
+      "lesson_text": "Unverified hypothesis: The checkout readiness probe pointed at port 8081.\nAttempted action: Patched the readiness probe to port 8080.\nUnverified remediation outcome: Pods became ready and the 5xx rate fell back to baseline.",
+      "corrected_cause": "",
+      "feedback_depth": "none",
+      "authoritative_correction": false
+    },
+    "masked_identifiers": {
+      "evidence_text": "Incident observations:\nIdentifiers: alert=TargetDown; namespace=<namespace>; service=<resource>\n- 0/3 pods ready in <namespace>\n- probe :8081 connection refused",
+      "lesson_text": "DISCRIMINATOR — which observation separated the correct cause from the plausible wrong one, and how to tell them apart here: <resource> in <namespace> stayed Ready=False.\nINCIDENT-BOUND (this incident only — not an answer for yours):\nUnverified hypothesis: The checkout readiness probe pointed at port 8081.\nAttempted action: Patched the readiness probe to port 8080.\nUnverified remediation outcome: Pods became ready and the 5xx rate fell back to baseline.",
+      "corrected_cause": "",
+      "feedback_depth": "none",
+      "authoritative_correction": false
+    }
+  }
+}
