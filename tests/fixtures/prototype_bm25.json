@@ -1,0 +1,97 @@
+{
+  "docs": [
+    "Pod frontend-7d9f crashlooping in namespace shop, exit code 137, OOMKilled",
+    "Service checkout has zero endpoints; selector app=checkout matches no pods",
+    "targetPort 8080 on svc/api matches no containerPort; pods expose 9090",
+    "Deployment cart rollout stuck; observedGeneration 4 behind generation 5",
+    "Node worker-2 NotReady, kubelet stopped reporting, disk pressure"
+  ],
+  "cases": [
+    {
+      "query": "Current incident observations:\n- shop\n- frontend pod restarting OOMKilled",
+      "ranked": [
+        [
+          0,
+          4.214164061147
+        ],
+        [
+          1,
+          0.0
+        ],
+        [
+          2,
+          0.0
+        ],
+        [
+          3,
+          0.0
+        ],
+        [
+          4,
+          0.0
+        ]
+      ]
+    },
+    {
+      "query": "zero endpoints selector mismatch checkout",
+      "ranked": [
+        [
+          1,
+          4.628055174296
+        ],
+        [
+          0,
+          0.0
+        ],
+        [
+          2,
+          0.0
+        ],
+        [
+          3,
+          0.0
+        ],
+        [
+          4,
+          0.0
+        ]
+      ]
+    },
+    {
+      "query": "nothing whatsoever resembling these records",
+      "ranked": [
+        [
+          0,
+          0.0
+        ],
+        [
+          1,
+          0.0
+        ],
+        [
+          2,
+          0.0
+        ],
+        [
+          3,
+          0.0
+        ],
+        [
+          4,
+          0.0
+        ]
+      ]
+    }
+  ],
+  "tokenize": {
+    "Hello World-42": [
+      "hello",
+      "world",
+      "42"
+    ],
+    "  CrashLoopBackOff!! ": [
+      "crashloopbackoff"
+    ],
+    "": []
+  }
+}

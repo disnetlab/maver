@@ -1,0 +1,562 @@
+"""What the system stores, and the interfaces behind which it is stored.
+
+Four ports rather than one, because four different things consume them and a single
+store interface would force every backend to implement all of it. A deployment that
+never uses human approval should not have to implement approval persistence to run, and
+whether it does is something the startup check can now actually ask.
+
+The records are plain dataclasses. They cross the port boundary in both directions and
+are the only shape a backend has to agree on.
+"""
+
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import Any, Literal, Protocol, runtime_checkable
+
+from kira.contracts.lifecycle import LifecycleState, RunStatus
+
+__all__ = [
+    "AgentRunEventRecord",
+    "AgentRunRecord",
+    "ApprovalStatus",
+    "ApprovalStore",
+    "RunStore",
+    "SearchHit",
+    "SearchScope",
+    "SessionMemory",
+    "SessionRecord",
+    "SessionStore",
+    "TextSearch",
+    "VectorSearch",
+]
+
+SearchScope = Literal["evidence", "lesson"]
+"""Which projection a query is matched against.
+
+Evidence is what the incident looked like; the lesson is what was concluded. They are
+retrieved separately because a later incident resembles a past one by its symptoms long
+before it resembles it by its cause.
+"""
+
+ApprovalStatus = Literal["pending", "approved", "denied", "answered", "timed_out", "cancelled"]
+
+AgentRunStatus = Literal["running", "succeeded", "failed", "halted", "awaiting_human", "cancelled"]
+
+
+@dataclass
+class SessionRecord:
+    """One incident, from the alert that raised it to the artefacts it produced.
+
+    The prototype also carried a ``transcript`` field. Nothing ever wrote it and every
+    read hard-coded it to empty, so it is dropped: a field that is always empty is worse
+    than absent, because it reads as "this run produced no conversation".
+    """
+
+    session_id: str
+    started_at: str
+    ended_at: str | None = None
+    state: str = LifecycleState.PENDING.value
+    run_status: str = RunStatus.PENDING.value
+    current_stage: str | None = None
+    checkpoint: dict[str, Any] | None = None
+    """Enough state to resume. Written before a run parks on a human."""
+    awaiting_request_id: str | None = None
+    alert: dict[str, Any] = field(default_factory=dict)
+    root_cause: dict[str, Any] | None = None
+    plan: dict[str, Any] | None = None
+    execution_result: dict[str, Any] | None = None
+    agent_trace_summaries: list[dict[str, Any]] = field(default_factory=list)
+    distilled: bool = False
+    notes: str | None = None
+
+
+@dataclass
+class ApprovalRecord:
+    """One request put to a human, and what they said."""
+
+    request_id: str
+    session_id: str
+    kind: str
+    stage: str
+    status: str
+    summary: str
+    payload: dict[str, Any]
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+    prompt: str | None = None
+    response: dict[str, Any] | None = None
+    created_at: str = ""
+    expires_at: str | None = None
+    decided_at: str | None = None
+    decided_by: str = "generic human"
+    reason: str | None = None
+
+
+@dataclass
+class AgentRunRecord:
+    """One role's execution within one incident."""
+
+    agent_run_id: str
+    pipeline_id: str | None
+    agent_name: str
+    attempt: int
+    status: str
+    started_at: str
+    ended_at: str | None = None
+    output: dict[str, Any] | None = None
+    trace_summary: dict[str, Any] | None = None
+    error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AgentRunEventRecord:
+    """One ordered event inside a role's execution."""
+
+    event_id: str
+    agent_run_id: str
+    pipeline_id: str | None
+    seq: int
+    event_type: str
+    payload: dict[str, Any]
+    created_at: str
+    role: str | None = None
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+
+
+@dataclass
+class SearchHit:
+    """One retrieved record.
+
+    ``score`` is set by whatever ranked it. In the prototype no backend ever assigned
+    it: the typed hit was converted to an untyped dict at the fusion boundary and the
+    score lived there instead, so everything downstream of retrieval consumed dicts and
+    the dataclass documented a field that was always None.
+    """
+
+    session_id: str
+    summary: str
+    """The projection this hit was matched on, evidence or lesson."""
+    metadata: dict[str, Any] = field(default_factory=dict)
+    incident_summary: str | None = None
+    scope: SearchScope = "evidence"
+    evidence_text: str = ""
+    lesson_text: str = ""
+    score: float | None = None
+
+
+@dataclass
+class SessionMemory:
+    """Everything stored about one past incident, read whole."""
+
+    session_id: str
+    evidence_text: str
+    lesson_text: str
+    incident_summary: str
+    lifecycle_state: str
+    fault_category: str
+    alert_name: str
+    namespace: str
+    affected_resource: str
+    verification_verdict: str = ""
+    evaluation_label: str = ""
+    evaluation_source: str = ""
+    evaluation_diagnosis_success: bool | None = None
+    evaluation_diagnosis_score: float | None = None
+    evaluation_mitigation_success: bool | None = None
+    corrected_cause: str = ""
+    """Deliberately absent from the lesson projection.
+
+    It reaches a reader only by opening the record directly. A corrected cause states
+    the answer, so putting it in the text that retrieval returns would let a later
+    incident read a conclusion it had not reached.
+    """
+
+
+@runtime_checkable
+class SessionStore(Protocol):
+    """Persistence for incidents and their artefacts."""
+
+    def create_session(self, alert: dict[str, Any]) -> SessionRecord:
+        """Open a session for an incoming alert.
+
+        Args:
+            alert: The alert payload.
+
+        Returns:
+            The created record.
+        """
+        ...
+
+    def get_session(self, session_id: str) -> SessionRecord | None:
+        """Read one session.
+
+        Args:
+            session_id: Which session.
+
+        Returns:
+            The record, or None when it does not exist.
+        """
+        ...
+
+    def get_states(self, session_ids: Sequence[str]) -> dict[str, str]:
+        """Read the lifecycle state of many sessions at once.
+
+        Retrieval needs the *current* state of every candidate, and the state stored
+        beside a record goes stale the moment the run that produced it is re-graded.
+
+        Args:
+            session_ids: Which sessions.
+
+        Returns:
+            Session id to lifecycle state, omitting sessions that do not exist.
+        """
+        ...
+
+    def update_artefacts(
+        self,
+        session_id: str,
+        *,
+        root_cause: dict[str, Any] | None = None,
+        plan: dict[str, Any] | None = None,
+        execution_result: dict[str, Any] | None = None,
+        notes: str | None = None,
+    ) -> None:
+        """Attach what a role produced to its session.
+
+        Args:
+            session_id: Which session.
+            root_cause: The diagnosis, when one was submitted.
+            plan: The remediation plan, when one was submitted.
+            execution_result: What execution did, when it ran.
+            notes: Free text for an operator.
+        """
+        ...
+
+    def set_state(self, session_id: str, state: LifecycleState) -> None:
+        """Record how far a session's claim has been confirmed.
+
+        Args:
+            session_id: Which session.
+            state: The new lifecycle state.
+        """
+        ...
+
+    def set_run_status(
+        self,
+        session_id: str,
+        status: RunStatus,
+        *,
+        current_stage: str | None = None,
+        checkpoint: dict[str, Any] | None = None,
+        awaiting_request_id: str | None = None,
+    ) -> None:
+        """Record where a run is, and enough to resume it.
+
+        Args:
+            session_id: Which session.
+            status: The operational status.
+            current_stage: The role that was running.
+            checkpoint: State to resume from.
+            awaiting_request_id: The approval being waited on, when parked.
+        """
+        ...
+
+    def mark_distilled(self, session_id: str) -> None:
+        """Record that a session's lesson has been written to the corpus.
+
+        Args:
+            session_id: Which session.
+        """
+        ...
+
+
+@runtime_checkable
+class ApprovalStore(Protocol):
+    """Persistence for requests put to a human.
+
+    Separate from :class:`SessionStore` so that a deployment running unattended does
+    not have to implement it, and so the startup check for ``authority.mode == prompt``
+    can ask a precise question instead of assuming.
+    """
+
+    def create_request(self, record: ApprovalRecord) -> ApprovalRecord:
+        """Persist a pending request.
+
+        Args:
+            record: The request.
+
+        Returns:
+            The stored record.
+        """
+        ...
+
+    def get_request(self, request_id: str) -> ApprovalRecord | None:
+        """Read one request.
+
+        Args:
+            request_id: Which request.
+
+        Returns:
+            The record, or None.
+        """
+        ...
+
+    def list_requests(self, *, status: ApprovalStatus | None = None) -> list[ApprovalRecord]:
+        """List requests, newest first.
+
+        Args:
+            status: Only requests in this status, or all of them.
+
+        Returns:
+            The matching records.
+        """
+        ...
+
+    def decide(
+        self,
+        request_id: str,
+        *,
+        status: ApprovalStatus,
+        decided_by: str,
+        reason: str | None = None,
+    ) -> ApprovalRecord | None:
+        """Record a decision, if the request is still pending.
+
+        Returning None on a request that is already decided is what makes a late
+        decision and a duplicate one harmless rather than a second dispatch.
+
+        Args:
+            request_id: Which request.
+            status: The decision.
+            decided_by: Who decided.
+            reason: Why.
+
+        Returns:
+            The updated record, or None when it was not pending.
+        """
+        ...
+
+    def expire_due(self, *, now: str) -> list[ApprovalRecord]:
+        """Time out every request past its expiry.
+
+        Args:
+            now: The current timestamp.
+
+        Returns:
+            The records that expired.
+        """
+        ...
+
+
+@runtime_checkable
+class RunStore(Protocol):
+    """Persistence for what each role did, in order."""
+
+    def start_run(self, record: AgentRunRecord) -> None:
+        """Record that a role started.
+
+        Args:
+            record: The run.
+        """
+        ...
+
+    def finish_run(
+        self,
+        agent_run_id: str,
+        *,
+        status: AgentRunStatus,
+        output: dict[str, Any] | None = None,
+        trace_summary: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Record that a role finished.
+
+        Args:
+            agent_run_id: Which run.
+            status: How it ended.
+            output: What it produced.
+            trace_summary: A condensed account of what it did.
+            error: Why it failed, when it did.
+        """
+        ...
+
+    def append_event(self, record: AgentRunEventRecord) -> None:
+        """Append one ordered event.
+
+        Args:
+            record: The event.
+        """
+        ...
+
+    def events_for(self, agent_run_id: str) -> list[AgentRunEventRecord]:
+        """Read a run's events in order.
+
+        Args:
+            agent_run_id: Which run.
+
+        Returns:
+            The events, ordered by sequence.
+        """
+        ...
+
+
+@runtime_checkable
+class TextSearch(Protocol):
+    """Lexical retrieval over the distilled corpus.
+
+    The required backend. Ranked retrieval always returns its top-k whether or not
+    anything is relevant, which is why :meth:`scan_summaries` exists alongside it: a
+    scan returns only what matches, so an empty result is a real answer.
+    """
+
+    def upsert_summary(self, memory: SessionMemory) -> None:
+        """Write or replace one record.
+
+        Args:
+            memory: The distilled record.
+        """
+        ...
+
+    def candidates(
+        self,
+        text: str,
+        *,
+        limit: int = 500,
+        scope: SearchScope = "evidence",
+        exclude: Sequence[str] = (),
+    ) -> list[SessionMemory]:
+        """Return a pool of records that could plausibly match, **unranked**.
+
+        A text backend generates candidates; it does not rank them. Ranking belongs to
+        the retriever, because each database ranks differently — PostgreSQL's ``ts_rank``
+        has no inverse-document-frequency term at all, and SQLite's FTS5 uses its own
+        length normalisation — so a system that let the backend rank would be a
+        different retriever on each backend while claiming to be one.
+
+        Term semantics must be disjunctive. Requiring every term reduces the pool to
+        empty on most queries, which leaves the ranker nothing to work with.
+
+        Args:
+            text: The query, used to select a pool.
+            limit: Ceiling on the pool.
+            scope: Which projection the query is aimed at.
+            exclude: Session ids to withhold, supplied by an evaluation harness so a
+                run cannot retrieve its own record.
+
+        Returns:
+            Candidate records, in no meaningful order.
+        """
+        ...
+
+    def scan_summaries(
+        self,
+        pattern: str,
+        *,
+        n_results: int = 5,
+        scope: SearchScope = "evidence",
+    ) -> list[SearchHit]:
+        """Return only records matching a regular expression.
+
+        Args:
+            pattern: A case-insensitive regular expression.
+            n_results: How many to return.
+            scope: Which projection to match.
+
+        Returns:
+            Matching hits, possibly none.
+        """
+        ...
+
+    def get_session(self, session_id: str) -> SessionMemory | None:
+        """Read one stored record whole.
+
+        Args:
+            session_id: Which session.
+
+        Returns:
+            The record, or None.
+        """
+        ...
+
+    def delete_summary(self, session_id: str) -> None:
+        """Remove one record.
+
+        Args:
+            session_id: Which session.
+        """
+        ...
+
+    def count(self) -> int:
+        """Report how many records are stored.
+
+        Returns:
+            The record count.
+        """
+        ...
+
+
+@runtime_checkable
+class VectorSearch(Protocol):
+    """Dense retrieval over the same corpus. Optional.
+
+    Offline evaluation on this corpus found lexical ranking to be the ceiling and every
+    neural method below it, so this is a swappable alternative rather than the default.
+    """
+
+    def upsert_summary(self, memory: SessionMemory) -> None:
+        """Write or replace one record.
+
+        Args:
+            memory: The distilled record.
+        """
+        ...
+
+    def query_similar(
+        self,
+        text: str,
+        *,
+        n_results: int = 5,
+        scope: SearchScope = "evidence",
+        exclude: Sequence[str] = (),
+    ) -> list[SearchHit]:
+        """Rank the corpus against a query.
+
+        Args:
+            text: The query.
+            n_results: How many to return.
+            scope: Which projection to match.
+            exclude: Session ids to withhold.
+
+        Returns:
+            Hits, best first.
+        """
+        ...
+
+    def get_session(self, session_id: str) -> SessionMemory | None:
+        """Read one stored record whole.
+
+        Args:
+            session_id: Which session.
+
+        Returns:
+            The record, or None.
+        """
+        ...
+
+    def delete_summary(self, session_id: str) -> None:
+        """Remove one record.
+
+        Args:
+            session_id: Which session.
+        """
+        ...
+
+    def count(self) -> int:
+        """Report how many records are stored.
+
+        Returns:
+            The record count.
+        """
+        ...
