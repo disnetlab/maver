@@ -1,0 +1,4 @@
+Root cause from RCA:
+```json
+{{ROOT_CAUSE_JSON}}
+```

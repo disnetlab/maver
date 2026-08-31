@@ -1,0 +1,17 @@
+# Learning Agent trigger configuration.
+#
+# Each key must match a prompt file under agent/prompts/learning/<key>.txt.
+# Disabled triggers are rejected at runtime before reaching the LLM.
+
+triggers:
+  post_incident:
+    enabled: true
+    max_turns: 30
+
+  domain:
+    enabled: true
+    max_turns: 30
+
+  human:
+    enabled: true
+    max_turns: 30

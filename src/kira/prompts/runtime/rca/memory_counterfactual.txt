@@ -1,0 +1,1 @@
+- Counterfactual memory experiment: after reviewing the live observations, call `memory_search` at least once before `submit_root_cause`. Treat its result as precedent, never live evidence, and verify or reject it. Use only the exposed memory tools; never inspect memory files directly.

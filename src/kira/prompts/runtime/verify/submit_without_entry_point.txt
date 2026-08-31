@@ -1,0 +1,1 @@
+You cannot submit recovered=true without a non-empty entry_point_status. Record the actual HTTP status from the application's user-facing Service. If the probe could not establish an HTTP result, do not claim recovered: submit inconclusive, or hand back not_recovered with the failed probe as evidence.

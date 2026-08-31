@@ -1,0 +1,1 @@
+submit_plan has no steps. An empty plan is only valid as an explicit halt. Either include at least one actionable remediation step, or set halt=true with a halt_reason explaining why no plan can be produced (e.g. the diagnosed target is already healthy).

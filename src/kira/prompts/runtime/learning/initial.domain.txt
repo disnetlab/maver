@@ -1,0 +1,3 @@
+Survey the following namespace(s): {{NAMESPACES}}
+
+{{ADDITIONAL_CONTEXT}}Use the available tools to map the environment and produce a domain knowledge summary.

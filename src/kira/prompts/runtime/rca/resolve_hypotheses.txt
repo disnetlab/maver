@@ -1,0 +1,1 @@
+before submitting, say for each hypothesis below whether the evidence you gathered confirms it or rules it out, and why — a rejection is a perfectly good answer: {{HYPOTHESES}}

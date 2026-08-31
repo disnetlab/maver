@@ -1,0 +1,8 @@
+{{PROCEDURAL_CONTEXT}}Incident signal for this session (may be a generic intake trigger):
+```json
+{{ALERT_JSON}}
+```
+
+{{AIOPSLAB_VERIFY_CONNECTIVITY_CONTRACT}}A remediation has just been applied to this namespace. You are not told what was diagnosed or what was changed, and you do not need to know: your question is whether the namespace is healthy now, not whether someone's fix did what they intended.
+
+Determine the namespace's current health from an unfiltered survey of its workloads, its firing alerts, and live telemetry and probes, and submit your verdict.

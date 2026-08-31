@@ -1,0 +1,4 @@
+note: not an error — you have not searched memory in this session, so it was searched for you.
+Past sessions matching the evidence in this incident are below. They are precedent, not ground truth: verify each claim against what you observed here, discard what does not match, then submit.
+
+{{RETRIEVED_MEMORY}}

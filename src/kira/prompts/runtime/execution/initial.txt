@@ -1,0 +1,10 @@
+{{PLAYBOOK_BLOCK}}## Filesystem access
+- You have a private sandbox directory — your current working directory. Read and write scratch files with relative paths (e.g. `./notes.txt`); saved tool outputs appear under `tool_outputs/`. You never need an absolute path.
+- Do not access memory files directly — use the `memory_search` tool.
+
+{{ROOT_CAUSE_BLOCK}}{{RECOVERY_DIRECTIVE}}Approved plan:
+```json
+{{PLAN_JSON}}
+```
+
+Apply the plan step by step. Use Check-and-Set before every mutation.

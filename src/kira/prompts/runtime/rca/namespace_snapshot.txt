@@ -1,0 +1,4 @@
+## Auto-collected namespace snapshot
+Deterministic read-only starting facts for the alert namespace. Generic Kubernetes health flags ([!]), not a diagnosis. Use the `namespace_snapshot` tool to refresh this or to inspect another namespace.
+
+{{SNAPSHOT}}

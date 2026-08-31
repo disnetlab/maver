@@ -24,6 +24,7 @@ __all__ = [
     "compose_role_prompt",
     "read_asset",
     "read_override",
+    "read_runtime",
     "render",
 ]
 
@@ -75,6 +76,30 @@ def read_asset(relative_path: str) -> str:
         return resource.read_text(encoding="utf-8").strip()
     except (FileNotFoundError, NotADirectoryError) as exc:
         raise PromptError(f"prompt asset not found: {relative_path}") from exc
+
+
+def read_runtime(role: str, name: str) -> str:
+    """Read a per-turn runtime asset belonging to a role.
+
+    Runtime assets are the blocks a role emits into the conversation rather than into
+    its system prompt: task statements, re-entry headers, conditional context blocks
+    and the validator rejections returned when a submission is malformed. They live
+    under ``prompts/runtime/<role>/`` and are read, then filled with :func:`render`.
+
+    Args:
+        role: The owning role, or ``"shared"`` for a block several roles emit.
+        name: The asset's file name, including its suffix.
+
+    Returns:
+        The asset's text.
+
+    Raises:
+        PromptError: When either argument tries to traverse, or the asset is missing.
+    """
+    for part in (role, name):
+        if not part or "/" in part or "\\" in part or part.startswith("."):
+            raise PromptError(f"invalid runtime prompt path: {role}/{name}")
+    return read_asset(f"runtime/{role}/{name}")
 
 
 def read_override(path: Path, *, root: Path | None = None) -> str:

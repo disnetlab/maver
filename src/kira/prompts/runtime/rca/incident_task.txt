@@ -1,0 +1,6 @@
+Incident context:
+```json
+{{ALERT_JSON}}
+```
+
+Diagnose the root cause.

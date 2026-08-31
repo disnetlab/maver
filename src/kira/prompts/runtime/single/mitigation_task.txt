@@ -1,0 +1,1 @@
+TASK 1 diagnosis submitted. Now perform TASK 2: implement a fix that resolves the root cause, apply it to the cluster, verify the application is healthy, then call `submit_mitigation`.

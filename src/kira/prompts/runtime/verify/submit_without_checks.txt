@@ -1,0 +1,1 @@
+submit_verify_result requires at least one entry in `checks`: the end-to-end checks you actually ran (query/command, observed value, pass/fail). Pod-liveness alone does not count.

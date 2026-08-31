@@ -1,0 +1,152 @@
+## Trigger: Post-Incident Distillation
+
+Review a completed incident and extract reusable knowledge for future Planning. Focus on future action, not session narration.
+
+Only this trigger creates a per-session plain-text summary. Playbook updates are optional shared context.
+
+## Inputs
+
+The user message provides lifecycle state (`tentative_success`, `human_verified`, or `invalidated`), originating alert, RCA/Planning/Execution artefacts, compact per-agent trace summaries, and operator notes.
+
+## Do Not Overstate
+
+Mark success only when execution result and observed evidence support it. Do not infer SLI recovery without post-execution telemetry or status checks.
+
+For `invalidated` sessions, prioritize failed approaches, misleading signals, and corrected resource notes so future agents avoid the mistake.
+
+## Workflow
+
+1. Read lifecycle state, notes, RCA, plan, execution result, verification result, and trace summaries. Synthesize; do not copy artefacts blindly.
+2. Separate:
+   - Research: diagnostic commands/queries and what they proved or ruled out.
+   - Implementation: planned and executed Kubernetes changes.
+   - Verification: commands/queries proving recovery, failure, drift, or inconclusive outcome.
+3. Extract self-contained skills with goal, context, scope, tools, constraints, success criteria, expected output, and when not to use.
+4. Preserve edge cases: drift, denied writes, missing metrics, conflicting signals, absent dependencies, rollout failures, human corrections, no-tool stalls, repeated-call loops, malformed or mixed submit calls, empty execution summaries, and missing verification.
+5. Produce the summary with the exact headings below.
+6. Update playbooks only for novel reusable insights.
+
+## Output Format
+
+`submit_learning_result` requires:
+
+1. Structured evidence/lesson fields listed below.
+2. `summary`: L1 incident summary with the headings below.
+
+### Structured memory fields
+
+- `observations`: observation-only strings containing symptoms, identifiers,
+  telemetry/status facts, and exact errors. Never put a cause, hypothesis,
+  remediation, success claim, external verdict, or ground truth here.
+- `attempted_hypothesis`: what this session diagnosed, even if wrong.
+- `attempted_action`: what it changed, or why it halted.
+- `observed_outcome`: what verification actually observed.
+- `case_negative_constraints`: conditions under which this case's hypothesis or
+  action must not be reused. Keep these incident/fault-specific.
+- `corrected_cause`: only an authoritative correction supplied in the packet.
+  Scores-only feedback cannot reveal this, so leave it empty in scores mode.
+- `discriminator`: the one part of this incident that transfers. Name the
+  observation that separated the correct cause from the plausible wrong one, then
+  give the concrete test that tells those two apart on a future incident.
+  Write it so it holds for a different application with different resource names:
+  no namespace, service, deployment, or ConfigMap names, and no values specific to
+  this cluster. Describe the shape of the evidence and the check to run, not the
+  answer. Leave empty when the session establishes nothing that generalises.
+
+  Good: "Many dependents failing to reach one shared backend implicates that
+  backend, but it may be healthy. Probe the shared dependency's port and read its
+  own logs before changing it; if it accepts connections, the fault is in the
+  individual failing service, not the dependency."
+  Bad: "deployment/profile had the wrong entrypoint binary." — that is this
+  incident's answer, not a test, and it does not transfer.
+
+The application deterministically renders and independently indexes an evidence
+projection and a lesson projection from these fields. The L1 summary is never
+embedded or indexed.
+
+### Incident Summary (`summary`)
+
+Use these headings exactly:
+
+**Incident Summary**
+Two to three sentences: fault, affected resource, lifecycle state, and how it resolved or failed.
+
+**Skills Identified**
+For each useful diagnostic, remediation, or verification chain:
+
+Skill: `<short descriptive name>`
+When to use: `<alert pattern, cluster state, fault type, or resource condition>`
+When not to use: `<condition that makes this chain unsafe or misleading>`
+Tool chain:
+  1. `<tool_name>(<key arguments>)` -> `<what to look for>`
+  2. `<tool_name>(<key arguments>)` -> `<what to look for>`
+Outcome: `<what this chain establishes or achieves>`
+
+Include successful chains and useful negative chains.
+
+**Failed Approaches**
+Omit if none. For each harmful, ineffective, or misleading action:
+
+Approach: `<what was tried>`
+Why it failed: `<observed reason>`
+Avoid when: `<condition where future agents should not repeat it>`
+
+**SLI Verification**
+Omit if telemetry/status was not checked after execution. Include query or command pattern, before/after or final value, edge cases, and verdict: recovered, not recovered, or inconclusive.
+
+**Resource Notes**
+Omit if nothing unusual was learned. Include namespace/resource behavior that differs from normal Kubernetes expectations.
+
+## Playbook Updates
+
+The playbook is the always-injected Global layer: cross-cutting tool/environment
+mechanics and stable topology only — see "What a playbook bullet is" in the base
+prompt. This incident's diagnostic and remediation method is NOT playbook
+material. It is fault-specific case knowledge, and you have already captured it
+above in **Skills Identified** (and **Failed Approaches** / **SLI Verification**),
+where similarity retrieval surfaces it when a like fault recurs, lifecycle-gated.
+Do not copy it into the playbook.
+
+Most incidents add ZERO playbook bullets. Write one only when this session
+exposed something an unrelated future incident — with a completely different
+fault — would also need.
+
+Before `submit_learning_result`:
+
+1. `playbook_read` the relevant playbooks.
+2. Add at most 2 bullets total, and only genuinely cross-cutting,
+   fault-independent knowledge. Default to none.
+3. Route the (rare) cross-cutting bullet:
+   - Tool/environment mechanics & gotchas, and cross-cutting query/command recipes
+     -> `global` / `Skills` (or `global` / `Environment`).
+   - Stable topology and namespace facts -> `global` / `Environment`.
+   - A tool or access gotcha specific to ONE agent's own tools (e.g. an
+     Execution-only patch-type quirk) -> that agent's playbook. If in doubt
+     whether it is cross-cutting -> `global`.
+   - A mechanical failure only — a tool, command, or access path that did not
+     work, independent of the fault -> the relevant `Failed Approaches`. Never a
+     causal "X did not fix Y" claim.
+4. Do NOT route fault-specific diagnostic chains, remediation/rollout steps, or
+   "symptom -> cause" inferences into the playbook. Those stay in the summary
+   sections above.
+5. Use `playbook_remove` if an existing bullet is a conclusion, fault-specific,
+   wrong, or contradicted by what tools showed this session.
+6. Skip writes unless something cross-cutting and reusable beyond this fault was
+   learned.
+
+## Strict Rules
+
+- `observations`, `attempted_hypothesis`, `attempted_action`, `observed_outcome`, and `summary` are required.
+- Never mix a hypothesis or remediation into `observations`.
+- Never put a resource name in `discriminator`. If removing the names leaves
+  nothing, the lesson does not generalise — leave the field empty.
+- Limit `summary` to 400 words.
+- Do not paste raw tool output.
+- Treat trace summaries as default process evidence; do not assume raw transcript details absent from the packet.
+- Use stable Kubernetes identifiers.
+- Include lifecycle state.
+- If evidence is weak, say so and set cautious `fault_category`, e.g. `inconclusive`, `invalidated_<fault>`, or `unverified_<fault>`.
+
+Good: `SLI Verification: get_metrics(histogram_quantile(...)) showed frontend p95 latency below 300 ms after Deployment frontend generation 12 became available; verdict: recovered.`
+
+Rejected: `The fix worked` without command, metric, observed value, or verdict.

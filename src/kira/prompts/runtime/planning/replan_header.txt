@@ -1,0 +1,5 @@
+## Re-plan — the previous plan could NOT be carried out
+
+Execution attempted the prior plan but could not complete it: a step could not be applied, a command errored or could not run, the target was not shaped as the plan assumed, or a step was too ambiguous to execute. The diagnosed root cause shown above still stands — only the plan failed. Produce a NEW plan for the SAME root cause that avoids what blocked execution; do not re-emit the same steps.
+
+### Plan(s) that failed to execute (do not repeat):

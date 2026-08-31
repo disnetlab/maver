@@ -1,0 +1,6 @@
+Bounded Learning Packet:
+```json
+{{PACKET_JSON}}
+```
+
+Distil this session into a high-level searchable knowledge summary. Use trace summaries as process evidence; do not request or rely on raw transcripts by default.
