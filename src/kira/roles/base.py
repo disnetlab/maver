@@ -21,6 +21,8 @@ from kira.contracts.routing import HandBack
 from kira.contracts.state import IncidentState
 from kira.llm.types import Completion, Message
 from kira.memory.retrieval import Retriever
+from kira.middleware.base import MiddlewareStack
+from kira.settings.profiles import ModelProfile
 from kira.settings.root import Settings
 from kira.tools.context import ToolContext
 from kira.tools.toolsets import ResolvedToolset
@@ -42,6 +44,22 @@ class RoleContext:
     """Why this is a re-entry, or None for a first entry."""
     settings: Settings
     completion: Completion
+    profile: ModelProfile
+    """The model profile in use.
+
+    A role needs it for the two quirks that belong to the model rather than to the
+    harness: whether this endpoint accepts a forced tool choice, and whether reasoning
+    is carried between turns. Without it both silently take the loop's defaults, so a
+    profile declaring `tool_choice: omit` still gets `required` on the wire — which is
+    the entire reason that quirk exists.
+    """
+    middleware: MiddlewareStack
+    """The hook stack every tool call passes through.
+
+    Not optional. Absent it, the approval gate is registered and never consulted, and
+    every cluster write a role issues is dispatched ungated — the exact failure the gate
+    was made structural to prevent.
+    """
     toolset: ResolvedToolset
     tool_context: ToolContext
     journal: Journal

@@ -4,11 +4,14 @@ Each of these was carried by the prototype, lost in the rebuild, and would have 
 a graded run without raising anything.
 """
 
+import dataclasses
+
 import pytest
 
 from kira.contracts.artifacts import RootCause
 from kira.llm.client import serialise_assistant
 from kira.llm.types import ModelResponse, ToolCall, Usage
+from kira.roles.base import RoleContext
 from kira.roles.policy import repair_submission
 from kira.tools.context import NullEvidencePolicy, redact
 
@@ -87,3 +90,19 @@ def test_a_failing_evidence_policy_does_not_destroy_the_observation() -> None:
             raise RuntimeError("bad pattern")
 
     assert redact(Broken(), "pod/web is CrashLoopBackOff") == "pod/web is CrashLoopBackOff"
+
+
+def test_a_role_cannot_run_its_tools_ungated() -> None:
+    """The hook stack is a required field on a role's context, not an optional one.
+
+    It was absent, so no role could pass it to the loop and the approval gate — built,
+    registered and tested — was never consulted on a single tool call a role made. Every
+    cluster write would have dispatched ungated, which is the exact failure the gate was
+    made structural to prevent.
+    """
+    required = {
+        f.name
+        for f in dataclasses.fields(RoleContext)
+        if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING
+    }
+    assert {"middleware", "profile"} <= required
