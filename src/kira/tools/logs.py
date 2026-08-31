@@ -14,6 +14,7 @@ from typing import Any
 
 from kira.tools.context import ToolContext
 from kira.tools.errors import OUTPUT_LIMIT
+from kira.tools.policy import read_only
 from kira.tools.registry import tool
 
 __all__ = ["get_label_values", "get_labels", "get_logs"]
@@ -94,3 +95,8 @@ async def get_label_values(ctx: ToolContext, label: str) -> str:
     """
     raw = await ctx.transport.log_label_values(label)
     return ctx.workspace.save_tool_output(raw, "loki_label_values", OUTPUT_LIMIT)
+
+
+read_only("get_logs")
+read_only("get_labels")
+read_only("get_label_values")

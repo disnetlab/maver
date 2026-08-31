@@ -78,6 +78,11 @@ _BASE = SettingsConfigDict(
     # of a name no field declares.
     extra="ignore",
     case_sensitive=False,
+    # A field that declares a validation_alias is otherwise populated ONLY by that
+    # alias, so constructing a group in code by field name silently yields defaults.
+    # That is a silent wrong answer rather than an error, and it reaches anything that
+    # builds a group directly: an arm file, a test, a caller assembling an override.
+    populate_by_name=True,
     frozen=True,
     validate_default=True,
 )

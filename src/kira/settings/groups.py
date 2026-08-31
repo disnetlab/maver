@@ -18,7 +18,6 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from kira.settings.base import NameSet, SettingsGroup, group_config, setting
 
 __all__ = [
-    "AuthoritySettings",
     "IntakeSettings",
     "KafkaSettings",
     "MemorySettings",
@@ -541,77 +540,6 @@ class SecondPassSettings(SettingsGroup):
             if lowered in renamed:
                 data[key] = renamed[lowered]
         return data
-
-
-class AuthoritySettings(SettingsGroup):
-    """Who may authorise a write to the cluster.
-
-    Two defaults differ from the prototype, both deliberately. The mode defaults to
-    ``prompt`` rather than ``auto``: the prototype shipped automatic approval on a
-    service holding cluster write permissions, and an artifact other people deploy
-    should not. And a timeout now has a real default, so a pending request cannot wedge
-    a session indefinitely; on expiry the write is denied, never approved.
-
-    An evaluation harness that wants the prototype's behaviour sets the mode
-    explicitly, which every existing run script already does.
-
-    A third default is inverted for a reason worth stating. Approval originally applied
-    to a named list of stages, defaulting to the execution role alone. That is a
-    fail-open list: the single-agent configuration performs its cluster writes under
-    the stage name ``single.mitigation``, which is not ``execution``, so every write in
-    that entire configuration bypassed the gate without anything reporting it. A
-    security control keyed on an enumeration of stage-name strings fails silently
-    whenever a stage is added or renamed, so the default is now every stage and naming
-    a list is an explicit opt-out.
-    """
-
-    model_config = group_config("authority")
-
-    mode: Literal["auto", "prompt", "deny"] = setting(
-        "prompt",
-        "KIRA_AUTHORITY__MODE",
-        "HITL_MODE",
-        description="Approve writes automatically, ask a human, or refuse them all.",
-    )
-    timeout_s: int | None = setting(
-        1800,
-        "KIRA_AUTHORITY__TIMEOUT_S",
-        "HITL_TIMEOUT_SECONDS",
-        description="How long a request waits for a human. None waits forever.",
-    )
-    on_timeout: Literal["deny", "approve"] = setting(
-        "deny",
-        "KIRA_AUTHORITY__ON_TIMEOUT",
-        description="What an expired request resolves to. Denying is the safe default.",
-    )
-    require_approval_stages: NameSet = setting(
-        frozenset({"*"}),
-        "KIRA_AUTHORITY__REQUIRE_APPROVAL_STAGES",
-        description=(
-            "Stages whose write-capable tool calls pass through the gate. The default "
-            "is every stage. Naming specific stages opts the rest out, which is a "
-            "decision to make deliberately and rarely."
-        ),
-    )
-    auto_approve_tools: NameSet = setting(
-        frozenset(),
-        "KIRA_AUTHORITY__AUTO_APPROVE_TOOLS",
-        description="Tools exempted from prompting even in prompt mode.",
-    )
-
-    def requires_approval(self, stage: str) -> bool:
-        """Report whether a write-capable call from a stage passes through the gate.
-
-        Args:
-            stage: The stage issuing the call, such as ``execution`` or
-                ``single.mitigation``.
-
-        Returns:
-            True unless the operator has narrowed the gate and excluded this stage.
-        """
-        if "*" in self.require_approval_stages:
-            return True
-        return stage in self.require_approval_stages
 
 
 class KafkaSettings(SettingsGroup):

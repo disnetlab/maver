@@ -11,6 +11,7 @@ from typing import Any
 
 from kira.tools.context import ToolContext
 from kira.tools.errors import OUTPUT_LIMIT
+from kira.tools.policy import read_only
 from kira.tools.registry import tool
 
 __all__ = ["get_alerts", "get_metrics"]
@@ -63,3 +64,7 @@ async def get_alerts(ctx: ToolContext) -> str:
     """
     raw = await ctx.transport.query_alerts()
     return ctx.workspace.save_tool_output(raw, "prometheus_alerts", OUTPUT_LIMIT)
+
+
+read_only("get_metrics")
+read_only("get_alerts")

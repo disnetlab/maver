@@ -14,6 +14,7 @@ from typing import Any
 
 from kira.tools.context import ToolContext
 from kira.tools.errors import OUTPUT_LIMIT
+from kira.tools.policy import read_only
 from kira.tools.registry import tool
 
 __all__ = ["get_dependency_graph", "get_operations", "get_services", "get_traces"]
@@ -126,3 +127,9 @@ async def get_dependency_graph(ctx: ToolContext, last_n_minutes: int = 30) -> st
     """
     raw = await ctx.transport.query_traces("dependencies", last_n_minutes=last_n_minutes)
     return ctx.workspace.save_tool_output(raw, "jaeger_deps", OUTPUT_LIMIT)
+
+
+read_only("get_services")
+read_only("get_operations")
+read_only("get_traces")
+read_only("get_dependency_graph")

@@ -25,6 +25,7 @@ from pathlib import Path
 
 from kira.tools.context import ToolContext
 from kira.tools.errors import format_exit_result, tool_error
+from kira.tools.policy import read_only
 from kira.tools.registry import tool
 from kira.tools.sandbox import SANDBOX_ERROR_PREFIX, sandboxed_command
 
@@ -189,3 +190,10 @@ async def code_exec(ctx: ToolContext, code: str, language: str) -> str:
         )
     finally:
         Path(path).unlink(missing_ok=True)
+
+
+# Sandboxed and credential-free by construction, so these are reads however
+# much code they run. Gating them on capability would refuse every diagnostic
+# role's use of them.
+read_only("bash_exec")
+read_only("code_exec")

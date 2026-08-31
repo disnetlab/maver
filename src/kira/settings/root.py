@@ -10,9 +10,9 @@ from pydantic import AliasChoices, Field, model_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings
 
+from kira.settings.authority import AuthoritySettings
 from kira.settings.base import ENV_PREFIX, SettingsGroup
 from kira.settings.groups import (
-    AuthoritySettings,
     IntakeSettings,
     MemorySettings,
     ModelSettings,

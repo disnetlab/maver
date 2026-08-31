@@ -18,6 +18,7 @@ from typing import Any
 
 from kira.tools.context import ToolContext
 from kira.tools.errors import tool_error
+from kira.tools.policy import ActionClass, ToolPolicy, register_policy
 from kira.tools.registry import Authority, tool
 
 __all__ = [
@@ -400,3 +401,119 @@ async def read_kubectl(ctx: ToolContext, cmd: str) -> str:
     if classify(argv, DEFAULT_POLICY) != "read":
         return tool_error("read_kubectl only runs read-only kubectl")
     return ctx.evidence.filter_result(await ctx.transport.kubectl(argv))
+
+
+_ACTION_BY_AUTHORITY = {
+    "read": ActionClass.READ,
+    "write": ActionClass.WRITE,
+    "exec": ActionClass.EXEC,
+    "blocked": ActionClass.BLOCKED,
+}
+
+_RESOURCE_ALIASES = {
+    "deploy": "deployment",
+    "sts": "statefulset",
+    "ds": "daemonset",
+    "svc": "service",
+    "po": "pod",
+    "cm": "configmap",
+    "ns": "namespace",
+}
+
+
+def _selectors(arguments: Mapping[str, Any]) -> tuple[str, ...]:
+    """Describe a call as facets a policy rule can match.
+
+    This is what lets a deployment say "never touch a secret" without the settings layer
+    having to know what kubectl is.
+
+    Args:
+        arguments: The model's arguments.
+
+    Returns:
+        Facets such as ``verb:patch`` or ``resource:secret``.
+    """
+    argv = tokenize(str(arguments.get("cmd", "")))
+    verb, idx = leading_verb(argv)
+    found: list[str] = []
+    if verb:
+        found.append(f"verb:{verb}")
+    namespace = _namespace_of(argv)
+    if namespace:
+        found.append(f"namespace:{namespace}")
+    if idx is not None:
+        rest = _positional(argv[idx + 1 :])
+        if rest:
+            head = rest[0].split("/", 1)
+            resource = _RESOURCE_ALIASES.get(head[0].rstrip("s"), head[0].rstrip("s"))
+            found.append(f"resource:{resource}")
+            name = head[1] if len(head) > 1 else (rest[1] if len(rest) > 1 else "")
+            if name:
+                found.append(f"name:{name}")
+    return tuple(found)
+
+
+def _positional(argv: Sequence[str]) -> list[str]:
+    """Drop flags and the values they consume.
+
+    Without this a namespace given as ``-n shop`` reads as the resource being acted on,
+    so a rule written against a resource class matches the wrong calls.
+    """
+    found: list[str] = []
+    skip = False
+    for arg in argv:
+        if arg == "--":
+            break  # everything after this is the container's command, not a target
+        if skip:
+            skip = False
+            continue
+        if arg.startswith("-"):
+            skip = "=" not in arg and arg in _GLOBAL_FLAGS_WITH_VALUE
+            continue
+        found.append(arg)
+    return found
+
+
+def _namespace_of(argv: Sequence[str]) -> str:
+    for i, arg in enumerate(argv):
+        if arg in ("-n", "--namespace") and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--namespace="):
+            return arg.split("=", 1)[1]
+    return ""
+
+
+def _targets(arguments: Mapping[str, Any]) -> tuple[str, ...]:
+    """Name what a call acts on, for an operator reviewing it.
+
+    Args:
+        arguments: The model's arguments.
+
+    Returns:
+        References such as ``deployment/web`` and ``namespace/shop``.
+    """
+    facets = dict(part.split(":", 1) for part in _selectors(arguments) if ":" in part)
+    named: list[str] = []
+    if "resource" in facets:
+        resource = facets["resource"]
+        named.append(f"{resource}/{facets['name']}" if "name" in facets else resource)
+    if "namespace" in facets:
+        named.append(f"namespace/{facets['namespace']}")
+    return tuple(named)
+
+
+register_policy(
+    "exec_kubectl_cmd_safely",
+    ToolPolicy(
+        classify=lambda args: _ACTION_BY_AUTHORITY[kubectl_authority(args)],
+        write_stages=frozenset({"execution", "single.mitigation"}),
+        # The whole command, not a preview. An operator who cannot see the patch body
+        # is not reviewing anything.
+        summarise=lambda args: str(args.get("cmd", "")),
+        selectors=_selectors,
+        targets=_targets,
+        stage_refusal=lambda stage: (
+            f"error: kubectl writes are not permitted for the {stage} agent (read-only)"
+        ),
+    ),
+)

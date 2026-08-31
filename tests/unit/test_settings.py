@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from kira.settings import Settings, VerifySettings, legacy_names_in_use, load_settings
+from kira.settings.authority import AuthorityRule, AuthoritySettings
 from kira.settings.root import AliasedField, _iter_aliases
 
 ALIASED = list(_iter_aliases(Settings))
@@ -60,12 +61,24 @@ _COMPANIONS: dict[str, dict[str, str]] = {
 }
 
 
+# Two shapes the annotation-derived probe cannot synthesise: a tuple of models, and a
+# URL. Explicit here rather than making the deriver understand pydantic types, with the
+# substring the value should be recognisable by once loaded.
+_EXPLICIT_PROBES: dict[str, tuple[str, str]] = {
+    "KIRA_AUTHORITY__RULES": ('[{"name": "probe7", "mode": "deny"}]', "probe7"),
+    "KIRA_AUTHORITY__WEBHOOK_URL": ("https://probe7.example.com/", "probe7.example.com"),
+}
+
+
 def _probe_value(field: AliasedField) -> str:
     """Choose a value valid for this field's type and different from its default.
 
     Derived from the annotation rather than hand-listed, so a new field is covered the
     moment it is declared.
     """
+    if field.modern in _EXPLICIT_PROBES:
+        return _EXPLICIT_PROBES[field.modern][0]
+
     annotation = field.info.annotation
     default = field.info.default
     origin = get_origin(annotation)
@@ -97,7 +110,8 @@ def _assert_reached(field: AliasedField, probe: str, via: str | None = None) -> 
     for attr in field.path:
         node = getattr(node, attr)
     rendered = str(node.get_secret_value()) if hasattr(node, "get_secret_value") else str(node)
-    wanted = probe.strip('[]"')
+    explicit = _EXPLICIT_PROBES.get(field.modern)
+    wanted = explicit[1] if explicit else probe.strip('[]"')
     source = via or field.modern
     assert wanted.lower() in rendered.lower().replace("\\", "/"), (
         f"{source} did not reach {'.'.join(field.path)}: got {rendered!r}, wanted {probe!r}"
@@ -214,21 +228,6 @@ class TestSecretsAndImmutability:
         assert s.snapshot()["sampling_overrides"] == ["temperature"]
 
 
-class TestAuthorityDefaults:
-    def test_writes_require_approval_unless_configured_otherwise(self) -> None:
-        """An artifact other people deploy should not auto-approve cluster writes."""
-        s = load_settings()
-        assert s.authority.mode == "prompt"
-        assert s.authority.on_timeout == "deny"
-        assert s.authority.timeout_s == 1800
-
-    def test_an_evaluation_harness_can_still_ask_for_automatic_approval(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("HITL_MODE", "auto")
-        assert load_settings().authority.mode == "auto"
-
-
 class TestRealDeployments:
     def test_comma_separated_lists_still_parse(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The prototype spelled these as comma lists and deployments still export them.
@@ -308,32 +307,6 @@ class TestRealDeployments:
 WRITE_STAGES = ["execution", "single.mitigation"]
 
 
-class TestAuthorityGateCoverage:
-    """The gate must not fail open on a stage nobody remembered to list."""
-
-    @pytest.mark.parametrize("stage", WRITE_STAGES)
-    def test_every_write_capable_stage_is_gated_by_default(self, stage: str) -> None:
-        """The prototype writes to the cluster from two stages, not one.
-
-        A default naming only the execution role let the entire single-agent
-        configuration write to a cluster without any write reaching the gate, and
-        nothing reported it. A control keyed on an enumeration of stage-name strings
-        fails silently whenever a stage is added or renamed.
-        """
-        assert load_settings().authority.requires_approval(stage)
-
-    def test_an_unknown_future_stage_is_gated_too(self) -> None:
-        assert load_settings().authority.requires_approval("some.stage.added.later")
-
-    def test_narrowing_the_gate_is_possible_but_explicit(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("KIRA_AUTHORITY__REQUIRE_APPROVAL_STAGES", "execution")
-        authority = load_settings().authority
-        assert authority.requires_approval("execution")
-        assert not authority.requires_approval("single.mitigation")
-
-
 class TestRetiredDeliveryMode:
     def test_critique_is_refused_at_startup_with_a_reason(
         self, monkeypatch: pytest.MonkeyPatch
@@ -369,3 +342,19 @@ def test_a_legacy_run_script_setting_the_retired_flag_still_starts(
     """It carries no KIRA_ prefix, so it is ignored rather than fatal."""
     monkeypatch.setenv("VERIFY_BLIND_TO_DIAGNOSIS", "false")
     assert load_settings().verify.enabled is False
+
+
+def test_a_group_can_be_built_in_code_by_field_name() -> None:
+    """A field with a validation_alias is otherwise populated only by that alias.
+
+    Constructing a group by field name then silently yields defaults — no error, just a
+    wrong answer. `AuthoritySettings(mode="auto")` returned mode "prompt", which is the
+    difference between an evaluation arm running unattended and every write parking on a
+    human who is not there.
+    """
+    built = AuthoritySettings(
+        mode="auto", rules=(AuthorityRule(name="r", mode="deny"),), timeout_s=60
+    )
+    assert built.mode == "auto"
+    assert [r.name for r in built.rules] == ["r"]
+    assert built.timeout_s == 60

@@ -7,9 +7,9 @@ so existing evaluation run scripts keep working unchanged.
 """
 
 from kira.settings.arms import Arm, load_arm
+from kira.settings.authority import AuthorityRule, AuthoritySettings
 from kira.settings.base import ENV_PREFIX, SettingsGroup, group_config, setting
 from kira.settings.groups import (
-    AuthoritySettings,
     IntakeSettings,
     KafkaSettings,
     MemorySettings,
@@ -35,6 +35,7 @@ from kira.settings.root import (
 __all__ = [
     "ENV_PREFIX",
     "Arm",
+    "AuthorityRule",
     "AuthoritySettings",
     "IntakeSettings",
     "KafkaSettings",
