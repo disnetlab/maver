@@ -1,5 +1,14 @@
-"""The agent roles and the bounded model/tool loop they share.
+"""The roles that make up the pipeline, and the loop they run in."""
 
-A role is a prompt, a tool allowlist, and a submission schema. Everything
-cross-cutting belongs in ``kira.middleware`` instead.
-"""
+from kira.roles.loop import LoopResult, SubmitGuard, ToolFn, run_until_submit
+from kira.roles.policy import LoopLimits, RepeatDecision, RepeatedCallTracker
+
+__all__ = [
+    "LoopLimits",
+    "LoopResult",
+    "RepeatDecision",
+    "RepeatedCallTracker",
+    "SubmitGuard",
+    "ToolFn",
+    "run_until_submit",
+]

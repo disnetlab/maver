@@ -1,0 +1,27 @@
+{
+  "no_tool": "You did not call a tool. Every turn must invoke a tool. Either call an investigation tool or call `submit_root_cause` to finish. Do not respond with plain text.",
+  "no_tool_truncated": "Your previous tool call was cut off by the response length limit before it finished, so it was discarded — nothing ran. Emit one complete tool call now, and keep it small enough to fit the limit: do not paste large content (full manifests, long logs, whole files) inline — summarise it or reference output you already saved instead. Either call an investigation tool or call `submit_root_cause` to finish. Do not respond with plain text.",
+  "no_tool_max_tokens_with_content": "Your previous generation ended because max token exceeded before any complete tool call was emitted. The partial assistant generation is included immediately above. Continue from that state and now emit one complete tool call. Every turn must invoke a tool: either call an investigation tool or call `submit_root_cause` to finish. Do not restart the analysis, repeat the full reasoning, or respond with plain text.",
+  "no_tool_max_tokens_empty": "Your previous generation ended because max token exceeded before any complete tool call was emitted. The previous assistant generation returned no visible content before truncation. Continue from that state and now emit one complete tool call. Every turn must invoke a tool: either call an investigation tool or call `submit_root_cause` to finish. Do not restart the analysis, repeat the full reasoning, or respond with plain text.",
+  "repeat_soft": "You have now called get_logs with identical arguments and received the same result 3 times. This is deterministic — calling it again will return the same thing and make no progress. Do something different: change the arguments, use a different tool, or take a different approach. If you already have enough information, call `submit_root_cause` now with your best result instead of repeating the call.",
+  "repeat_soft_multi": "You have now called get_logs, get_metrics with identical arguments and received the same result 4 times. This is deterministic — calling it again will return the same thing and make no progress. Do something different: change the arguments, use a different tool, or take a different approach. If you already have enough information, call `submit_root_cause` now with your best result instead of repeating the call.",
+  "repeat_strong_with_alts": "Stop. You have called get_logs with identical arguments 6 times and received the same result every time; calling it again cannot make progress. Do not call get_logs again with these arguments. Other tools are available: `get_traces`, `get_metrics` — use one of them to make progress. Only if you have genuinely exhausted every other option, call `submit_root_cause` now with your best current result.",
+  "repeat_strong_no_alts": "Stop. You have called get_logs with identical arguments 6 times and received the same result every time; calling it again cannot make progress. Do not call get_logs again with these arguments. Only if you have genuinely exhausted every other option, call `submit_root_cause` now with your best current result.",
+  "mixed_submit": "`submit_root_cause` was rejected because it was emitted in the same turn as other tool calls. A submit tool is terminal and must be the only tool call in its assistant message. Review the tool results from this turn, then call `submit_root_cause` exactly once in the next turn if you are ready to finalize.",
+  "finalizer_rescue": "The previous turn reached `max_turns_exceeded`. The investigation is complete enough to finalize, but the harness can only continue through a valid `submit_root_cause` tool call. Do not call investigation tools. Convert your existing evidence and conclusion into exactly one `submit_root_cause` call now. Do not add prose.",
+  "tool_failure_guidance": "## Tool-call protocol\nWhen you are ready to finish, call your submit tool as the only tool call in that assistant turn. Do not combine a submit call with read, write, rollback, memory, or other investigation tools. If another tool result is still useful, call that tool first, wait for its result, and submit on a later turn.\n\n## Handling tool failures\nIf a tool call is rejected or returns an error, do not repeat the same call or a trivial variant of it — tool failures are usually deterministic and will recur. If you still need that information, get it a different way: a different query, a different tool, or a different resource. Only once you have genuinely exhausted your options, call your submit tool with your best current result rather than retrying the failing call.",
+  "compact_rescue": [
+    {
+      "role": "user",
+      "content": "task A"
+    },
+    {
+      "role": "user",
+      "content": "task B"
+    },
+    {
+      "role": "user",
+      "content": "## Submit-only recovery context\nThe previous loop reached `repeated_call_no_progress`.\n\nYou must now call `submit_root_cause` exactly once. Do not call any other tool and do not write prose.\n\n## Recent tool results\n\n[tool result 1]\nresult one\n\n[tool result 2]\nresult two\n\n## Latest assistant conclusion, truncated\nmy conclusion\n\nCall `submit_root_cause` now with the structured final answer."
+    }
+  ]
+}
