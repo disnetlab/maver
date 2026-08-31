@@ -5,8 +5,8 @@ description: >
   MA plus the verification role. After a clean apply, an independent read-only check
   re-surveys the namespace, re-checks the firing alerts, and probes the affected request
   path, then either ends the incident or hands it back. Verification is blind to the
-  diagnosis, so its independence is structural rather than requested. Everything else is
-  identical to MA.
+  diagnosis by construction, with no setting that could make it sighted. Everything else
+  is identical to MA.
 model_profile: qwen3.6-35b-a3b
 frozen: true
 registered:
@@ -16,7 +16,7 @@ registered:
 settings:
   pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2}
   memory:     {enabled: false, learning_enabled: false, playbook: false}
-  verify:     {enabled: true, blind_to_diagnosis: true, health_gate: false, inconclusive_retries: 1}
+  verify:     {enabled: true, health_gate: false, inconclusive_retries: 1}
   secondpass: {enabled: false}
 holds_constant:
   - model_profile

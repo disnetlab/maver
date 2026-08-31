@@ -420,7 +420,15 @@ class MemorySettings(SettingsGroup):
 
 
 class VerifySettings(SettingsGroup):
-    """The independent end-to-end recovery check and its hand-back loop."""
+    """The independent end-to-end recovery check and its hand-back loop.
+
+    Verification is unconditionally blind to the diagnosis, so its independence is
+    structural rather than requested. The prototype made that a flag; a flag implies the
+    sighted mode is a supported configuration, and a sighted verification derives its
+    checks from the causal chain it is supposed to be checking, which lets a wrong
+    diagnosis certify its own recovery. The cost of the decision is that the routing
+    precision of blindness can no longer be re-measured here.
+    """
 
     model_config = group_config("verify")
 
@@ -429,15 +437,6 @@ class VerifySettings(SettingsGroup):
         "KIRA_VERIFY__ENABLED",
         "VERIFY_STEP_ENABLED",
         description="Run a read-only recovery check after a clean apply.",
-    )
-    blind_to_diagnosis: bool = setting(
-        True,
-        "KIRA_VERIFY__BLIND_TO_DIAGNOSIS",
-        "VERIFY_BLIND_TO_DIAGNOSIS",
-        description=(
-            "Withhold the diagnosis, so a wrong cause cannot certify its own recovery "
-            "through checks derived from it."
-        ),
     )
     health_gate: bool = setting(
         False,

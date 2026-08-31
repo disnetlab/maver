@@ -6,7 +6,7 @@ from typing import Literal, Union, get_args, get_origin
 import pytest
 from pydantic import ValidationError
 
-from kira.settings import Settings, legacy_names_in_use, load_settings
+from kira.settings import Settings, VerifySettings, legacy_names_in_use, load_settings
 from kira.settings.root import AliasedField, _iter_aliases
 
 ALIASED = list(_iter_aliases(Settings))
@@ -352,3 +352,20 @@ class TestRetiredDeliveryMode:
     ) -> None:
         monkeypatch.setenv("MEMORY_SECOND_OPINION_MODE", value)
         assert load_settings().secondpass.delivery == expected
+
+
+def test_verification_blindness_is_structural_not_configurable() -> None:
+    """A flag would imply a sighted mode is supported. It is not.
+
+    A sighted verification derives its checks from the causal chain it is meant to be
+    checking, which lets a wrong diagnosis certify its own recovery.
+    """
+    assert "blind_to_diagnosis" not in VerifySettings.model_fields
+
+
+def test_a_legacy_run_script_setting_the_retired_flag_still_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """It carries no KIRA_ prefix, so it is ignored rather than fatal."""
+    monkeypatch.setenv("VERIFY_BLIND_TO_DIAGNOSIS", "false")
+    assert load_settings().verify.enabled is False
