@@ -1,0 +1,52 @@
+# Privately served open-weight agent model. Every sampling field is present; null
+# means the field is omitted from the request, never that it was forgotten.
+schema_version: 1
+name: qwen3.6-35b-a3b
+model: openai/qwen3.6-35b-a3b
+provider: vllm
+
+endpoint:
+  base_url: http://vllm.internal:8000/v1
+  api_key_env: null
+  api_key_literal: EMPTY
+
+sampling:
+  max_tokens: 8192
+  temperature: 1.0
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.0
+  presence_penalty: 1.5        # this model's anti-spiral guard
+  frequency_penalty: 0.0       # deliberately off: presence_penalty is the vendor knob
+  repetition_penalty: 1.0
+  no_repeat_ngram_size: null
+  seed: 42
+  reasoning_effort: null
+  thinking_token_budget: null  # inert here: this server runs without a reasoning parser
+
+limits:
+  request_timeout_s: 1800      # a 300 s ceiling abandoned long generations mid-flight
+  num_retries: 3
+
+quirks:
+  tool_choice: required        # this parser handles a forced tool choice correctly
+  keep_reasoning: false        # the model re-reasons each turn; carrying it forward is an arm
+  rescue_disable_thinking: false
+  rescue_reasoning_effort: null
+  drop_unsupported_params: true
+  extra_body_fields: [top_k, min_p, repetition_penalty, no_repeat_ngram_size]
+  reports_cached_tokens: false
+
+serving:
+  runtime: "vLLM 0.21.0"
+  tool_parser: qwen3_xml
+  dtype: bf16
+  tensor_parallel: 2
+  max_model_len: 262144
+  max_num_seqs: 5
+  weights_digest: "Qwen/Qwen3.6-35B-A3B"
+
+known_issues:
+  - "The tool-call parser silently drops roughly 5% of emitted calls; the turn records a tool-call finish reason with zero calls attached."
+  - "The endpoint serves five concurrent sequences. More than five callers wedge it rather than queueing."
+  - "Cached prompt tokens are never reported although prefix caching is on, so a null count is by design and not a missing measurement."

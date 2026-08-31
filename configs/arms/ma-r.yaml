@@ -1,0 +1,33 @@
+schema_version: 1
+name: ma-r
+label: MA+R
+description: >
+  The earlier second-opinion variant. A nominator maps retrieved precedents to one of
+  eleven operational fault families and serves as the gate: a verdict that the family
+  differs both triggers the second diagnosis and supplies its content. The second run
+  receives a verify-or-falsify assignment and no precedent text. This configuration also
+  leaves the planning role's direct retrieval path open, which MA+S closes.
+model_profile: qwen3.6-35b-a3b
+frozen: true
+registered:
+  date: "2026-08-09"
+  campaign: second_opinion
+  hypothesis: "memory helps as a candidate nominator rather than as context"
+settings:
+  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2}
+  memory:     {enabled: true, learning_enabled: true, playbook: true, top_k: 5}
+  verify:     {enabled: false}
+  secondpass:
+    enabled: true
+    gate: nominator
+    delivery: assignment
+    force: false
+    nominator_max_tokens: 900
+holds_constant:
+  - model_profile
+  - runtime.*
+  - pipeline.max_turns
+notes: >
+  This differs from MA+S on three axes at once: the gate, the delivery, and whether the
+  planning role may retrieve. It is a historical configuration, not a single-variable
+  contrast, and must be read as one.

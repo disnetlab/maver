@@ -80,7 +80,7 @@ Issues = "https://github.com/evenodderguy/kira/issues"
 
 [dependency-groups]
 dev = [{ include-group = "lint" }, { include-group = "test" }]
-lint = ["ruff==0.16.5", "mypy>=1.15"]
+lint = ["ruff==0.16.5", "mypy>=1.15", "types-PyYAML>=6.0"]
 test = [
     "pytest>=8.3",
     "pytest-asyncio>=0.25",

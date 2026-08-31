@@ -1,0 +1,38 @@
+schema_version: 1
+name: ma-s
+label: MA+S
+description: >
+  MA plus the gated second opinion. The first diagnosis runs retrieval-free. A bounded,
+  retrieval-free quality gate audits it against its own cited evidence and decides whether
+  to look again. On a fire, an observation-keyed query retrieves at most three precedent
+  records; a fresh second diagnosis receives those records verbatim and nothing from the
+  first; a label-shuffled selector picks between the two. Any failure along the path falls
+  back to the first answer. No nominator, and no direct retrieval from the planning role:
+  the store is read by the harness only.
+model_profile: qwen3.6-35b-a3b
+frozen: true
+registered:
+  date: "2026-08-12"
+  campaign: sweep_20260812
+  hypothesis: "a gated second look carrying precedent text beats a single pass"
+settings:
+  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2}
+  memory:     {enabled: true, learning_enabled: false, playbook: false, top_k: 3}
+  verify:     {enabled: false}
+  secondpass:
+    enabled: true
+    gate: quality
+    delivery: context
+    force: false
+    max_precedents: 3
+    gate_max_tokens: 600
+holds_constant:
+  - model_profile
+  - runtime.*
+  - pipeline.max_turns
+  - pipeline.remediation_retries
+  - verify.enabled
+notes: >
+  Learning is off because the corpus is frozen for the campaign, so a test pass would add
+  nothing to it. The leave-one-out exclusion set is supplied by the environment adapter,
+  not by this file.

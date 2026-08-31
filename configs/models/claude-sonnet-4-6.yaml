@@ -1,0 +1,52 @@
+# Hosted reference route. Kept for development convenience and for comparison against
+# a frontier model; the system's own claim is that telemetry stays on your own
+# infrastructure, which this route does not satisfy.
+schema_version: 1
+name: claude-sonnet-4-6
+model: anthropic/claude-sonnet-4-6
+provider: anthropic
+
+endpoint:
+  base_url: null               # the provider's default
+  api_key_env: ANTHROPIC_API_KEY
+  api_key_literal: null
+
+sampling:
+  max_tokens: 8192
+  temperature: null            # inherit the provider default
+  top_p: null
+  top_k: null                  # no field in the schema this route accepts
+  min_p: null
+  presence_penalty: null
+  frequency_penalty: null
+  repetition_penalty: null     # native to a self-hosted sampler only
+  no_repeat_ngram_size: null   # native to a self-hosted sampler only
+  seed: null
+  reasoning_effort: medium
+  thinking_token_budget: null
+
+limits:
+  request_timeout_s: 300
+  num_retries: 3
+
+quirks:
+  tool_choice: required
+  keep_reasoning: true         # reasoning carried within a run is native here
+  rescue_disable_thinking: false
+  rescue_reasoning_effort: low
+  drop_unsupported_params: true
+  extra_body_fields: []        # nothing may be routed natively to a hosted provider
+  reports_cached_tokens: true
+
+serving:
+  runtime: "hosted API"
+  tool_parser: null
+  dtype: null
+  tensor_parallel: null
+  max_model_len: 200000
+  max_num_seqs: null
+  weights_digest: null
+
+known_issues:
+  - "Model aliases move. Pin a dated identifier; never point a campaign at a floating alias."
+  - "Metered per request, so an unbounded turn budget has a direct cost that the local routes do not."

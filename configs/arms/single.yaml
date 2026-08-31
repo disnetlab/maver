@@ -1,0 +1,28 @@
+schema_version: 1
+name: single
+label: Single
+description: >
+  One agent, one goal-only prompt, the full read and write toolset, no roles, no typed
+  handoffs, no optional mechanisms, no memory. It runs the benchmark's own two-task
+  contract, diagnosis then mitigation, as two passes over a single transcript. The null
+  hypothesis against the structured pipeline.
+model_profile: qwen3.6-35b-a3b
+frozen: true
+registered:
+  date: "2026-08-12"
+  campaign: sweep_20260812
+  hypothesis: "decomposing the work into typed roles buys nothing"
+settings:
+  pipeline:   {mode: single, max_turns: 20}
+  memory:     {enabled: false, learning_enabled: false, playbook: false}
+  verify:     {enabled: false}
+  secondpass: {enabled: false}
+holds_constant:
+  - model_profile
+  - runtime.*
+  - pipeline.max_turns
+notes: >
+  Everything non-agentic is retained: the submission protocol, the approval gate, the
+  repeat breaker and the finaliser rescue. What is stripped is workflow prescription, not
+  harness plumbing. Strip the plumbing too and the contrast measures the harness rather
+  than the structure.

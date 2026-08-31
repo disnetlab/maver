@@ -1,0 +1,31 @@
+schema_version: 1
+name: resample
+label: Resample
+description: >
+  The attribution control for MA+S. A second diagnosis always runs, carries no assignment
+  and no precedent text, and the same blinded selector chooses between the two. The
+  contrast against MA+S therefore isolates the value of the retrieved content from the
+  value of simply diagnosing twice, and the contrast against MA isolates the second
+  inference itself.
+model_profile: qwen3.6-35b-a3b
+frozen: false
+registered:
+  date: "2026-08-26"
+  campaign: so_gate_35b
+  hypothesis: "the MA+S gain is the second look rather than the precedent text"
+settings:
+  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2}
+  memory:     {enabled: false, learning_enabled: false, playbook: false}
+  verify:     {enabled: false}
+  secondpass: {enabled: true, gate: always, delivery: none}
+holds_constant:
+  - model_profile
+  - runtime.*
+  - pipeline.max_turns
+  - pipeline.remediation_retries
+  - verify.enabled
+notes: >
+  Memory is off here and on in MA+S. That difference is the treatment; the selector, the
+  second diagnosis and every budget are otherwise identical. Dose matters when reading the
+  result: the MA+S gate declines to fire on a substantial share of cells, so an arm gap has
+  to be divided by the measured dose before it is interpreted.

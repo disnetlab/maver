@@ -1,0 +1,24 @@
+schema_version: 1
+name: ma
+label: MA
+description: >
+  The three-role pipeline with every optional mechanism off: read-only diagnosis, a typed
+  remediation plan, and execution-only cluster writes. No verification loop, no second
+  opinion, no retrieval, no playbook. This is the reference every mechanism is priced
+  against.
+model_profile: qwen3.6-35b-a3b
+frozen: true
+registered:
+  date: "2026-08-12"
+  campaign: sweep_20260812
+  hypothesis: "baseline against which every optional mechanism is measured"
+settings:
+  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2, auto_snapshot: true}
+  memory:     {enabled: false, learning_enabled: false, playbook: false}
+  verify:     {enabled: false}
+  secondpass: {enabled: false}
+holds_constant:
+  - model_profile
+  - runtime.*
+  - pipeline.max_turns
+  - pipeline.remediation_retries

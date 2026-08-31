@@ -1,0 +1,53 @@
+# Dense counterpart to the mixture-of-experts model above. Same family, different
+# serving behaviour, and a tool parser that fails in the opposite direction.
+schema_version: 1
+name: qwen3.8-27b
+model: openai/qwen3.8-27b
+provider: vllm
+
+endpoint:
+  base_url: http://vllm.internal:8001/v1
+  api_key_env: null
+  api_key_literal: EMPTY
+
+sampling:
+  max_tokens: 8192
+  temperature: 1.0
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.0
+  presence_penalty: 0.0        # the only sampling difference from the 35B profile
+  frequency_penalty: 0.0
+  repetition_penalty: 1.0
+  no_repeat_ngram_size: null
+  seed: 42
+  reasoning_effort: null
+  thinking_token_budget: null
+
+limits:
+  request_timeout_s: 1800
+  num_retries: 3
+
+quirks:
+  tool_choice: auto            # not a preference: see the first known issue
+  keep_reasoning: false
+  rescue_disable_thinking: false
+  rescue_reasoning_effort: null
+  drop_unsupported_params: true
+  extra_body_fields: [top_k, min_p, repetition_penalty, no_repeat_ngram_size]
+  reports_cached_tokens: false
+
+serving:
+  runtime: "vLLM 0.21.0"
+  tool_parser: qwen3_coder
+  dtype: bf16
+  tensor_parallel: 2
+  max_model_len: 262144
+  max_num_seqs: 5
+  weights_digest: null
+
+known_issues:
+  - "Forcing a tool choice returns zero parsed calls on this parser, with and without thinking enabled. Only an automatic or omitted tool choice works, and the failure is silent: the turn records a tool-call finish reason with zero calls."
+  - "Dense rather than sparse: several times slower per token than the 35B model and it emits more tokens per turn, so a per-problem timeout tuned for that model will cut runs short here."
+  - "No repetition suppression at all. Temperature is the only guard against degeneration."
+  - "This endpoint is not currently served: the available accelerators cannot host it alongside the 35B model."
