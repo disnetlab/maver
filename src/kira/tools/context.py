@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from kira.audit.journal import Journal
+from kira.memory.ports import SessionStore
+from kira.memory.retrieval import Retriever
 from kira.settings.groups import ToolSettings
 from kira.tools.transport.base import ToolTransport
 from kira.tools.workspace import SessionWorkspace
@@ -102,3 +104,14 @@ class ToolContext:
     environment reads hidden inside its toolset builder.
     """
     evidence: EvidencePolicy = field(default_factory=NullEvidencePolicy)
+    memory: Retriever | None = None
+    """The experience store, or None when this configuration has none."""
+    sessions: SessionStore | None = None
+    memory_exclude: tuple[str, ...] = ()
+    """Session ids retrieval must withhold, supplied per run by an evaluation harness."""
+    memory_aliases: dict[str, str] = field(default_factory=dict)
+    """Maps the short handles shown to the model back to real session ids.
+
+    Per run rather than global: a handle means "the first result of *my* search", and
+    two concurrent incidents would otherwise resolve each other's.
+    """

@@ -16,6 +16,7 @@ import logging
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from importlib.metadata import entry_points
+from importlib.resources import files
 from typing import Any, Literal
 
 from kira.tools.context import ToolContext
@@ -155,6 +156,27 @@ def register_submit_tool(
     )
     _REGISTRY[name] = spec
     return spec
+
+
+def load_descriptions() -> dict[str, Any]:
+    """Read the shipped description catalogue.
+
+    Loaded through the package rather than by filesystem path, so it keeps working from
+    an installed wheel and from a zip import.
+
+    Returns:
+        Tool name to description entry.
+
+    Raises:
+        ToolRegistryError: When the file is not a mapping.
+    """
+    import yaml  # noqa: PLC0415 - kept off the import path of every module
+
+    text = files("kira.tools").joinpath("descriptions.yaml").read_text(encoding="utf-8")
+    loaded = yaml.safe_load(text)
+    if not isinstance(loaded, dict):
+        raise ToolRegistryError("descriptions.yaml must be a mapping of tool name to entry")
+    return loaded
 
 
 def registered() -> Mapping[str, ToolSpec]:

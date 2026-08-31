@@ -116,6 +116,26 @@ class ToolTransport(Protocol):
         """
         ...
 
+    async def rollbackable_commands(self) -> str:
+        """List the writes this transport could still undo.
+
+        Requires the ``kubernetes.rollback`` capability: undoing a write means having
+        recorded its inverse, which a transport talking straight to an API server does
+        not do.
+
+        Returns:
+            The undoable commands, rendered for the model.
+        """
+        ...
+
+    async def rollback_last(self) -> str:
+        """Undo the most recent write.
+
+        Returns:
+            What was undone, rendered for the model.
+        """
+        ...
+
     async def query_metrics(self, query: str, *, window_minutes: int | None = None) -> str:
         """Run one PromQL query.
 

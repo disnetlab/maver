@@ -18,7 +18,7 @@ from typing import Any
 
 from kira.tools.context import ToolContext
 from kira.tools.errors import tool_error
-from kira.tools.policy import ActionClass, ToolPolicy, register_policy
+from kira.tools.policy import ActionClass, ToolPolicy, always_writes, read_only, register_policy
 from kira.tools.registry import Authority, tool
 
 __all__ = [
@@ -516,4 +516,53 @@ register_policy(
             f"error: kubectl writes are not permitted for the {stage} agent (read-only)"
         ),
     ),
+)
+
+
+@tool(
+    name="get_previous_rollbackable_cmd",
+    safety="read_only",
+    requires={"kubernetes.rollback"},
+    parameters={"type": "object", "properties": {}},
+)
+async def get_previous_rollbackable_cmd(ctx: ToolContext) -> str:
+    """List the cluster writes that can currently be undone.
+
+    Args:
+        ctx: The run's context.
+
+    Returns:
+        The undoable commands.
+    """
+    return await ctx.transport.rollbackable_commands()
+
+
+@tool(
+    name="rollback_command",
+    safety="cluster_write",
+    requires={"kubernetes.rollback"},
+    authority=lambda arguments: "write",
+    parameters={"type": "object", "properties": {}},
+)
+async def rollback_command(ctx: ToolContext) -> str:
+    """Undo the last cluster write.
+
+    Undoing a write is itself a write — it changes the cluster, and a rollback issued
+    against the wrong state is as damaging as the change it reverses. So it carries the
+    same authority and passes the same gate.
+
+    Args:
+        ctx: The run's context.
+
+    Returns:
+        What was undone.
+    """
+    return await ctx.transport.rollback_last()
+
+
+read_only("get_previous_rollbackable_cmd")
+always_writes(
+    "rollback_command",
+    stages=frozenset({"execution", "single.mitigation"}),
+    refusal=lambda stage: f"error: rollback is not permitted for the {stage} agent (read-only)",
 )
