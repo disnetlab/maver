@@ -1,0 +1,394 @@
+{
+  "ExecutionResult": {
+    "properties": {
+      "confidence": {
+        "description": "Confidence (0.0–1.0) that the executed steps achieved the intended cluster state. Lower this when post-step observations partially contradict the expected outcome.",
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "title": "Confidence",
+        "type": "number"
+      },
+      "drift_detected": {
+        "default": false,
+        "title": "Drift Detected",
+        "type": "boolean"
+      },
+      "final_state_summary": {
+        "description": "Required, non-empty. What was changed and what the resource-level verification showed (the patched field, rollout/Ready state), and why the apply is reported as success or failure. For an abort, state the drift, denial, or missing-resource reason. Do not assert end-to-end recovery — that is the Verify step's job.",
+        "title": "Final State Summary",
+        "type": "string"
+      },
+      "needs_replan": {
+        "default": false,
+        "description": "Set true when the diagnosis still looks right but the PLAN could not be carried out as written and a different plan against the SAME root cause could work — a planned command errored or could not run, the target was not shaped as the plan assumed, a step was ambiguous/underspecified, or the applied change did not take and a different approach is needed. When true, also set succeeded=false and fill replan_reason — this routes the incident back to Planning for a revised plan. Use this instead of failing outright when the plan, not the diagnosis, is what went wrong. Leave false for a clean apply or a terminal failure (write denied by policy, unsafe drift, nothing actionable remains).",
+        "title": "Needs Replan",
+        "type": "boolean"
+      },
+      "replan_reason": {
+        "description": "Required when needs_replan=true: name what in the plan could not be executed and what a revised plan should do differently, so Planning does not re-emit the same infeasible plan.",
+        "title": "Replan Reason",
+        "type": "string"
+      },
+      "steps": {
+        "description": "Required, at least one entry — one StepResult per attempted step. Each observation names the command/check, the before value or precondition, the mutation or denial result, the after value, and the verification verdict; for an abort, the drift, denial, or missing-resource reason.",
+        "items": {
+          "properties": {
+            "observation": {
+              "description": "Command/check run, before value or precondition, mutation/denial result, after value, and verification verdict; for an abort, the drift, denial, or missing-resource reason.",
+              "title": "Observation",
+              "type": "string"
+            },
+            "step_index": {
+              "description": "Zero-based index of the plan step this entry reports.",
+              "title": "Step Index",
+              "type": "integer"
+            },
+            "succeeded": {
+              "description": "Whether this step was applied and verified.",
+              "title": "Succeeded",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "step_index",
+            "succeeded",
+            "observation"
+          ],
+          "title": "StepResult",
+          "type": "object"
+        },
+        "title": "Steps",
+        "type": "array"
+      },
+      "succeeded": {
+        "description": "Whether the plan was APPLIED as intended at the resource level — the mutation took effect and the rollout completed (e.g. the Deployment generation advanced and Ready replicas match the spec). This is NOT a claim that the incident is resolved end to end; the Verify step decides system-level recovery. Set false only when the change could not be carried out (a command errored, the target was not shaped as the plan assumed, the write was denied, or the applied change did not take).",
+        "title": "Succeeded",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "succeeded",
+      "steps",
+      "final_state_summary",
+      "confidence"
+    ],
+    "title": "ExecutionResult",
+    "type": "object"
+  },
+  "LearningResult": {
+    "properties": {
+      "attempted_action": {
+        "description": "The remediation attempted, or why remediation halted.",
+        "title": "Attempted Action",
+        "type": "string"
+      },
+      "attempted_hypothesis": {
+        "description": "The diagnosis attempted by this session, whether right or wrong.",
+        "title": "Attempted Hypothesis",
+        "type": "string"
+      },
+      "case_negative_constraints": {
+        "description": "Case-specific conditions under which the attempted hypothesis or action must not be reused. Fault-independent tool/environment rules belong in the playbook instead.",
+        "items": {
+          "type": "string"
+        },
+        "title": "Case Negative Constraints",
+        "type": "array"
+      },
+      "corrected_cause": {
+        "default": "",
+        "description": "Corrected cause only when an authoritative correction is present in the packet. Leave empty for scores-only feedback.",
+        "title": "Corrected Cause",
+        "type": "string"
+      },
+      "discriminator": {
+        "default": "",
+        "description": "The transferable part of this incident: which observation separated the correct cause from the plausible wrong one, and the concrete test that tells them apart on a future incident. State it so it applies to a different application and different resource names — no namespace, service, or workload names. Empty when nothing generalises.",
+        "title": "Discriminator",
+        "type": "string"
+      },
+      "fault_category": {
+        "default": "general",
+        "description": "Short label for the fault class or knowledge category (e.g. 'cpu_throttling', 'oom_kill', 'topology', 'general').",
+        "title": "Fault Category",
+        "type": "string"
+      },
+      "observations": {
+        "description": "Incident observations only: symptoms, exact Kubernetes identifiers, error strings, telemetry values, and status facts. Do not include a cause, hypothesis, remediation, or success claim.",
+        "items": {
+          "type": "string"
+        },
+        "minItems": 1,
+        "title": "Observations",
+        "type": "array"
+      },
+      "observed_outcome": {
+        "description": "What was actually observed after the attempt. Distinguish recovery, continued failure, and unavailable/inconclusive verification.",
+        "title": "Observed Outcome",
+        "type": "string"
+      },
+      "summary": {
+        "description": "Full incident summary (L1), ≤ 500 words, following the section headings defined in the post_incident prompt. Returned on-demand via `open_memory`; not used as the retrieval embedding source.",
+        "title": "Summary",
+        "type": "string"
+      },
+      "verification_verdict": {
+        "default": "",
+        "description": "Independent live-recovery verdict from the Learning Agent's own re-check of the cluster (required when live verification is enabled, and must match the SLI Verification section). One of 'recovered', 'not_recovered', or 'inconclusive'. Leave empty only if live verification was not performed.",
+        "title": "Verification Verdict",
+        "type": "string"
+      }
+    },
+    "required": [
+      "observations",
+      "attempted_hypothesis",
+      "attempted_action",
+      "observed_outcome",
+      "summary"
+    ],
+    "title": "LearningResult",
+    "type": "object"
+  },
+  "Plan": {
+    "properties": {
+      "confidence": {
+        "description": "Confidence (0.0–1.0) that the plan will achieve expected_outcome.",
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "title": "Confidence",
+        "type": "number"
+      },
+      "expected_outcome": {
+        "description": "What success should look like.",
+        "title": "Expected Outcome",
+        "type": "string"
+      },
+      "halt": {
+        "default": false,
+        "description": "Set to true ONLY when no remediation step can be expressed at all and the agent wants to stop the incident flow. The normal path is false — Execution then applies the plan. Never halt for safety, risk, or low confidence.",
+        "title": "Halt",
+        "type": "boolean"
+      },
+      "halt_reason": {
+        "description": "Required when halt is true: explain why no plan is possible. Ignored when halt is false.",
+        "title": "Halt Reason",
+        "type": "string"
+      },
+      "rollback": {
+        "description": "Plain-language rollback guidance.",
+        "title": "Rollback",
+        "type": "string"
+      },
+      "steps": {
+        "items": {
+          "properties": {
+            "action": {
+              "description": "Declarative remediation action name.",
+              "title": "Action",
+              "type": "string"
+            },
+            "justification": {
+              "description": "Why this step is appropriate.",
+              "title": "Justification",
+              "type": "string"
+            },
+            "params": {
+              "additionalProperties": true,
+              "description": "Action-specific parameters.",
+              "title": "Params",
+              "type": "object"
+            },
+            "target": {
+              "description": "Kubernetes resource path or identifier.",
+              "title": "Target",
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "target",
+            "justification"
+          ],
+          "title": "PlanStep",
+          "type": "object"
+        },
+        "title": "Steps",
+        "type": "array"
+      }
+    },
+    "required": [
+      "steps",
+      "expected_outcome",
+      "confidence"
+    ],
+    "title": "Plan",
+    "type": "object"
+  },
+  "RootCause": {
+    "properties": {
+      "affected_resource": {
+        "description": "The object whose state or configuration changed to cause the incident, not the workload merely showing the symptom. Rule of thumb: if you are naming a pod that is crashing, restarting, or failing to connect, you are probably wrong — the crash is the symptom. Name what the pod depends on that changed (Service, Secret, ConfigMap, backing dependency, or deployment spec that was mutated). When a workload is unhealthy because a dependency rejected it (auth or permission denied, connection refused, empty endpoints, missing key), name the dependency object that changed, not the consumer. Use the most specific stable identifier: namespace, kind, and name.",
+        "title": "Affected Resource",
+        "type": "string"
+      },
+      "confidence": {
+        "description": "Diagnosis confidence from 0.0 to 1.0 based on evidence strength and conflicts.",
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "title": "Confidence",
+        "type": "number"
+      },
+      "evidence": {
+        "description": "Short list of concrete observations supporting the diagnosis. Include command pattern, observed values, resource, and time window. Prefer numeric metrics, Kubernetes reasons, and concrete log/trace error classes.",
+        "items": {
+          "type": "string"
+        },
+        "title": "Evidence",
+        "type": "array"
+      },
+      "fault_type": {
+        "description": "Short fault category label. Examples: resource_stress, pod_crash, network_latency, misconfiguration, io_failure, node_failure.",
+        "title": "Fault Type",
+        "type": "string"
+      },
+      "halt": {
+        "default": false,
+        "description": "Set to true ONLY when no truthful root cause can be derived from the available evidence and the agent wants to stop the incident flow. The normal path is false — Planning then designs the fix and Execution applies it. Never halt for safety, caution, or because remediation 'is not the RCA role'.",
+        "title": "Halt",
+        "type": "boolean"
+      },
+      "halt_reason": {
+        "description": "Required when halt is true: explain why no diagnosis is reachable. Ignored when halt is false.",
+        "title": "Halt Reason",
+        "type": "string"
+      },
+      "summary": {
+        "description": "One to three sentence diagnosis summary.",
+        "title": "Summary",
+        "type": "string"
+      }
+    },
+    "required": [
+      "fault_type",
+      "affected_resource",
+      "confidence",
+      "evidence",
+      "summary"
+    ],
+    "title": "RootCause",
+    "type": "object"
+  },
+  "SingleDiagnosis": {
+    "description": "Free-text diagnosis from the single-agent baseline (AGENT_MODE=single).\n\nDeliberately unstructured: the minimal baseline submits a natural-language\nroot-cause description — exactly as SREGym's reference agents do — rather than\nthe structured RootCause the multi-agent pipeline produces. Stored in the\n`root_cause` state slot; persistence and outcome resolution duck-type it (it\nhas no `halt`, so the pipeline treats it as a normal diagnosis).",
+    "properties": {
+      "solution": {
+        "description": "Natural-language root-cause description.",
+        "title": "Solution",
+        "type": "string"
+      }
+    },
+    "required": [
+      "solution"
+    ],
+    "title": "SingleDiagnosis",
+    "type": "object"
+  },
+  "SingleResult": {
+    "description": "Terminal result from the single-agent baseline's mitigation phase.\n\nStored in the `execution_result` state slot. `succeeded` is the field\nresolve_pipeline_outcome reads; SREGym grades cluster health independently.",
+    "properties": {
+      "succeeded": {
+        "description": "Whether the agent believes its fix resolved the incident.",
+        "title": "Succeeded",
+        "type": "boolean"
+      },
+      "summary": {
+        "description": "What was changed and what verification showed.",
+        "title": "Summary",
+        "type": "string"
+      }
+    },
+    "required": [
+      "succeeded",
+      "summary"
+    ],
+    "title": "SingleResult",
+    "type": "object"
+  },
+  "VerifyResult": {
+    "description": "End-to-end recovery verdict from the Verify step.\n\nVerify runs AFTER a clean apply and judges the incident at the SYSTEM level —\nnot whether a step applied (Execution already confirmed that), but whether the\naffected request path actually works now. Pods being Running/Ready is not\nenough: a request must be able to flow through. Verify owns the decision to end\nthe pipeline (recovered) or hand back (replan / reassess).",
+    "properties": {
+      "checks": {
+        "description": "Required, at least one. The end-to-end checks you actually ran and what each showed — the re-evaluated alert query and its value, an error-rate/latency SLI, a trace or endpoint check, or a request probe. Name the command/query, the observed value, and the pass/fail verdict. Do not list pod-liveness checks alone.",
+        "items": {
+          "type": "string"
+        },
+        "title": "Checks",
+        "type": "array"
+      },
+      "confidence": {
+        "description": "Confidence (0.0–1.0) in the recovery verdict, based on how directly the checks exercised the affected request path.",
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "title": "Confidence",
+        "type": "number"
+      },
+      "entry_point_status": {
+        "default": "",
+        "description": "Required, non-empty, when recovered=true. The observed health of the application's own user-facing entry point, established WITHOUT reference to RCA's causal chain — name what you probed (the Ingress-backed / LoadBalancer / load-generator-targeted Service) and the observed result. This is the incident-independent anchor: if RCA named the wrong symptom, every chain-derived check inherits that error, and only this one does not. When handing back, report whatever you observed, including that the probe was impossible and why.",
+        "title": "Entry Point Status",
+        "type": "string"
+      },
+      "needs_reassessment": {
+        "default": false,
+        "description": "Set true when the change was applied correctly but the system is still broken AND the evidence now points to a DIFFERENT or deeper root cause than the one diagnosed. Also set recovered=false and fill reassessment_reason; routes back to RCA. Mutually exclusive with needs_replan.",
+        "title": "Needs Reassessment",
+        "type": "boolean"
+      },
+      "needs_replan": {
+        "default": false,
+        "description": "Set true when the change was applied correctly but the system is still broken AND the diagnosed root cause still looks right — the plan was insufficient or incomplete and a fuller plan against the SAME cause could work. Also set recovered=false and fill replan_reason; routes back to Planning. Mutually exclusive with needs_reassessment.",
+        "title": "Needs Replan",
+        "type": "boolean"
+      },
+      "reassessment_reason": {
+        "description": "Required when needs_reassessment=true: state what was already applied (so RCA does not repeat it) and why the persisting symptom points to a different root cause to investigate.",
+        "title": "Reassessment Reason",
+        "type": "string"
+      },
+      "recovered": {
+        "description": "True ONLY when the incident is resolved at the SYSTEM level — the concrete firing alerts / degraded SLI have cleared AND the affected request path works end to end. Pods Running/Ready is NOT sufficient. False when the symptom persists or end-to-end recovery could not be confirmed.",
+        "title": "Recovered",
+        "type": "boolean"
+      },
+      "replan_reason": {
+        "description": "Required when needs_replan=true: name what the applied plan failed to achieve and what a fuller plan against the same cause should add.",
+        "title": "Replan Reason",
+        "type": "string"
+      },
+      "summary": {
+        "description": "Required, non-empty. What end-to-end state you observed and why the incident is or is not resolved at the system level.",
+        "title": "Summary",
+        "type": "string"
+      },
+      "verdict": {
+        "description": "recovered: end-to-end checks confirm the system works and the concrete alerts cleared. not_recovered: the symptom still reproduces. inconclusive: telemetry/probes were unavailable or contradictory and recovery could not be established. Must be 'recovered' iff recovered=true.",
+        "enum": [
+          "recovered",
+          "not_recovered",
+          "inconclusive"
+        ],
+        "title": "Verdict",
+        "type": "string"
+      }
+    },
+    "required": [
+      "recovered",
+      "verdict",
+      "checks",
+      "summary",
+      "confidence"
+    ],
+    "title": "VerifyResult",
+    "type": "object"
+  }
+}
