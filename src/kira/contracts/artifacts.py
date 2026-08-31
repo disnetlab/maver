@@ -359,8 +359,8 @@ class VerifyResult(SubmissionModel):
     )
     summary: str = Field(
         description=(
-            "Required, non-empty. What end-to-end state you observed and why the "
-            "incident is or is not resolved at the system level."
+            "Required, non-empty. What end-to-end state you observed and why the incident is or "
+            "is not resolved at the system level."
         ),
     )
     needs_replan: bool = Field(
@@ -559,8 +559,8 @@ class LearningResult(SubmissionModel):
     case_negative_constraints: list[str] = Field(
         default_factory=list,
         description=(
-            "Case-specific conditions under which the attempted hypothesis or action "
-            "must not be reused."
+            "Case-specific conditions under which the attempted hypothesis or action must not be "
+            "reused. Fault-independent tool/environment rules belong in the playbook instead."
         ),
     )
     corrected_cause: str = Field(
@@ -582,9 +582,9 @@ class LearningResult(SubmissionModel):
     )
     summary: str = Field(
         description=(
-            "Full incident summary, at most 500 words, following the section headings "
-            "defined in the post-incident prompt. Returned on demand; not used as the "
-            "retrieval source text."
+            "Full incident summary (L1), ≤ 500 words, following the section headings defined in "
+            "the post_incident prompt. Returned on-demand via `open_memory`; not used as the "
+            "retrieval embedding source."
         ),
     )
     fault_category: str = Field(
@@ -597,16 +597,12 @@ class LearningResult(SubmissionModel):
     verification_verdict: str = Field(
         default="",
         description=(
-            "Independent live-recovery verdict from the learning pass's own re-check "
-            "of the cluster. One of 'recovered', 'not_recovered', or 'inconclusive'. "
-            "Leave empty only if live verification was not performed."
+            "Independent live-recovery verdict from the Learning Agent's own re-check of the "
+            "cluster (required when live verification is enabled, and must match the SLI "
+            "Verification section). One of 'recovered', 'not_recovered', or 'inconclusive'. Leave "
+            "empty only if live verification was not performed."
         ),
     )
-
-    @field_validator("observations", "case_negative_constraints", mode="before")
-    @classmethod
-    def _decode_lists(cls, value: object) -> object:
-        return decode_container(value)
 
 
 class RoleTraceSummary(BaseModel):
@@ -647,12 +643,8 @@ class LearningPacket(BaseModel):
     )
     trace_summaries: list[RoleTraceSummary] = Field(default_factory=list)
     operator_notes: str | None = None
-    external_feedback: dict[str, Any] | None = Field(
-        default=None,
-        description=(
-            "External evaluation of this session, when a source of truth is "
-            "available, such as a benchmark oracle or a human grader. A neutral "
-            "slot: the producer decides what goes here and the learning pass treats "
-            "it as ground truth."
-        ),
-    )
+    # External evaluation of this session, when a source of truth is available (e.g. a
+    # benchmark oracle or a human grader). Neutral slot: the producer decides what to put
+    # here; Learning treats it as ground truth. In benchmark feedback modes this holds the
+    # oracle's diagnosis/mitigation verdicts (+ ground-truth root cause in details mode).
+    external_feedback: dict[str, Any] | None = None
