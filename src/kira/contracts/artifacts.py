@@ -9,14 +9,23 @@ JSON Schema of its submission tool, so wording changes are behaviour changes. Th
 are carried over verbatim from the research prototype, together with the validators,
 because each validator encodes a failure that was measured to destroy graded work.
 
+The same is true of a class docstring, which Pydantic turns into the schema's
+top-level description. That is why these models derive from ``SubmissionModel``, which
+strips it: documentation and instruction are separate channels, and an edit to one
+must not silently rewrite the other. Model-facing text at the class level is declared
+explicitly in ``schema_description``. Both are pinned by
+``tests/unit/test_submission_schema_fidelity.py`` against what the prototype shipped.
+
 Changing a field here invalidates published comparisons between experiment
 configurations, which are only single-variable while the submission schema is held
 constant. See STYLE_GUIDE.md, "Typed artifacts are frozen".
 """
 
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, GetJsonSchemaHandler, field_validator, model_validator
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import CoreSchema
 
 from kira.contracts.parsing import (
     cites_request_path,
@@ -36,11 +45,48 @@ __all__ = [
     "SingleDiagnosis",
     "SingleResult",
     "StepResult",
+    "SubmissionModel",
     "VerifyResult",
 ]
 
 
-class RootCause(BaseModel):
+class SubmissionModel(BaseModel):
+    """Base for a model whose schema is shipped to the language model.
+
+    A class docstring must not reach that schema. Pydantic derives the schema's
+    top-level ``description`` from ``__doc__``, so an ordinary documentation edit
+    silently rewrites part of the instructions every role receives, on a contract that
+    is otherwise held byte-compatible. That is not hypothetical: rewriting these
+    classes for readability added a description to six submission schemas that had
+    none and reworded three that had one, and nothing failed.
+
+    Model-facing text is therefore declared explicitly in ``schema_description``, and
+    docstrings are free to say whatever a reader needs.
+    """
+
+    schema_description: ClassVar[str | None] = None
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler
+    ) -> JsonSchemaValue:
+        """Emit only the description this class declares, never its docstring.
+
+        Args:
+            core_schema: The validated core schema.
+            handler: The next schema generator.
+
+        Returns:
+            The JSON schema, with the docstring-derived description removed.
+        """
+        schema = handler(core_schema)
+        schema.pop("description", None)
+        if cls.schema_description is not None:
+            schema["description"] = cls.schema_description
+        return schema
+
+
+class RootCause(SubmissionModel):
     """The diagnosis emitted by the root-cause analysis role."""
 
     fault_type: str = Field(
@@ -109,7 +155,7 @@ class RootCause(BaseModel):
         return normalize_nullish(value)
 
 
-class PlanStep(BaseModel):
+class PlanStep(SubmissionModel):
     """One remediation step in a plan."""
 
     action: str = Field(description="Declarative remediation action name.")
@@ -123,7 +169,7 @@ class PlanStep(BaseModel):
         return decode_container(value)
 
 
-class Plan(BaseModel):
+class Plan(SubmissionModel):
     """The typed remediation plan emitted by the planning role."""
 
     steps: list[PlanStep]
@@ -162,7 +208,7 @@ class Plan(BaseModel):
         return normalize_nullish(value)
 
 
-class StepResult(BaseModel):
+class StepResult(SubmissionModel):
     """The observed outcome of applying one plan step."""
 
     step_index: int = Field(description="Zero-based index of the plan step this entry reports.")
@@ -176,7 +222,7 @@ class StepResult(BaseModel):
     )
 
 
-class ExecutionResult(BaseModel):
+class ExecutionResult(SubmissionModel):
     """The resource-level outcome reported by the execution role."""
 
     succeeded: bool = Field(
@@ -270,7 +316,7 @@ class ExecutionResult(BaseModel):
         return self
 
 
-class VerifyResult(BaseModel):
+class VerifyResult(SubmissionModel):
     """End-to-end recovery verdict from the verification role.
 
     Verify runs after a clean apply and judges the incident at the system level: not
@@ -279,6 +325,10 @@ class VerifyResult(BaseModel):
     enough; a request must be able to flow through. Verify owns the decision to end
     the pipeline or to hand back.
     """
+
+    schema_description: ClassVar[str | None] = (
+        "End-to-end recovery verdict from the Verify step.\n\nVerify runs AFTER a clean apply and judges the incident at the SYSTEM level —\nnot whether a step applied (Execution already confirmed that), but whether the\naffected request path actually works now. Pods being Running/Ready is not\nenough: a request must be able to flow through. Verify owns the decision to end\nthe pipeline (recovered) or hand back (replan / reassess)."
+    )
 
     recovered: bool = Field(
         description=(
@@ -455,7 +505,7 @@ class VerifyResult(BaseModel):
         return self
 
 
-class SingleDiagnosis(BaseModel):
+class SingleDiagnosis(SubmissionModel):
     """Free-text diagnosis from the single-agent configuration.
 
     Deliberately unstructured. The single-agent configuration submits a
@@ -465,17 +515,25 @@ class SingleDiagnosis(BaseModel):
     since it has no ``halt`` field the pipeline treats it as a normal diagnosis.
     """
 
+    schema_description: ClassVar[str | None] = (
+        "Free-text diagnosis from the single-agent baseline (AGENT_MODE=single).\n\nDeliberately unstructured: the minimal baseline submits a natural-language\nroot-cause description — exactly as SREGym's reference agents do — rather than\nthe structured RootCause the multi-agent pipeline produces. Stored in the\n`root_cause` state slot; persistence and outcome resolution duck-type it (it\nhas no `halt`, so the pipeline treats it as a normal diagnosis)."
+    )
+
     solution: str = Field(description="Natural-language root-cause description.")
 
 
-class SingleResult(BaseModel):
+class SingleResult(SubmissionModel):
     """Terminal result from the single-agent configuration's mitigation phase."""
+
+    schema_description: ClassVar[str | None] = (
+        "Terminal result from the single-agent baseline's mitigation phase.\n\nStored in the `execution_result` state slot. `succeeded` is the field\nresolve_pipeline_outcome reads; SREGym grades cluster health independently."
+    )
 
     succeeded: bool = Field(description="Whether the agent believes its fix resolved the incident.")
     summary: str = Field(description="What was changed and what verification showed.")
 
 
-class LearningResult(BaseModel):
+class LearningResult(SubmissionModel):
     """The distillation an offline learning pass produces from a completed incident."""
 
     observations: list[str] = Field(

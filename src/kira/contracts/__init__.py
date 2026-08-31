@@ -17,6 +17,7 @@ from kira.contracts.artifacts import (
     SingleDiagnosis,
     SingleResult,
     StepResult,
+    SubmissionModel,
     VerifyResult,
 )
 from kira.contracts.events import (
@@ -53,6 +54,7 @@ __all__ = [
     "StageEvent",
     "StepResult",
     "SubmissionEvent",
+    "SubmissionModel",
     "TargetStage",
     "ToolCallEvent",
     "VerifyResult",
