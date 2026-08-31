@@ -130,6 +130,7 @@ ignore = [
 # submission tool's JSON Schema and are carried over verbatim. Their typographic
 # characters are part of the frozen contract, not a style choice.
 "src/kira/contracts/artifacts.py" = ["RUF001", "RUF002", "RUF003"]
+"src/kira/llm/_provider.py" = ["TID251"]  # the one module allowed to import it
 
 [tool.ruff.lint.isort]
 known-first-party = ["kira"]
@@ -142,6 +143,7 @@ convention = "google"
 # See STYLE_GUIDE.md "Layer boundaries".
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "kira.adapters.sregym".msg = "Core modules must not import an adapter. Adapters register via the kira.adapters entry-point group and supply their own transport."
+"litellm".msg = "Only kira.llm._provider may import the provider library; it owns the import-time environment write the library requires. Use kira.llm types instead."
 
 [tool.ruff.format]
 docstring-code-format = true
