@@ -1,0 +1,319 @@
+# Model-facing tool descriptions.
+#
+# A tool's JSON schema and implementation live with the tool, on its @tool
+# decorator. This file holds only the human-editable top-level descriptions the
+# model is shown. An entry is {default: str, agents: {<role>: str}} and nothing
+# else; a per-role entry replaces the default outright rather than extending it,
+# so it has to be complete on its own.
+
+bash_exec:
+  default: >-
+    Run a bash command inside the session workspace (cwd and HOME are both set
+    there). Use it for local text filtering, simple file reads, and processing
+    saved tool outputs such as tool_outputs/pods.json. In KUBECTL_MODE=mcp it
+    has no cluster credentials and kubectl is rejected; in
+    KUBECTL_MODE=proxy_exec, kubectl resolves to the stage-aware SREGym proxy
+    shim. Returns combined stdout, stderr, and exit code.
+  agents:
+    execution: >-
+      Run a bash command inside the session workspace. Use it for waiting (e.g.
+      sleep), local text filtering, and post-processing kubectl output saved under
+      tool_outputs/. In KUBECTL_MODE=proxy_exec, kubectl resolves to the
+      stage-aware SREGym proxy shim; do not use watch-style kubectl commands such
+      as `kubectl wait` or `kubectl rollout status`; prefer short
+      `kubectl get ... -o json/jsonpath` checks. In KUBECTL_MODE=mcp, use
+      exec_kubectl_cmd_safely for cluster operations.
+
+code_exec:
+  default: >-
+    Execute a Python script inside the session workspace (cwd and HOME are set
+    there). Only Python is supported. Use it for local parsing, comparison, and
+    multi-step analysis over saved tool outputs such as tool_outputs/pods.json.
+    In KUBECTL_MODE=mcp, kubectl subprocess calls are rejected; in
+    KUBECTL_MODE=proxy_exec, kubectl resolves to the stage-aware SREGym proxy
+    shim. Returns combined stdout, stderr, and exit code.
+  agents:
+    execution: >-
+      Execute a Python script inside the session workspace. Use it for generating
+      config snippets, comparing cluster state programmatically, or any multi-step
+      analysis too complex for a shell one-liner. In KUBECTL_MODE=proxy_exec,
+      kubectl subprocess calls route through the stage-aware SREGym proxy shim;
+      do not use `kubectl wait` or `kubectl rollout status`; prefer short
+      `kubectl get` status/readiness checks.
+
+ssh_exec:
+  default: >-
+    Run one command through the dedicated SSH identity on a configured worker
+    host. This is available only to Execution and always goes through the HITL
+    gate. Use an allowed Kubernetes worker-name alias (for example
+    `gym-worker-1`), never an IP. For a stopped kubelet, run `sudo systemctl
+    start kubelet` on every affected NotReady worker, then verify Ready;
+    cordon/drain cannot repair that fault. This is a function tool: never type
+    `ssh_exec` into bash/code. Do not run kubectl through it; use the Kubernetes
+    tool for cluster operations.
+
+exec_kubectl_cmd_safely:
+  default: >-
+    Execute a kubectl command against the cluster via the kubectl MCP server.
+    Pass the full command string starting with "kubectl" (e.g.
+    "kubectl get pods -n shop"). -A/--all-namespaces, API discovery, raw
+    discovery, and credential/context override flags are blocked. Runs kubectl
+    directly with no shell, so shell pipes/redirects/chains (|, >, &&, ;) are not
+    supported — use -o json/-o jsonpath for structured output, or post-process the
+    raw output with bash_exec or code_exec. Omit save_as for normal short reads;
+    use save_as only when output may be long or you need to reuse/post-process the
+    full result from tool_outputs/.
+  agents:
+    rca: >-
+      Run read-only kubectl for diagnosis (get, describe, logs, top, events,
+      and non-interactive diagnostic exec) against the alert namespace or a named target, e.g.
+      "kubectl describe pod my-pod -n shop". Write verbs are rejected for RCA.
+      Do not use exec for repairs, admin changes, data changes, or other
+      mutations. Do not use -A/--all-namespaces or API/raw discovery. Omit
+      save_as for normal short reads; use save_as only when output may be long
+      or needs bash_exec/code_exec post-processing.
+    planning: >-
+      Read-only kubectl for inspecting current target resources, e.g.
+      "kubectl get deploy my-app -n shop -o yaml". Write verbs are rejected for
+      Planning. Non-interactive diagnostic exec is allowed only to inspect state
+      needed for a plan; do not use it for repairs, admin changes, data changes,
+      or other mutations. Do not use -A/--all-namespaces or API/raw discovery.
+      Omit save_as for normal short reads; use save_as only when output may be
+      long or needs bash_exec/code_exec post-processing.
+    execution: >-
+      Run kubectl against the planned target namespace, e.g.
+      "kubectl scale deploy/my-app -n shop --replicas=3". Reads are
+      auto-approved; writes go through the HITL gate. Do not use
+      -A/--all-namespaces, API/raw discovery, or credential/context overrides.
+      Omit save_as for normal short reads; use save_as only when output may be
+      long or needs bash_exec/code_exec post-processing.
+    learning: >-
+      Read-only kubectl for environment discovery and verification (get,
+      describe, logs, top, events) in supplied namespaces. Write verbs are
+      rejected for Learning. Do not use -A/--all-namespaces or API/raw discovery.
+      Omit save_as for normal short reads; use save_as only when output may be
+      long or needs bash_exec/code_exec post-processing.
+
+rollback_command:
+  default: >-
+    Roll back the last kubectl write you successfully executed with
+    exec_kubectl_cmd_safely. Takes no arguments. Routed through the HITL gate
+    like any cluster write. Call get_previous_rollbackable_cmd first to confirm
+    what will be reverted; repeated calls roll back successive commands.
+
+get_previous_rollbackable_cmd:
+  default: >-
+    List the kubectl commands you previously executed that can still be rolled
+    back, in the order rollback_command would revert them. Read-only.
+
+namespace_snapshot:
+  default: >-
+    Read-only structured snapshot of one namespace in a single call: workloads
+    (ready/desired, restarts, image), current pod health plus prior container
+    termination reason and finishedAt timestamp. When the alert supplies an
+    observation boundary, restart timing is deterministically labelled BEFORE
+    or AT/AFTER that boundary,
+    Service→endpoint→targetPort bindings, ConfigMap/Secret references (flagging
+    dangling ones), recent Warning events, and node conditions. Generic
+    Kubernetes correctness problems are flagged with [!]. It reports facts, not a
+    diagnosis — the faulty component is somewhere in the snapshot for you to
+    localize.
+  agents:
+    rca: >-
+      Enumerate every candidate cause in a namespace at once and surface the
+      objects that are easy to miss — sibling Deployments, Service/targetPort
+      mismatches, empty endpoints, missing ConfigMap/Secret references, recent
+      changes, and node pressure. The alert namespace's snapshot is auto-provided
+      at the start of the incident context; call this tool to refresh it or to
+      inspect a different (e.g. dependency) namespace. Read-only; flags are
+      generic health signals, not a verdict — you still decide the root cause.
+
+get_metrics:
+  default: >-
+    Query Prometheus with a PromQL expression and return the matching series.
+    Time windowing is handled server-side, so no time range is passed.
+  agents:
+    rca: >-
+      Query Prometheus metrics with PromQL to confirm or rule out hypotheses
+      (saturation, error rates, latency).
+    learning: >-
+      Query Prometheus metrics to baseline SLIs or confirm recovery during
+      domain learning.
+
+get_alerts:
+  default: >-
+    List all currently firing Prometheus alerts with their labels (alertname,
+    severity, namespace, service) and annotations. When stale-alert annotation
+    is enabled, an alert with `stale_namespace` is for a namespace that no
+    longer exists and is not an active incident.
+  agents:
+    rca: >-
+      List firing alerts to see the full incident picture and any correlated
+      alerts beyond the one that triggered this run.
+
+get_services:
+  default: >-
+    List services CURRENTLY REPORTING TRACES, restricted to the alert namespace, and
+    the namespace's deployed workloads that are reporting nothing. This is a liveness
+    signal, not an inventory: a service that stops serving stops reporting, so a short
+    list means workloads are silent, not that they do not exist. Use it before
+    get_operations or get_traces.
+  agents:
+    learning: >-
+      List services known to Jaeger. Useful for domain surveys to map
+      observable services.
+
+get_operations:
+  default: >-
+    List the operations/endpoints recorded for a given Jaeger service in the
+    incident namespace. Use to pick an operation to focus a get_traces
+    investigation.
+
+get_traces:
+  default: >-
+    Fetch recent Jaeger traces for an incident-namespace service over the last
+    N minutes. Foreign-namespace processes are removed; use it to inspect
+    local inter-service call chains and latency propagation.
+
+get_dependency_graph:
+  default: >-
+    Fetch the incident-namespace portion of Jaeger's dependency graph over the
+    last N minutes (default 30). Use to understand local call topology and
+    locate where failures originate.
+
+get_logs:
+  default: >-
+    Run a LogQL query against Loki over the last N minutes (default 15) for log
+    retrieval.
+  agents:
+    rca: >-
+      Run a LogQL query against Loki to retrieve error or symptom logs for the
+      affected service/namespace.
+    learning: >-
+      Run a LogQL query to verify error-level log activity subsided after
+      remediation, or to survey log patterns during domain learning.
+
+get_labels:
+  default: >-
+    List Loki label names available for query construction.
+  agents:
+    learning: >-
+      List Loki label names. Use during domain surveys to understand what
+      services and namespaces are observable.
+
+get_label_values:
+  default: >-
+    List all values for a given Loki label (e.g. 'namespace', 'app', 'pod').
+    Use to discover valid selector values before constructing a get_logs query.
+
+memory_search:
+  default: >-
+    Hybrid search over one scoped projection of distilled past sessions.
+    scope='evidence' returns observations only; scope='lesson' returns explicitly
+    confirmed, corrected, rejected, failed, or unverified causal/action lessons.
+  agents:
+    rca: >-
+      Call this at least once before submitting, after you have gathered live
+      evidence. A submission made without it is not accepted, and the search
+      happens then — later than it is useful to you. Search scope='evidence'.
+      The runtime builds the first evidence query from the current alert,
+      namespace snapshot, and preceding live tool results, excluding your
+      proposed mechanism. Evidence is not proof. If you intend to rely on a
+      prior incident for causal or remediation support, inspect its lesson;
+      otherwise continue with live evidence.
+    planning: >-
+      Search scope='lesson' for prior causal/remediation learning. Pass the alert name, namespace,
+      RootCause.fault_type, and RootCause.affected_resource as the structured
+      args to get matching precedents ranked higher. Use `open_memory` to
+      expand a promising hit to the full incident summary, or
+      `session_trace_summary` for per-agent process detail.
+    learning: >-
+      Search existing knowledge summaries. Use in human-triggered mode to
+      read before updating or correcting a summary. Pass structured args
+      when known to bias ranking toward the relevant prior session.
+
+open_memory:
+  default: >-
+    Open the selected projection for a memory_search hit. Evidence scope hides
+    causal lessons and the mixed L1 summary; lesson scope exposes the lesson and
+    L1 audit summary. Pass the `memory-N` handle from search.
+  agents:
+    rca: >-
+      Open scope='evidence' to compare observations. Open scope='lesson' only
+      when the precedent is relevant and you intend to use its causal or
+      remediation learning; lesson access is optional.
+
+session_trace_summary:
+  default: >-
+    Read compact per-agent trace summaries for a prior session. Pass the
+    `memory-N` handle from a memory_search result (e.g. "memory-1").
+    Evidence scope returns observations/tool calls without prior decisions;
+    lesson scope returns the full compact trace. Never returns raw transcripts.
+  agents:
+    rca: >-
+      Inspect how a prior RCA investigation reasoned — which tool chains
+      confirmed or ruled out hypotheses — when a memory_search hit looks
+      directly relevant. Ask for agent='rca' to get the diagnostic trace.
+    planning: >-
+      Fetch a closer look at a retrieved past session after memory_search. Ask
+      for a specific agent such as 'rca', 'planning', or 'execution' when
+      deciding whether the precedent applies.
+    learning: >-
+      Fetch per-agent trace summaries for a session when reviewing or
+      correcting memory. Use this before asking for more evidence.
+
+submit_learning_result:
+  default: >-
+    Finalise the learning result. Call exactly once. Two text fields are
+    required: `retrieval_card` (2–3 sentences, embedded into vector and BM25
+    indexes — must contain exact Kubernetes identifiers and error phrases) and
+    `summary` (the ≤500-word L1 incident summary using the headings from the
+    prompt). `fault_category` is a short label.
+
+submit_root_cause:
+  default: >-
+    Finalise the RCA. Call exactly once with your best-supported diagnosis.
+    Always leave `halt_reason` null — Planning then designs the fix and Execution
+    applies it, and a separate safety gate reviews any cluster write. Only set
+    `halt_reason` if no useful diagnosis is reachable at all; never for safety.
+
+submit_plan:
+  default: >-
+    Finalise the remediation plan. Call exactly once. Include `confidence`
+    (0.0–1.0) that the plan will achieve `expected_outcome`. Always leave
+    `halt_reason` null — the pipeline proceeds to Execution and a separate safety
+    gate reviews each write. Only set `halt_reason` if no remediation step can be
+    expressed at all; never for safety, risk, or low confidence.
+
+submit_execution_result:
+  default: >-
+    Finalise execution outcome. Call exactly once after all steps, or after
+    aborting on drift. Report whether the plan APPLIED at the resource level
+    (rollout/patch took effect) — not whether the incident is resolved end to
+    end; the Verify step decides that. Include `confidence` (0.0–1.0) that the
+    post-mutation evidence supports reaching the intended cluster state — lower
+    it when verification was partial or used only indirect signals.
+
+submit_verify_result:
+  default: >-
+    Finalise the end-to-end recovery verdict. Call exactly once after probing the
+    affected request path. Set `recovered` only when the concrete firing
+    alert(s)/SLI have cleared AND a request actually flows through (pods Ready is
+    not enough). A generic intake placeholder is not an alert to clear and its
+    absence is not recovery evidence. List the end-to-end `checks` you ran. If
+    still broken, set the appropriate hand-back: `needs_replan` (same cause,
+    insufficient plan) or `needs_reassessment` (wrong cause), with a reason.
+
+submit_diagnosis:
+  default: >-
+    Finalise TASK 1 (diagnosis). Call exactly once when you have investigated
+    enough to name the fault. `solution` is a natural-language description of the
+    root cause — which component failed and why. After this you continue to
+    TASK 2 (mitigation); this call does not end the session.
+
+submit_mitigation:
+  default: >-
+    Finalise TASK 2 (mitigation). Call exactly once after you have applied and
+    verified your fix. Set `succeeded` to whether you believe the incident is
+    resolved and `summary` to what you changed and what verification showed. This
+    call ends the session.

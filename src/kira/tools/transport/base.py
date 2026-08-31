@@ -13,9 +13,10 @@ matters because a tool that errors looks to the model like a fault it should wor
 and a tool that was never offered does not.
 """
 
+from collections.abc import Sequence
 from typing import Any, Literal, Protocol, runtime_checkable
 
-__all__ = ["CAPABILITIES", "Capability", "ToolTransport"]
+__all__ = ["CAPABILITIES", "Capability", "ToolTransport", "TraceOperation"]
 
 Capability = Literal[
     "kubernetes",
@@ -51,6 +52,15 @@ which reads in the results exactly like a model that chose not to call it.
 """
 
 
+TraceOperation = Literal["services", "operations", "traces", "dependencies"]
+"""The trace queries a transport must answer.
+
+Named as a type rather than left as a free string because the caller and every
+implementation have to agree on the spelling, and a disagreement would otherwise surface
+as a tool failure during an incident rather than as a type error.
+"""
+
+
 @runtime_checkable
 class ToolTransport(Protocol):
     """One environment's implementation of what tools need.
@@ -78,17 +88,31 @@ class ToolTransport(Protocol):
         """
         ...
 
-    async def kubectl(self, command: str, *, namespace: str | None = None) -> str:
-        """Run one kubectl command.
+    @property
+    def timeout_seconds(self) -> int:
+        """How long this transport waits before abandoning a call.
 
-        Authority is decided before this is reached; a transport is not a policy layer.
-
-        Args:
-            command: The full command string as the model wrote it.
-            namespace: Namespace to scope the command to, when the caller knows one.
+        Read by the kubectl tool to bound a blocking wait just under it, so the command
+        returns its own clean timeout rather than being hard-killed.
 
         Returns:
-            Combined output, as the model should see it.
+            The per-call timeout.
+        """
+        ...
+
+    async def kubectl(self, argv: Sequence[str]) -> str:
+        """Run one kubectl invocation.
+
+        Takes an argument list rather than a command string: the tool has already
+        tokenised and classified it, and re-parsing would be a second chance to disagree
+        about what the command says. Authority is settled before this is reached — a
+        transport executes, it does not decide.
+
+        Args:
+            argv: The arguments, without a leading ``kubectl``.
+
+        Returns:
+            Combined output.
         """
         ...
 
@@ -104,6 +128,33 @@ class ToolTransport(Protocol):
         """
         ...
 
+    async def query_alerts(self) -> str:
+        """Read the alerts the monitoring stack is currently firing.
+
+        Returns:
+            The firing alerts, rendered for the model.
+        """
+        ...
+
+    async def log_labels(self) -> str:
+        """List the label names the log backend indexes.
+
+        Returns:
+            The label names, rendered for the model.
+        """
+        ...
+
+    async def log_label_values(self, label: str) -> str:
+        """List the values a log label takes.
+
+        Args:
+            label: The label name.
+
+        Returns:
+            The values, rendered for the model.
+        """
+        ...
+
     async def query_logs(self, query: str, *, last_n_minutes: int = 15) -> str:
         """Run one log query.
 
@@ -116,7 +167,7 @@ class ToolTransport(Protocol):
         """
         ...
 
-    async def query_traces(self, operation: str, **kwargs: Any) -> str:
+    async def query_traces(self, operation: TraceOperation, **kwargs: Any) -> str:
         """Read distributed traces.
 
         Args:
