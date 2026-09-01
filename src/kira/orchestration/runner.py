@@ -19,7 +19,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -40,7 +40,7 @@ from kira.orchestration.engine import Engine, LangGraphEngine, SequentialEngine,
 from kira.orchestration.graph import build_graph
 from kira.orchestration.hooks import fire_hooks
 from kira.orchestration.modes import MODES, ModeContext, resolve_mode
-from kira.orchestration.nodes import ContextBuilder, IncidentDeps, make_node
+from kira.orchestration.nodes import ContextBuilder, IncidentDeps, NodeFn, make_node
 from kira.orchestration.outcomes import OutcomeRecord, persist_outcome, resolve_outcome
 from kira.orchestration.resume import (
     ApprovalCheckpoint,
@@ -54,10 +54,20 @@ from kira.orchestration.routing import RoutingPolicy
 from kira.orchestration.state import initial_state
 from kira.roles.base import RoleContext, RoleSpec, StateDelta
 from kira.roles.registry import get_role, registered_roles
+from kira.secondpass.audit import JournalEmitter
+from kira.secondpass.runner import SecondPass
+from kira.secondpass.strategies import policy_for
+from kira.secondpass.types import (
+    DiagnosisRun,
+    SecondPassContext,
+    SecondPassPolicy,
+    SecondPassResult,
+)
 from kira.settings.profiles import ModelProfile
 from kira.settings.root import Settings
 from kira.tools.context import ToolContext
 from kira.tools.scope import IncidentScope
+from kira.tools.snapshot import namespace_snapshot
 from kira.tools.toolsets import build_toolset
 from kira.tools.transport.base import ToolTransport
 from kira.tools.workspace import SessionWorkspace
@@ -221,12 +231,119 @@ The prototype's row said `failed`, which made a deliberate stop indistinguishabl
 crash in every count taken downstream. See :mod:`kira.orchestration.outcomes`."""
 
 
-def _engine(deployment: Deployment, deps: IncidentDeps) -> Engine:
+def _engine(deployment: Deployment, deps: IncidentDeps, resources: IncidentResources) -> Engine:
     """Build the configured executor over the same nodes either one would run."""
-    nodes = {name: make_node(get_role(name), deps) for name in GRAPH_ROLES}
+    nodes = _nodes(deployment, deps, resources)
     if deployment.settings.pipeline.engine == "sequential":
         return SequentialEngine(nodes, deps.policy)
     return LangGraphEngine(build_graph(nodes, deps.policy))
+
+
+def _nodes(
+    deployment: Deployment, deps: IncidentDeps, resources: IncidentResources
+) -> dict[str, NodeFn]:
+    """The graph's roles, with the diagnosing one composed if a second pass is configured.
+
+    The mechanism wraps the diagnosis rather than living inside it. Both of its runs are
+    ordinary role runs — same wrapper, same run rows, same audit — and what differs is
+    only what they are told and whether they may retrieve. A role that knew it was being
+    second-guessed would be a different role in the arm that does it.
+    """
+    nodes = {name: make_node(get_role(name), deps) for name in GRAPH_ROLES}
+    policy = policy_for(deployment.settings.secondpass, deployment.settings.memory)
+    if policy is not None:
+        nodes["rca"] = _second_pass_node(deployment, deps, resources, policy)
+    return nodes
+
+
+def _second_pass_node(
+    deployment: Deployment,
+    deps: IncidentDeps,
+    resources: IncidentResources,
+    policy: SecondPassPolicy,
+) -> NodeFn:
+    """Run the gated second opinion in place of a single diagnosis."""
+
+    async def diagnose(
+        state: IncidentState, *, brief: str | None, retrieval: bool, run_label: str
+    ) -> DiagnosisRun:
+        node = make_node(
+            get_role("rca"),
+            replace(
+                deps,
+                build_context=_context_builder(
+                    deployment,
+                    resources,
+                    None,
+                    assignment=brief or "",
+                    retrieval=retrieval,
+                ),
+            ),
+        )
+        delta = dict(await node(state))
+        run_ids = delta.get("run_ids") or []
+        return DiagnosisRun(
+            artifact=delta.get("root_cause"),
+            run_id=str(run_ids[-1]) if run_ids else None,
+            messages=tuple(delta.get("messages", {}).get("rca", ())),
+            trace_summaries=tuple(delta.get("trace_summaries", ())),
+        )
+
+    async def node(state: IncidentState) -> StateDelta:
+        journal = Journal(deployment.sink, session_id=state.get("session_id", ""), stage="rca")
+        tools = _tool_context(deployment, resources, "rca", state.get("session_id", ""), journal)
+
+        async def snapshot() -> str:
+            namespace = str((state.get("alert") or {}).get("namespace") or "").strip()
+            if not namespace:
+                return ""
+            try:
+                return str(await namespace_snapshot(tools, namespace))
+            except Exception:  # a missing snapshot narrows the query, it does not fail it
+                _log.warning("snapshot for the pre-anchor query could not be collected")
+                return ""
+
+        result = await SecondPass(policy, rca=diagnose).run(
+            SecondPassContext(
+                session_id=state.get("session_id", ""),
+                alert=dict(state.get("alert") or {}),
+                state=state,
+                completion=deployment.completion,
+                sampling=deployment.profile.aux_sampling or deployment.profile.sampling,
+                memory=deployment.storage.retriever if deployment.settings.memory.enabled else None,
+                snapshot=snapshot,
+                withheld_record_ids=frozenset(deployment.settings.memory.exclude_record_ids),
+                emit=JournalEmitter(journal, policy=policy.name),
+            )
+        )
+        return _second_pass_delta(state, result)
+
+    return node
+
+
+def _second_pass_delta(state: IncidentState, result: SecondPassResult) -> StateDelta:
+    """Merge both diagnosis runs into the state, not only the winner.
+
+    The prototype returned one of the two states, so the losing run's identifier never
+    entered the ordered path: both rows existed in the database and the chain that
+    linked them did not.
+    """
+    runs = [run for run in (result.first, result.second) if run is not None]
+    delta: dict[str, Any] = {
+        "root_cause": result.chosen,
+        "messages": {**state.get("messages", {}), "rca": list(runs[-1].messages)},
+        "trace_summaries": [
+            *state.get("trace_summaries", []),
+            *(dict(summary) for run in runs for summary in run.trace_summaries),
+        ],
+        "run_ids": [
+            *state.get("run_ids", []),
+            *(run.run_id for run in runs if run.run_id),
+        ],
+    }
+    if result.chosen is None:
+        delta["error"] = f"rca failed: {result.skipped or 'no diagnosis'}"
+    return delta
 
 
 def _context_builder(
@@ -234,6 +351,8 @@ def _context_builder(
     resources: IncidentResources,
     on_stage: StageHook | None,
     resume_for: dict[str, list[dict[str, Any]]] | None = None,
+    assignment: str = "",
+    retrieval: bool | None = None,
 ) -> ContextBuilder:
     """Assemble a role's context from the incident's own resources.
 
@@ -242,6 +361,12 @@ def _context_builder(
     starting a fresh cycle, not continuing the one that was interrupted.
     """
     pending_resume = dict(resume_for or {})
+    # A run told not to retrieve is given no store at all, so the toolset drops the
+    # retrieval tools and the prompt composer selects the memory-off block. Gating in
+    # one place is what keeps the two from disagreeing.
+    retrieving = deployment.settings.memory.enabled and deployment.settings.memory.role_retrieval
+    if retrieval is not None:
+        retrieving = retrieval
 
     def build(
         spec: RoleSpec, state: IncidentState, handback: HandBack | None, run_id: str
@@ -253,7 +378,12 @@ def _context_builder(
             run_id=run_id,
         )
         tools = _tool_context(
-            deployment, resources, spec.name, state.get("session_id", ""), journal
+            deployment,
+            resources,
+            spec.name,
+            state.get("session_id", ""),
+            journal,
+            retrieving=retrieving,
         )
 
         async def milestone(stage: str, delta: StateDelta) -> None:
@@ -288,6 +418,7 @@ def _context_builder(
             session_id=state.get("session_id", ""),
             memory=tools.memory,
             milestone=milestone,
+            assignment=assignment,
             resume=pending_resume.pop(spec.name, None),
         )
 
@@ -361,7 +492,11 @@ async def run_incident(
         try:
             final_state = await MODES[mode](
                 state,
-                ModeContext(deps=deps, engine=_engine(deployment, deps), on_stage=on_stage),
+                ModeContext(
+                    deps=deps,
+                    engine=_engine(deployment, deps, resources),
+                    on_stage=on_stage,
+                ),
             )
         except ApprovalPending as pending:
             # Not an error. Park the incident where it stopped and let the caller unwind
@@ -537,6 +672,8 @@ def _tool_context(
     role: str,
     session_id: str,
     journal: Journal,
+    *,
+    retrieving: bool | None = None,
 ) -> ToolContext:
     """One role's view of the environment. Shared by the runner and the continuation."""
     return ToolContext(
@@ -552,14 +689,22 @@ def _tool_context(
         # while both of its diagnosis runs hold no retrieval tool and receive no memory
         # prompt block. Withholding the store here is what makes the toolset drop those
         # tools, which in turn is what selects the memory-off prompt.
-        memory=(
-            deployment.storage.retriever
-            if deployment.settings.memory.enabled and deployment.settings.memory.role_retrieval
-            else None
-        ),
+        memory=deployment.storage.retriever if _may_retrieve(deployment, retrieving) else None,
         sessions=deployment.storage.sessions,
         runs=deployment.storage.runs,
     )
+
+
+def _may_retrieve(deployment: Deployment, override: bool | None) -> bool:
+    """Whether this run may reach the experience store.
+
+    Two conditions, not one. A configuration with the store enabled and roles kept
+    retrieval-free is real: the gated second pass reads precedents in the harness while
+    both of its diagnosis runs hold no retrieval tool and receive no memory prompt
+    block. A caller may narrow it further, never widen it.
+    """
+    configured = deployment.settings.memory.enabled and deployment.settings.memory.role_retrieval
+    return configured if override is None else (configured and override)
 
 
 def _record_completion(

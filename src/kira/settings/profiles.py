@@ -18,11 +18,14 @@ Secrets never appear in a profile. ``api_key_env`` names an environment variable
 small allowlist.
 """
 
+import logging
 from pathlib import Path
 from typing import Any, Literal, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "EXTRA_BODY_PROVIDERS",
@@ -182,6 +185,13 @@ class ModelProfile(_Frozen):
     provider: Provider
     endpoint: Endpoint
     sampling: SamplingSet
+    aux_sampling: SamplingSet | None = Field(
+        default=None,
+        description=(
+            "Sampling for short structured classifications. Derived from `sampling` "
+            "when a file omits it; never absent by the time a call is made."
+        ),
+    )
     limits: dict[str, int] = Field(
         description="request_timeout_s and num_retries.",
     )
@@ -191,6 +201,31 @@ class ModelProfile(_Frozen):
         default_factory=list,
         description="Behavioural facts a reader must know before trusting a result.",
     )
+
+    @model_validator(mode="after")
+    def _auxiliary_sampling_is_always_resolved(self) -> Self:
+        """Fill the auxiliary set when the file leaves it out.
+
+        The deployment's profile is tuned for open-ended tool-use generation. A short
+        structured classification wants none of it: sampling makes the same input yield
+        different answers run to run, and a presence penalty distorts a fifty-token JSON
+        reply. Deriving it rather than leaving it absent means every helper call is made
+        under a complete, recorded set instead of under whichever knobs the primary
+        profile happened to carry.
+
+        Note this buys stability, not reproducibility: a batching server is not
+        bit-deterministic at any temperature.
+
+        Returns:
+            The profile, with an auxiliary set either declared or derived.
+        """
+        if self.aux_sampling is None:
+            object.__setattr__(self, "aux_sampling", _derive_aux(self.sampling))
+            _log.info(
+                "profile %s declares no aux_sampling; derived one from its primary set",
+                self.name,
+            )
+        return self
 
     @model_validator(mode="after")
     def _native_knobs_match_the_route(self) -> Self:
@@ -257,3 +292,33 @@ def load_profile(name: str, directory: Path) -> ModelProfile:
             "what a run record cites, so the two must agree"
         )
     return profile
+
+
+def _derive_aux(primary: SamplingSet) -> SamplingSet:
+    """Build an auxiliary set from a primary one.
+
+    Temperature to zero and every diversity or repetition knob off, because each of them
+    exists to shape a long generation and each of them distorts a short one. The seed
+    and the reasoning budget are kept: they say which model behaviour is being used, not
+    how widely it is allowed to wander.
+
+    Args:
+        primary: The profile's open-ended set.
+
+    Returns:
+        The derived set.
+    """
+    return SamplingSet(
+        max_tokens=primary.max_tokens,
+        temperature=0.0,
+        top_p=None,
+        top_k=None,
+        min_p=None,
+        presence_penalty=None,
+        frequency_penalty=None,
+        repetition_penalty=None,
+        no_repeat_ngram_size=None,
+        seed=primary.seed,
+        reasoning_effort=primary.reasoning_effort,
+        thinking_token_budget=primary.thinking_token_budget,
+    )

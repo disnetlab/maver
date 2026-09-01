@@ -84,6 +84,10 @@ class RoleContext:
     session_id: str
     memory: Retriever | None = None
     """None when this configuration has no experience store."""
+    assignment: str = ""
+    """A brief the gated second pass hands this run, rendered into the role's own
+    template. Empty on every ordinary run: only that mechanism has anything to assign,
+    and a role that invented one would be second-guessing itself."""
     resume: list[Message] | None = None
     """The transcript this role was paused in, with the decided call already answered.
 

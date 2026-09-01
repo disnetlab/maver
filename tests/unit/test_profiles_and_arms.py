@@ -165,3 +165,23 @@ def test_deep_merge_recurses_and_copies() -> None:
     overlay = {"a": {"y": 9}}
     assert deep_merge(base, overlay) == {"a": {"x": 1, "y": 9}, "b": 3}
     assert base["a"]["y"] == 2
+
+
+def test_a_profile_without_an_auxiliary_set_gets_a_derived_one() -> None:
+    """A helper call is a short structured classification, and the profile's own set is
+    tuned for open-ended generation. Running a gate at temperature 1.0 with a presence
+    penalty gives a different answer on repeated runs of the same cell, which is a
+    research-validity failure rather than a performance one. Deriving rather than
+    omitting means every such call is made under a complete, recorded set."""
+    profile = load_profile("qwen3.6-35b-a3b", MODELS)
+    aux = profile.aux_sampling
+
+    assert aux is not None
+    assert aux.temperature == 0.0
+    assert (aux.top_p, aux.top_k, aux.min_p) == (None, None, None)
+    assert (aux.presence_penalty, aux.frequency_penalty) == (None, None)
+    assert (aux.repetition_penalty, aux.no_repeat_ngram_size) == (None, None)
+    # The seed and the reasoning budget say which model behaviour is in use, not how
+    # widely it may wander, so they are carried rather than cleared.
+    assert aux.seed == profile.sampling.seed
+    assert aux.thinking_token_budget == profile.sampling.thinking_token_budget

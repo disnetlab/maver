@@ -219,7 +219,9 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
     if mode == "talkback":
         initial = _talkback_messages(ctx, prior)
     else:
-        content = await build_initial_message(ctx, reassessing=reassessing)
+        content = await build_initial_message(
+            ctx, reassessing=reassessing, assignment=ctx.assignment
+        )
         initial = [{"role": "user", "content": content}]
 
     result = await run_until_submit(
