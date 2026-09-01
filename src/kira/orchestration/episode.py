@@ -10,6 +10,12 @@ session has to finish before the caller is answered, since the answer carries th
 session to poll; everything after that is minutes to hours of model calls and runs in
 the background. A harness that watches our process rather than our replies is why the
 whole of it must still be reachable from one blocking caller.
+
+It can also end in two steps. A write that needs a person parks the incident and hands
+the environment to the resume path, which comes back through here rather than through
+the runner alone: an episode's answers, its grades and its release are this driver's
+business, and the approved call has to go over the transport the rest of the episode
+ran on.
 """
 
 import asyncio
@@ -25,9 +31,11 @@ from kira.contracts.events import EnvironmentEvent
 from kira.contracts.lifecycle import LifecycleState, RunStatus
 from kira.contracts.state import IncidentState
 from kira.middleware.authority import ApprovalPending
+from kira.orchestration.inflight import drop_episode, hold_episode
 from kira.orchestration.learning import run_learning
 from kira.orchestration.outcomes import resolve_outcome
-from kira.orchestration.runner import Deployment, run_incident
+from kira.orchestration.resume import stored_state
+from kira.orchestration.runner import Deployment, resume_after_decision, run_incident
 from kira.tools.transport.base import ToolTransport
 
 __all__ = ["EpisodeResult", "EpisodeStart", "open_episode", "run_episode"]
@@ -110,15 +118,24 @@ async def run_episode(
             the distilling pass without submitting anything, for a local rehearsal.
 
     Returns:
-        How the episode ended.
+        How the episode ended. A paused episode has not ended: the environment is still
+        held and the continuation closes it out.
     """
     bound = _bind(deployment, adapter)
-    journal = Journal(deployment.sink, session_id=start.session_id, stage="environment")
+    journal = _journal(bound, start.session_id)
     journal.record(
         EnvironmentEvent(
             adapter=adapter.name, action="acquired", detail=start.context.namespace or ""
         )
     )
+
+    async def finish(request_id: str) -> str:
+        return await _continue(adapter, bound, start, request_id, submit=submit)
+
+    # Held before the pipeline can pause rather than after it has. An operator who
+    # answers in the same breath as the request still has to find the episode that owns
+    # the environment, and the checkpoint the pause writes records this from here.
+    hold_episode(start.session_id, adapter, finish)
 
     state: IncidentState | None = None
     try:
@@ -136,12 +153,15 @@ async def run_episode(
         )
     except ApprovalPending:
         # The environment belongs to the resume path. Releasing it now would tear down
-        # the cluster the approved write is meant to act on.
+        # the cluster the approved write is meant to act on, so the episode stays held
+        # and :func:`_continue` finishes it once the decision lands.
         _log.info("episode %s is parked on an approval; not releasing", start.session_id)
         return EpisodeResult(session_id=start.session_id, paused=True)
     except asyncio.CancelledError:
+        drop_episode(start.session_id)
         raise
     except Exception as exc:
+        drop_episode(start.session_id)
         _fail(deployment, start.session_id, exc)
         journal.record(
             EnvironmentEvent(
@@ -153,12 +173,79 @@ async def run_episode(
         )
         return EpisodeResult(session_id=start.session_id, failed=True)
 
+    drop_episode(start.session_id)
+    return await _close(adapter, bound, start, journal, state, submit=submit)
+
+
+async def _continue(
+    adapter: EnvironmentAdapter,
+    deployment: Deployment,
+    start: EpisodeStart,
+    request_id: str,
+    *,
+    submit: bool,
+) -> str:
+    """Carry a parked episode through the decision and out the other side.
+
+    Under the episode's own composition rather than the process's, which is the whole
+    reason this lives here. The approved call has to go over the transport the rest of
+    the episode ran on — for an evaluation harness that transport carries the correlation
+    id its rollback journal is keyed on, so a write sent over any other one lands outside
+    the session being graded — and an adapter-supplied tool exists on no other
+    composition at all: replayed against the default one it comes back as "not available
+    in this configuration", and the operator's approval is honoured on paper and dropped
+    in fact.
+
+    Args:
+        adapter: The adapter still holding this episode.
+        deployment: The episode's composition, as :func:`_bind` made it.
+        start: What :func:`open_episode` returned.
+        request_id: The request that was decided.
+        submit: Whether answers are handed over for grading.
+
+    Returns:
+        The continuation's status, for the job log.
+    """
+    status = await resume_after_decision(request_id, deployment)
+    if status == "awaiting_human":
+        # A second write wants a second answer. The episode stays held.
+        return status
+    if drop_episode(start.session_id) is None:
+        # Another continuation already took it, and an episode has one ending.
+        return status
+
+    record = deployment.storage.sessions.get_session(start.session_id)
+    # Read back rather than returned: a continuation reports a status. Closed even when
+    # the continuation could not run, because an episode that ends here owes the harness
+    # an answer and the environment a release either way — without them the problem
+    # leaves the run with no result at all rather than a failed one.
+    state = (
+        stored_state(record, target_stage=start.context.target_stage)
+        if record is not None
+        else None
+    )
+    await _close(
+        adapter, deployment, start, _journal(deployment, start.session_id), state, submit=submit
+    )
+    return status
+
+
+async def _close(
+    adapter: EnvironmentAdapter,
+    deployment: Deployment,
+    start: EpisodeStart,
+    journal: Journal,
+    state: IncidentState | None,
+    *,
+    submit: bool,
+) -> EpisodeResult:
+    """Hand the answers over, distil what happened, and give the environment back."""
     loop_ended_at = _utcnow()
     submitted: list[str] = []
     feedback: ExternalFeedback | None = None
     error: str | None = None
     try:
-        if submit:
+        if submit and state is not None:
             submitted, error = await _submit_plan(adapter, start, state, journal)
             if adapter.holds_environment_for_grading():
                 feedback = await adapter.fetch_feedback()
@@ -170,14 +257,16 @@ async def run_episode(
                         ok=feedback is not None,
                     )
                 )
-        await _distil(bound, start.session_id, feedback)
+        await _distil(deployment, start.session_id, feedback)
     finally:
         # Always, and before the run status is finalised. A slow or crashed distilling
         # pass must never strand a deployed application, and a poller that saw a
         # terminal status before the release would tear the environment down while the
         # release was still in flight.
         await adapter.release(state=state)
-        _record_episode(journal, adapter, start, submitted, loop_ended_at, feedback, error, bound)
+        _record_episode(
+            journal, adapter, start, submitted, loop_ended_at, feedback, error, deployment
+        )
         _finalize(deployment, start.session_id, state)
 
     return EpisodeResult(
@@ -185,6 +274,11 @@ async def run_episode(
         submitted=tuple(submitted),
         graded=feedback is not None,
     )
+
+
+def _journal(deployment: Deployment, session_id: str) -> Journal:
+    """The episode's own log, which belongs to the environment rather than to a role."""
+    return Journal(deployment.sink, session_id=session_id, stage="environment")
 
 
 def _bind(deployment: Deployment, adapter: EnvironmentAdapter) -> Deployment:

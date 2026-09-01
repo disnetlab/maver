@@ -33,9 +33,10 @@ from kira.contracts.artifacts import (
 )
 from kira.contracts.events import PolicyDecisionEvent, ToolCallEvent
 from kira.contracts.lifecycle import RunStatus
-from kira.contracts.state import IncidentState
-from kira.memory.ports import ApprovalRecord, ApprovalStore, SessionStore
+from kira.contracts.state import IncidentState, TargetStage
+from kira.memory.ports import ApprovalRecord, ApprovalStore, SessionRecord, SessionStore
 from kira.middleware.authority import ApprovalPending
+from kira.orchestration.inflight import held_episode
 
 __all__ = [
     "ApprovalCheckpoint",
@@ -44,6 +45,7 @@ __all__ = [
     "restored_state",
     "resume_events",
     "save_checkpoint",
+    "stored_state",
 ]
 
 _log = logging.getLogger(__name__)
@@ -94,6 +96,15 @@ class ApprovalCheckpoint(BaseModel):
     """Held from the call that parked. An evaluation driver owns the run's ending: it
     submits, collects the grade and releases the environment. A continuation that
     finalised the run itself would close the episode from the wrong side."""
+    adapter: str = ""
+    """Which environment was serving this incident, when one was.
+
+    Not enough to continue under, and it is not meant to be: an adapter instance holds
+    the transport its episode's tools speak and the correlation id its harness keys on,
+    and one built fresh from this name has acquired none of it. It is enough to *refuse*
+    to continue, which is the point. A continuation that found no live episode for an
+    incident this names would otherwise replay the approved write over the process's
+    default transport, outside the session being graded."""
 
 
 def save_checkpoint(
@@ -125,6 +136,11 @@ def save_checkpoint(
     Returns:
         The checkpoint that was written.
     """
+    # Read here rather than passed in, for two reasons. The caller that parks is the
+    # incident runner, which by design cannot name an environment; and the stamp has to
+    # land in the same write as the pause, or a decision answered in the same breath
+    # would read back a checkpoint that did not yet say what was serving the incident.
+    held = held_episode(pending.session_id)
     checkpoint = ApprovalCheckpoint(
         session_id=pending.session_id,
         stage=pending.stage,
@@ -143,6 +159,7 @@ def save_checkpoint(
         target_stage=target_stage,
         fire_post_hooks=fire_post_hooks,
         finalize_run_status=finalize_run_status,
+        adapter=held.adapter.name if held is not None else "",
     )
     store.set_run_status(
         pending.session_id,
@@ -231,6 +248,34 @@ def restored_state(checkpoint: ApprovalCheckpoint) -> IncidentState:
     state["reassessment_count"] = checkpoint.reassessment_count
     state["verify_retries"] = checkpoint.verify_retries
     state["run_ids"] = list(checkpoint.run_ids)
+    return cast(IncidentState, state)
+
+
+def stored_state(record: SessionRecord, *, target_stage: TargetStage = "full") -> IncidentState:
+    """Rebuild what an incident produced, from what was persisted for it.
+
+    A continuation reports a status, not a state, so an episode that still has answers to
+    hand over after one reads them back from the store. Only the alert and the artefacts
+    survive that round trip, which is exactly what a submission and an outcome are
+    resolved from; the transcripts and the retry counters do not, and nothing after the
+    pipeline wants them.
+
+    Args:
+        record: The stored session.
+        target_stage: How far the run was asked to go, which the store does not keep and
+            which decides the outcome of a diagnosis-only task.
+
+    Returns:
+        The state, as far as it was written down.
+    """
+    state: dict[str, Any] = {
+        "session_id": record.session_id,
+        "alert": dict(record.alert),
+        "target_stage": target_stage,
+        "error": None,
+    }
+    for slot, models in _SLOTS.items():
+        state[slot] = _rehydrate(getattr(record, slot), models)
     return cast(IncidentState, state)
 
 
