@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+title: "Kira: a memory-augmented multi-agent system for microservice incident recovery"
+message: "If you use this software, please cite it using these metadata."
+type: software
+authors:
+  - family-names: Guo
+    given-names: Yifeng
+    affiliation: The University of Melbourne
+repository-code: "https://github.com/evenodderguy/kira"
+license: MIT
+version: 0.1.0
+abstract: >-
+  Kira diagnoses and repairs live Kubernetes microservice incidents with a pipeline of
+  typed roles driven by a privately served open-weight language model. Diagnosis and
+  planning are read-only; a single execution role holds every write-capable tool and
+  applies its plan under a check-and-set discipline behind a stage-aware approval gate.
+  Optional mechanisms add an independent verification role that can hand work back and
+  a gated second diagnostic opinion informed by an experience store of past incidents.
+keywords:
+  - incident response
+  - site reliability engineering
+  - kubernetes
+  - large language model agents
+  - retrieval-augmented generation
