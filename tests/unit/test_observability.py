@@ -3,6 +3,8 @@
 import pathlib
 from typing import Any
 
+import pytest
+
 from kira.audit.journal import AuditEvent, Journal, ListSink
 from kira.llm.client import prompt_digest
 from kira.llm.sampling import resolve_sampling
@@ -172,3 +174,32 @@ async def test_a_call_that_brought_its_own_set_is_recorded_on_that_set() -> None
     await recorder.complete(request(sampling=PROFILE.aux_sampling), caller="secondpass.gate")
 
     assert cost_of(sink).payload.sampling["digest"] != RESOLVED.digest
+
+
+async def test_a_call_that_failed_is_still_a_call_that_was_counted() -> None:
+    """Found by running the service against an endpoint that was not there.
+
+    The recorder wrote its completion event after the call returned, so a call that
+    raised left the started row and nothing else — and the client's own sink, which does
+    record an error, is not wired in the deployed composition. A run that ended on model
+    failures therefore had no record of what it had cost, and a started row with nothing
+    after it is supposed to mean the process died, which a terminal failure is not.
+    """
+
+    class Failing:
+        async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
+            raise RuntimeError("Connection error.")
+
+    sink = ListSink()
+    recorder = RecordingCompletion(
+        Failing(), Journal(sink, session_id="s1", stage="rca"), PROFILE, RESOLVED
+    )
+
+    with pytest.raises(RuntimeError):
+        await recorder.complete(request(), caller="rca")
+
+    kinds = [e.payload.kind for e in sink.events]
+    assert kinds == ["model_call_started", "model_call"]
+    failed = sink.events[-1].payload
+    assert failed.error is not None and "Connection error." in failed.error
+    assert failed.sampling["digest"] == RESOLVED.digest

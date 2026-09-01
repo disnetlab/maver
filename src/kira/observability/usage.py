@@ -18,6 +18,7 @@ request is described rather than a bare marker, and one per model call is nothin
 the tool results this same log already carries.
 """
 
+import time
 from dataclasses import dataclass
 
 from kira.audit.journal import Journal
@@ -64,7 +65,29 @@ class RecordingCompletion:
                 digest=prompt_digest(request.system, request.messages),
             )
         )
-        response = await self.inner.complete(request, caller=caller)
+        started = time.monotonic()
+        try:
+            response = await self.inner.complete(request, caller=caller)
+        except Exception as exc:
+            # A call that failed is still a call that was made, and this one has already
+            # cost every retry the client spent on it. Recorded rather than raised past,
+            # because the rule is that a model call anywhere is counted — and because a
+            # started row with nothing after it is how the log says the process died,
+            # which a terminal failure is not.
+            self.journal.record(
+                ModelCallEvent(
+                    caller=caller,
+                    model=self.profile.model,
+                    profile=self.profile.name,
+                    sampling=applied_sampling(
+                        request.sampling, self.profile, self.sampling
+                    ).as_record(),
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    attempt=getattr(exc, "attempts", 1),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            )
+            raise
         self.journal.record(
             ModelCallEvent(
                 caller=caller,
