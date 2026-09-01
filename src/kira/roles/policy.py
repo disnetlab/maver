@@ -31,6 +31,7 @@ __all__ = [
     "LoopLimits",
     "RepeatDecision",
     "RepeatedCallTracker",
+    "close_dangling_tool_calls",
     "compact_rescue_context",
     "control",
     "finalizer_rescue_message",
@@ -512,3 +513,35 @@ class RescueTranscript:
             True when sending now would leave a call unanswered.
         """
         return self._pending
+
+
+def close_dangling_tool_calls(messages: list[Message]) -> list[Message]:
+    """Answer every tool call in `messages` that has no matching tool reply.
+
+    The loop returns the moment it sees the submit call, so the transcript it hands
+    back ends on an assistant turn whose `tool_calls` were never answered.
+    OpenAI-compatible servers reject a request where any tool_call_id lacks a
+    `role="tool"` reply, so replaying such a transcript verbatim is a hard 400 — it
+    would break every talkback re-entry. Each missing reply is inserted directly after
+    the assistant turn that owns it, since a tool result must follow its own call. In
+    practice only the trailing submit dangles; the scan is general.
+
+    Args:
+        messages: A transcript that may end on an unanswered assistant turn.
+
+    Returns:
+        The same transcript with a placeholder reply for every dangling call.
+    """
+    answered = {m.get("tool_call_id") for m in messages if m.get("role") == "tool"}
+    note = control("resumed_tool_result")
+    closed: list[Message] = []
+    for message in messages:
+        closed.append(message)
+        if message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            call_id = call.get("id")
+            if call_id and call_id not in answered:
+                answered.add(call_id)
+                closed.append({"role": "tool", "tool_call_id": call_id, "content": note})
+    return closed

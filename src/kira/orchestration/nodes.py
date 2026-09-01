@@ -22,8 +22,8 @@ from kira.contracts.state import IncidentState
 from kira.middleware.authority import ApprovalPending
 from kira.orchestration.budget import RetryBudget
 from kira.orchestration.routing import RoutingPolicy, apply_handback, pending_handback
-from kira.orchestration.trace import build_trace_summary
 from kira.roles.base import RoleContext, RoleOutcome, RoleSpec, StateDelta
+from kira.roles.trace_summary import build_trace_summary
 
 __all__ = ["IncidentDeps", "NodeFn", "make_node"]
 

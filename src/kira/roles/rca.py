@@ -28,48 +28,16 @@ from kira.llm.types import Message
 from kira.prompts.loader import compose_role_prompt, read_runtime, render
 from kira.roles.base import RoleContext, RoleOutcome, RoleSpec
 from kira.roles.loop import run_until_submit
-from kira.roles.policy import LoopLimits, control, role_system_prompt
+from kira.roles.policy import LoopLimits, close_dangling_tool_calls, role_system_prompt
 from kira.roles.prompting import alert_json, memory_guidance, retrieval_enabled
 from kira.roles.registry import role
 from kira.tools.snapshot import namespace_snapshot
 
-__all__ = ["RCA", "build_initial_message", "close_dangling_tool_calls"]
+__all__ = ["RCA", "build_initial_message"]
 
 _log = logging.getLogger(__name__)
 
 _SNAPSHOT_TOOL = "namespace_snapshot"
-
-
-def close_dangling_tool_calls(messages: list[Message]) -> list[Message]:
-    """Answer every tool call in `messages` that has no matching tool reply.
-
-    The loop returns the moment it sees the submit call, so the transcript it hands
-    back ends on an assistant turn whose `tool_calls` were never answered.
-    OpenAI-compatible servers reject a request where any tool_call_id lacks a
-    `role="tool"` reply, so replaying such a transcript verbatim is a hard 400 — it
-    would break every talkback re-entry. Each missing reply is inserted directly after
-    the assistant turn that owns it, since a tool result must follow its own call. In
-    practice only the trailing submit dangles; the scan is general.
-
-    Args:
-        messages: A transcript that may end on an unanswered assistant turn.
-
-    Returns:
-        The same transcript with a placeholder reply for every dangling call.
-    """
-    answered = {m.get("tool_call_id") for m in messages if m.get("role") == "tool"}
-    note = control("resumed_tool_result")
-    closed: list[Message] = []
-    for message in messages:
-        closed.append(message)
-        if message.get("role") != "assistant":
-            continue
-        for call in message.get("tool_calls") or []:
-            call_id = call.get("id")
-            if call_id and call_id not in answered:
-                answered.add(call_id)
-                closed.append({"role": "tool", "tool_call_id": call_id, "content": note})
-    return closed
 
 
 def _reassessment_block(alert: dict[str, Any], prior_attempts: list[dict[str, Any]]) -> str:

@@ -20,7 +20,7 @@ from kira.contracts.events import ToolCallEvent
 from kira.contracts.routing import HandBack, Route
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.middleware.base import MiddlewareStack
-from kira.roles import rca
+from kira.roles import policy, rca
 from kira.roles.base import RoleContext
 from kira.settings.groups import MemorySettings, PipelineSettings
 from kira.settings.profiles import load_profile
@@ -207,4 +207,4 @@ async def test_talkback_degrades_to_fresh_with_the_reason_recorded(
 
 def test_every_dangling_tool_call_is_answered_before_a_transcript_is_replayed() -> None:
     """An unanswered tool_call_id is a hard 400 from an OpenAI-compatible server."""
-    assert rca.close_dangling_tool_calls(FIXTURE["transcript"]) == FIXTURE["closed_transcript"]
+    assert policy.close_dangling_tool_calls(FIXTURE["transcript"]) == FIXTURE["closed_transcript"]

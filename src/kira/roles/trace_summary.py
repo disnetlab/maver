@@ -29,6 +29,8 @@ _GOALS: dict[str, str] = {
         "pipeline or hand back."
     ),
     "single": "Diagnose the incident and remediate it, without a separate planning stage.",
+    "single.diagnosis": "Diagnose the incident, for a benchmark that grades detection on its own.",
+    "single.mitigation": "Remediate the incident the same run has just diagnosed.",
     "learning": "Distil the incident into a record a later incident can use.",
 }
 
@@ -95,6 +97,18 @@ def _normalise_output(output: Any | None) -> dict[str, Any] | None:
 def _summarise_output(role: str, output: dict[str, Any] | None) -> tuple[list[str], list[str], str]:
     if not output:
         return [], [], ""
+
+    if role == "single.diagnosis":
+        # Free text rather than a structured diagnosis: this configuration submits what
+        # the benchmark's own reference agents submit, which is a sentence.
+        return [], [], _clip(str(output.get("solution", "")), 320)
+
+    if role == "single.mitigation":
+        return (
+            [],
+            [f"succeeded={output.get('succeeded', '?')}"],
+            _clip(str(output.get("summary", "")), 320),
+        )
 
     if role in ("rca", "single"):
         observations = [_clip(str(v), 220) for v in output.get("evidence", [])]

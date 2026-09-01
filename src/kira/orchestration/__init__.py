@@ -25,7 +25,6 @@ from kira.orchestration.routing import (
     pending_handback,
 )
 from kira.orchestration.state import initial_state
-from kira.orchestration.trace import build_trace_summary
 
 __all__ = [
     "Engine",
@@ -44,7 +43,6 @@ __all__ = [
     "after_rca",
     "after_verify",
     "apply_handback",
-    "build_trace_summary",
     "initial_state",
     "make_node",
     "pending_handback",
