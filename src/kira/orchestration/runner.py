@@ -72,7 +72,14 @@ from kira.tools.toolsets import build_toolset
 from kira.tools.transport.base import ToolTransport
 from kira.tools.workspace import SessionWorkspace
 
-__all__ = ["Deployment", "IncidentResources", "incident_context", "run_incident"]
+__all__ = [
+    "Deployment",
+    "IncidentResources",
+    "incident_context",
+    "resume_after_decision",
+    "run_incident",
+    "tool_context_for",
+]
 
 _log = logging.getLogger(__name__)
 
@@ -291,7 +298,7 @@ def _second_pass_node(
 
     async def node(state: IncidentState) -> StateDelta:
         journal = Journal(deployment.sink, session_id=state.get("session_id", ""), stage="rca")
-        tools = _tool_context(deployment, resources, "rca", state.get("session_id", ""), journal)
+        tools = tool_context_for(deployment, resources, "rca", state.get("session_id", ""), journal)
 
         async def snapshot() -> str:
             namespace = str((state.get("alert") or {}).get("namespace") or "").strip()
@@ -377,7 +384,7 @@ def _context_builder(
             stage=spec.name,
             run_id=run_id,
         )
-        tools = _tool_context(
+        tools = tool_context_for(
             deployment,
             resources,
             spec.name,
@@ -593,7 +600,7 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
     alert = dict(state.get("alert") or {})
     async with incident_context(checkpoint.session_id, alert, deployment) as resources:
         journal = Journal(deployment.sink, session_id=checkpoint.session_id, stage=checkpoint.stage)
-        tools = _tool_context(
+        tools = tool_context_for(
             deployment, resources, checkpoint.stage, checkpoint.session_id, journal
         )
         content = await _replay(checkpoint, record, tools, deployment)
@@ -666,7 +673,7 @@ async def _replay(
         return str(await bound(**checkpoint.tool_arguments))
 
 
-def _tool_context(
+def tool_context_for(
     deployment: Deployment,
     resources: IncidentResources,
     role: str,
