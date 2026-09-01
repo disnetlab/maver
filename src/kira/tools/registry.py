@@ -24,9 +24,11 @@ from kira.tools.schema import RATIONALE_ARG, strip_rationale, with_rationale
 from kira.tools.transport.base import CAPABILITIES
 
 __all__ = [
+    "RETRIEVAL_PROVENANCE",
     "Authority",
     "AuthorityFn",
     "BoundTool",
+    "ToolOutput",
     "ToolRegistryError",
     "ToolSafety",
     "ToolSpec",
@@ -57,6 +59,42 @@ folding it into ``write`` would change behaviour every published measurement res
 """
 
 AuthorityFn = Callable[[Mapping[str, Any]], Authority]
+
+RETRIEVAL_PROVENANCE = "retrieval"
+"""The key a retrieval tool's provenance travels under on ``ToolResult.metadata``.
+
+One name for one concept, all the way through: ``ToolOutput.retrieval`` is what the tool
+attaches, this is where the loop puts it, and ``ToolCallEvent.retrieval`` is where it
+lands in the log.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class ToolOutput:
+    """A tool's result, and what the audit log should know about where it came from.
+
+    A tool returns text, and text is all the model may see. Which stored records a
+    retrieval matched, and under which handle each was shown, is not for the model to
+    read back — it is what an analysis of what a role was actually served needs, months
+    later, and it is otherwise lost the moment the call returns.
+
+    Returning both keeps the audit half off the transcript without a context variable set
+    beside the call, which is how the prototype did it and why a tool could not be called
+    in a test without a fixture. ``str()`` on this is the text, so a caller that wants
+    only the result is unaffected by a tool that started attaching provenance.
+    """
+
+    text: str
+    retrieval: tuple[dict[str, Any], ...] = ()
+    """Per record: its ``record_id``, the ``handle`` shown for it, and its ``score``."""
+
+    def __str__(self) -> str:
+        """Render the model-facing half.
+
+        Returns:
+            The text the model reads.
+        """
+        return self.text
 
 
 class ToolRegistryError(RuntimeError):
@@ -230,21 +268,22 @@ class BoundTool:
     spec: ToolSpec
     ctx: ToolContext
 
-    async def __call__(self, **arguments: Any) -> str:
+    async def __call__(self, **arguments: Any) -> str | ToolOutput:
         """Dispatch the call.
 
         Args:
             **arguments: The model's arguments, rationale included.
 
         Returns:
-            What the tool returned.
+            What the tool returned: its text, or its text with the provenance behind it.
 
         Raises:
             ToolRegistryError: When the spec has no implementation.
         """
         if self.spec.dispatch is None:
             raise ToolRegistryError(f"tool {self.spec.name!r} has no implementation")
-        return str(await self.spec.dispatch(self.ctx, **strip_rationale(arguments)))
+        returned = await self.spec.dispatch(self.ctx, **strip_rationale(arguments))
+        return returned if isinstance(returned, ToolOutput) else str(returned)
 
 
 def definition_for(spec: ToolSpec) -> dict[str, Any]:

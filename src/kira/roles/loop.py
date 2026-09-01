@@ -51,6 +51,7 @@ from kira.roles.policy import (
     repeat_breaker_message,
 )
 from kira.tools.errors import call_failed
+from kira.tools.registry import RETRIEVAL_PROVENANCE, ToolOutput
 
 __all__ = ["LoopResult", "SubmitGuard", "ToolFn", "run_until_submit"]
 
@@ -279,15 +280,14 @@ async def run_until_submit(
 
         state.rescues_used += 1
         state.rescue_turns_left = max(1, limits.submit_validation_rejections)
-        state.rescue = RescueTranscript(
-            compact_rescue_context(
-                initial_messages=opening,
-                transcript=state.transcript,
-                submit_tool=submit_tool,
-                reason=reason,
-                limits=limits,
-            )
+        context = compact_rescue_context(
+            initial_messages=opening,
+            transcript=state.transcript,
+            submit_tool=submit_tool,
+            reason=reason,
+            limits=limits,
         )
+        state.rescue = RescueTranscript(list(context))
         state.nudges = 0
         state.transcript.append(
             {
@@ -295,7 +295,19 @@ async def run_until_submit(
                 "content": finalizer_rescue_message(submit_tool=submit_tool, reason=reason),
             }
         )
-        log.record(InterventionEvent(control="finalizer_rescue", action="rescued", detail=reason))
+        # Recorded here because this is the one control that does not add to the
+        # transcript but replaces it. The kickoff the run returns is not what the rescue
+        # turn was sent, and the brief that was sent is built from the transcript, kept
+        # beside it and discarded with the run — so a rescued submission, which is the
+        # answer a whole cell is graded on, was made on messages nobody could read back.
+        log.record(
+            InterventionEvent(
+                control="finalizer_rescue",
+                action="rescued",
+                detail=reason,
+                context=[dict(message) for message in context],
+            )
+        )
         return True
 
     def note_repeats(calls: Sequence[ToolCall], results: Sequence[ToolResult]) -> LoopResult | None:
@@ -483,19 +495,28 @@ async def run_until_submit(
 
             async def dispatch_one(req: ToolRequest) -> ToolResult:
                 fn = dispatch.get(req.name)
+                returned: Any
                 if fn is None:
-                    content = f"error: unknown tool '{req.name}'"
+                    returned = f"error: unknown tool '{req.name}'"
                 else:
                     try:
-                        content = str(await fn(**req.arguments))
+                        returned = await fn(**req.arguments)
                     except ApprovalPending:
                         # A pause is not a failed call. Reported to the model as one, the
                         # run would carry on past the decision it is waiting for, and the
                         # request an operator answers would belong to nothing.
                         raise
                     except Exception as exc:  # surfaced to the model as a tool error
-                        content = f"error: {type(exc).__name__}: {exc}"
-                return ToolResult(tool_call_id=req.call_id, name=req.name, content=content)
+                        returned = f"error: {type(exc).__name__}: {exc}"
+                provenance = list(returned.retrieval) if isinstance(returned, ToolOutput) else []
+                return ToolResult(
+                    tool_call_id=req.call_id,
+                    name=req.name,
+                    content=str(returned),
+                    # The audit half of what the tool returned, which the transcript
+                    # never carries: `serialise_tool_results` drops it on purpose.
+                    metadata={RETRIEVAL_PROVENANCE: provenance} if provenance else {},
+                )
 
             # The rationale is the model's carried-forward working trace, injected into
             # every non-submit schema. It stays in the transcript, so the trace survives
@@ -525,6 +546,7 @@ async def run_until_submit(
                     rationale=call_.arguments.get(RATIONALE_ARG),
                     succeeded=not call_failed(result.content),
                     result_chars=len(result.content),
+                    retrieval=result.metadata.get(RETRIEVAL_PROVENANCE, []),
                 )
             )
             return result

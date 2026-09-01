@@ -8,12 +8,21 @@ model calls, and they are the ones most easily forgotten because no role issues 
 This wrapper is where the counting happens, so it happens once and in a place no caller
 can route around. It carries the incident and the stage that the client cannot know: the
 client is one object for the process, while an event belongs to one run.
+
+Each call writes two rows, one before and one after. The second is the cost. The first is
+the only durable evidence that a call was ever in flight: a completion event is written
+when the provider answers or raises, so a process killed mid-generation — a restart, an
+OOM kill, an endpoint that wedged and was noticed hours later — records nothing at all
+and the turn it died in disappears from the run. The extra row is small, it is where the
+request is described rather than a bare marker, and one per model call is nothing beside
+the tool results this same log already carries.
 """
 
 from dataclasses import dataclass
 
 from kira.audit.journal import Journal
-from kira.contracts.events import ModelCallEvent
+from kira.contracts.events import ModelCallEvent, ModelCallStartedEvent
+from kira.llm.client import prompt_digest
 from kira.llm.sampling import SamplingResolution, applied_sampling
 from kira.llm.types import Completion, ModelRequest, ModelResponse
 from kira.settings.profiles import ModelProfile
@@ -46,6 +55,15 @@ class RecordingCompletion:
         Returns:
             The response.
         """
+        self.journal.record(
+            ModelCallStartedEvent(
+                caller=caller,
+                model=self.profile.model,
+                profile=self.profile.name,
+                message_count=len(request.messages),
+                digest=prompt_digest(request.system, request.messages),
+            )
+        )
         response = await self.inner.complete(request, caller=caller)
         self.journal.record(
             ModelCallEvent(

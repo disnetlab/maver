@@ -14,6 +14,13 @@ looked like and withholds what was concluded about it, because a role that reads
 conclusion tends to adopt it, and the whole value of a precedent is as comparable
 observations rather than as an answer.
 
+Because the handle is what the model sees, the real identifier survives the call only in
+the run's alias map, which dies with the process. Each of these tools therefore returns
+the record it served alongside its text, and the loop writes that to the call's event
+row. Retrieval the roles do is otherwise the one delivery path whose provenance is
+unrecorded, and what a role was actually served is the question every analysis of this
+mechanism starts from.
+
 Every store call here goes to a thread. The ports are synchronous by design, and the
 deployment behind them is a database on another host: called inline, one of these blocks
 the event loop running the incident, and blocks it for as long as the database takes.
@@ -32,7 +39,7 @@ from kira.memory.ports import SearchScope
 from kira.tools.context import ToolContext
 from kira.tools.errors import tool_error
 from kira.tools.policy import read_only
-from kira.tools.registry import tool
+from kira.tools.registry import ToolOutput, tool
 
 __all__ = ["memory_search", "open_memory", "session_trace_summary"]
 
@@ -52,6 +59,15 @@ _EVIDENCE_NOTE = (
 
 def _scope_ok(scope: str) -> bool:
     return scope in ("evidence", "lesson")
+
+
+def _provenance(record_id: str, handle: str | None, score: float | None) -> dict[str, Any]:
+    """Describe one served record for the audit log, never for the model.
+
+    A null handle is a role that named the record itself rather than copying a handle
+    out of a search result, which is the shape a leaked identifier has.
+    """
+    return {"record_id": record_id, "handle": handle, "score": score}
 
 
 @tool(
@@ -81,7 +97,7 @@ async def memory_search(
     query: str,
     scope: SearchScope = "evidence",
     n_results: int | None = None,
-) -> str:
+) -> str | ToolOutput:
     """Search one projection of the distilled past.
 
     Args:
@@ -122,9 +138,11 @@ async def memory_search(
 
     fields = _EVIDENCE_FIELDS if scope == "evidence" else _LESSON_FIELDS
     lines: list[str] = []
+    served: list[dict[str, Any]] = []
     for index, hit in enumerate(hits, start=1):
         handle = f"memory-{index}"
         ctx.memory_aliases[handle] = hit.session_id
+        served.append(_provenance(hit.session_id, handle, hit.score))
         described = "  ".join(
             f"{name}={hit.metadata.get(name)}" for name in fields if hit.metadata.get(name)
         )
@@ -133,7 +151,7 @@ async def memory_search(
         lines.append(hit.summary)
         lines.append("")
     lines.append(f'Open one with `open_memory(session_id="memory-N", scope="{scope}")`.')
-    return "\n".join(lines)
+    return ToolOutput("\n".join(lines), tuple(served))
 
 
 @tool(
@@ -157,7 +175,9 @@ async def memory_search(
         "required": ["session_id"],
     },
 )
-async def open_memory(ctx: ToolContext, session_id: str, scope: SearchScope = "evidence") -> str:
+async def open_memory(
+    ctx: ToolContext, session_id: str, scope: SearchScope = "evidence"
+) -> str | ToolOutput:
     """Expand one stored record.
 
     Args:
@@ -175,11 +195,14 @@ async def open_memory(ctx: ToolContext, session_id: str, scope: SearchScope = "e
 
     reference = (session_id or "").strip()
     resolved = ctx.memory_aliases.get(reference, reference)
+    # Recorded on the refusal too. A withheld record is reported as not found, so the
+    # journal is the only place the leave-one-out set can be shown to have held.
+    served = (_provenance(resolved, reference if reference != resolved else None, None),)
     record = (
         None if _withheld(ctx, resolved) else await asyncio.to_thread(ctx.memory.open, resolved)
     )
     if record is None:
-        return json.dumps({"error": "not found", "ref": session_id})
+        return ToolOutput(json.dumps({"error": "not found", "ref": session_id}), served)
 
     payload: dict[str, Any] = asdict(record)
     # The handle is what the model can reproduce, so that is what it gets back. The
@@ -217,7 +240,7 @@ async def open_memory(ctx: ToolContext, session_id: str, scope: SearchScope = "e
     else:
         payload.pop("evidence_text", None)
 
-    return json.dumps(payload, indent=2)
+    return ToolOutput(json.dumps(payload, indent=2), served)
 
 
 @tool(
@@ -240,7 +263,9 @@ async def open_memory(ctx: ToolContext, session_id: str, scope: SearchScope = "e
         "required": ["session_id"],
     },
 )
-async def session_trace_summary(ctx: ToolContext, session_id: str, agent: str | None = None) -> str:
+async def session_trace_summary(
+    ctx: ToolContext, session_id: str, agent: str | None = None
+) -> str | ToolOutput:
     """Read what a role actually did during a past incident.
 
     The record says what was concluded; this says what was tried on the way. They are
@@ -260,13 +285,14 @@ async def session_trace_summary(ctx: ToolContext, session_id: str, agent: str | 
 
     reference = (session_id or "").strip()
     resolved = ctx.memory_aliases.get(reference, reference)
+    served = (_provenance(resolved, reference if reference != resolved else None, None),)
     record = (
         None
         if _withheld(ctx, resolved)
         else await asyncio.to_thread(ctx.sessions.get_session, resolved)
     )
     if record is None:
-        return json.dumps({"error": "not found", "ref": session_id})
+        return ToolOutput(json.dumps({"error": "not found", "ref": session_id}), served)
 
     runs = await asyncio.to_thread(ctx.runs.runs_for, resolved) if ctx.runs is not None else []
     summaries = [
@@ -275,8 +301,11 @@ async def session_trace_summary(ctx: ToolContext, session_id: str, agent: str | 
     if agent:
         summaries = [s for s in summaries if s.get("agent") == agent or s.get("role") == agent]
     if not summaries:
-        return json.dumps({"session_id": reference, "traces": [], "note": "no trace recorded"})
-    return json.dumps({"session_id": reference, "traces": summaries}, indent=2)
+        return ToolOutput(
+            json.dumps({"session_id": reference, "traces": [], "note": "no trace recorded"}),
+            served,
+        )
+    return ToolOutput(json.dumps({"session_id": reference, "traces": summaries}, indent=2), served)
 
 
 def _withheld(ctx: ToolContext, session_id: str) -> bool:

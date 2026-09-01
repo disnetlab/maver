@@ -10,12 +10,13 @@ deleted by someone who does not believe it.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import random
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from kira.contracts.events import ModelCallEvent
@@ -36,6 +37,7 @@ __all__ = [
     "LLMClient",
     "carry_reasoning_forward",
     "extract_reasoning_text",
+    "prompt_digest",
     "serialise_assistant",
 ]
 
@@ -205,6 +207,27 @@ def serialise_assistant(response: ModelResponse) -> Message:
             for call in calls
         ]
     return message
+
+
+def prompt_digest(system: str, messages: Sequence[Message]) -> str:
+    """Hash what a request sends the model, so a log row can be checked against it.
+
+    Over the system prompt and the messages only, and not the tools or the sampling: a
+    run keeps its transcript, and this is the digest a reader recomputes over a prefix
+    of it to confirm that the prefix is what a given turn actually sent. A turn that
+    matches no prefix was sent something else — which is the case worth finding.
+
+    Args:
+        system: The system prompt, as sent.
+        messages: The messages, in order.
+
+    Returns:
+        Twelve hex characters, the length a sampling digest uses.
+    """
+    canonical = json.dumps(
+        [system, list(messages)], sort_keys=True, separators=(",", ":"), default=str
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 
 
 def carry_reasoning_forward(message: Message, reasoning: str | None, limit: int) -> Message:

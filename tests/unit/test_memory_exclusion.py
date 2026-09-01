@@ -95,7 +95,8 @@ async def test_the_record_is_reachable_when_nothing_is_withheld(tmp_path: pathli
     async for ctx in _contexts(_deployment(tmp_path, exclude=frozenset())):
         await memory_search(ctx, query=QUERY, scope="evidence")
         assert WITHHELD in ctx.memory_aliases.values()
-        assert "not found" not in await open_memory(ctx, session_id=WITHHELD, scope="lesson")
+        served = await open_memory(ctx, session_id=WITHHELD, scope="lesson")
+        assert "not found" not in str(served)
 
 
 async def test_a_withheld_record_is_unreachable_by_search_or_by_identifier(
@@ -109,8 +110,32 @@ async def test_a_withheld_record_is_unreachable_by_search_or_by_identifier(
 
         # Both take a raw identifier, so filtering search alone leaves the record one
         # well-formed call away from any role that has the id from anywhere else.
-        assert json.loads(await open_memory(ctx, session_id=WITHHELD))["error"] == "not found"
-        assert (
-            json.loads(await session_trace_summary(ctx, session_id=WITHHELD))["error"]
-            == "not found"
+        refused = await open_memory(ctx, session_id=WITHHELD)
+        assert json.loads(str(refused))["error"] == "not found"
+        assert json.loads(str(await session_trace_summary(ctx, session_id=WITHHELD)))["error"] == (
+            "not found"
         )
+
+
+async def test_the_records_a_role_was_served_reach_the_log_and_not_its_context(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Which precedents a role read is the question every analysis of memory starts from.
+
+    The model is shown `memory-N` handles on purpose, so the real identifiers existed
+    only in the run's alias map and went with the process. The tools return them beside
+    their text instead, for the audit log alone — including on a refusal, which is
+    reported to the model as a plain not-found and is otherwise indistinguishable in the
+    record from a record that was never asked for.
+    """
+    async for ctx in _contexts(_deployment(tmp_path / "served", exclude=frozenset())):
+        served = await memory_search(ctx, query=QUERY, scope="evidence")
+        assert served.retrieval
+        for record in served.retrieval:
+            assert record["handle"] in str(served)
+            assert record["record_id"] not in str(served)
+            assert record["score"] is not None
+
+    async for ctx in _contexts(_deployment(tmp_path / "withheld", exclude=frozenset({WITHHELD}))):
+        refused = await open_memory(ctx, session_id=WITHHELD)
+        assert refused.retrieval == ({"record_id": WITHHELD, "handle": None, "score": None},)

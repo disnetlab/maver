@@ -5,7 +5,7 @@ import pathlib
 import pytest
 
 from kira.audit.journal import Journal, ListSink
-from kira.contracts.events import InterventionEvent, SubmissionEvent
+from kira.contracts.events import InterventionEvent, SubmissionEvent, ToolCallEvent
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, ToolResult, ToolSpec, Usage
 from kira.middleware.authority import ApprovalPending
 from kira.middleware.base import MiddlewareStack, ToolHandler, ToolRequest
@@ -21,6 +21,7 @@ from kira.roles.policy import (
 )
 from kira.settings.groups import RuntimeSettings
 from kira.tools.errors import call_failed
+from kira.tools.registry import ToolOutput
 
 FIXTURE = (
     pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "prototype_control_messages.json"
@@ -238,6 +239,88 @@ async def test_a_rescue_context_never_holds_an_unanswered_tool_call() -> None:
     for message in sent:
         for pending in message.get("tool_calls") or []:
             assert pending["id"] in answered, "rescue context would be rejected as malformed"
+
+
+async def test_the_rescue_turn_is_reconstructible_from_the_log() -> None:
+    """A rescued run's decisive turn was sent messages that existed nowhere afterwards.
+
+    The rescue does not append to the transcript, it replaces it: the kickoff the run
+    returns is not what the rescue turn received, and the brief that was received was
+    kept beside the transcript and discarded with the run. Since the submission a rescue
+    produces is the answer the whole stage is graded on, a run's record could not say
+    what that answer was made from. The intervention that opened the rescue is where the
+    brief now lives, and it is the only event that carries text for this reason.
+    """
+    prose = "x" * 900  # clears the evidence threshold so the rescue is granted
+    model = FakeModel(
+        [
+            turn(call("get_logs", {"q": "a"}, id="t1")),
+            turn(text=prose),
+            turn(text=prose),
+            turn(text=prose),
+            turn(call(SUBMIT, {"ok": True}, id="s")),
+        ]
+    )
+    sink = ListSink()
+    result = await run_until_submit(
+        model=model,
+        role="rca",
+        system="s",
+        tools=TOOLS,
+        dispatch=DISPATCH,
+        submit_tool=SUBMIT,
+        messages=[{"role": "user", "content": "go"}],
+        journal=Journal(sink, session_id="s1", stage="rca"),
+    )
+    assert result.submitted
+
+    [rescue] = [
+        e.payload
+        for e in sink.events
+        if isinstance(e.payload, InterventionEvent) and e.payload.control == "finalizer_rescue"
+    ]
+    sent = list(model.requests[-1].messages)
+    assert rescue.context == sent
+    # The half the transcript cannot supply: the brief itself was never part of it.
+    assert sent[-1] not in result.transcript
+
+
+async def test_a_retrieval_call_records_which_records_it_served() -> None:
+    """Which precedents a role was served is what every analysis of this mechanism asks.
+
+    The gated second pass records its own retrieval richly. A role's did not: the event
+    carried the query and the size of the answer, while the record identifiers lived in
+    the run's alias map and died with the process — and the model-facing text shows only
+    the `memory-N` handle, so the answer was not recoverable from the transcript either.
+    """
+    served = ({"record_id": "sess-aaa", "handle": "memory-1", "score": 0.91},)
+
+    async def retrieving(**kwargs: object) -> ToolOutput:
+        return ToolOutput("[memory-1]  score=0.910", served)
+
+    model = FakeModel(
+        [
+            turn(call("memory_search", {"query": "crashloop", "rationale": "why"}, id="m1")),
+            turn(call(SUBMIT, {"ok": True}, id="s")),
+        ]
+    )
+    sink = ListSink()
+    result = await run_until_submit(
+        model=model,
+        role="rca",
+        system="s",
+        tools=[spec("memory_search"), spec(SUBMIT)],
+        dispatch={"memory_search": retrieving, SUBMIT: echo},
+        submit_tool=SUBMIT,
+        messages=[{"role": "user", "content": "go"}],
+        journal=Journal(sink, session_id="s1", stage="rca"),
+    )
+    assert result.submitted
+
+    [event] = [e.payload for e in sink.events if isinstance(e.payload, ToolCallEvent)]
+    assert event.retrieval == list(served)
+    # Audit-only, on the way out as well as in: the model reads the text and nothing else.
+    assert all("sess-aaa" not in str(m.get("content")) for m in result.transcript)
 
 
 async def test_a_spiral_that_also_submits_is_still_a_spiral() -> None:

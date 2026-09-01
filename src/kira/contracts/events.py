@@ -10,6 +10,12 @@ selectors rather than by a role. The research prototype counted only role-issued
 calls, so its published cost figures had to disclose the gap; ``ModelCallEvent.caller``
 exists specifically to close it.
 
+An event says what happened; whether it also carries what that thing *contained*
+follows one rule. Text is recorded here only where it exists nowhere else. A run keeps
+its transcript, so a turn that sent the transcript is described by a count and a digest
+over it, and a control that sends something *other* than the transcript records what it
+sent, because after the run there is no other copy of it.
+
 The log is append-only. Records are never rewritten, so a correction is a new event.
 """
 
@@ -24,12 +30,51 @@ __all__ = [
     "EventPayload",
     "InterventionEvent",
     "ModelCallEvent",
+    "ModelCallStartedEvent",
     "PolicyDecisionEvent",
     "SecondPassEvent",
     "StageEvent",
     "SubmissionEvent",
     "ToolCallEvent",
 ]
+
+
+class ModelCallStartedEvent(BaseModel):
+    """One completion request, written down before it is sent.
+
+    Two things are knowable only from before the call. A process killed mid-generation —
+    a container restart, an OOM kill, a bridge that wedged and was eventually noticed —
+    writes no completion event at all, so without this row the turn it died in leaves no
+    trace and the run reads as having stopped cleanly between turns. And the request
+    itself: :class:`ModelCallEvent` reports what came back and what it cost, never what
+    went out.
+
+    Together the pair is what makes a run replayable. A started row with no ``model_call``
+    after it in the same journal is where the process stopped. A started row whose digest
+    matches a prefix of the run's transcript is a turn that sent that transcript; one that
+    matches no prefix was sent something else, and the control that replaced the
+    transcript is the row carrying what that was.
+    """
+
+    kind: Literal["model_call_started"] = "model_call_started"
+    caller: str = Field(description="What issued the call, as on the completion event.")
+    model: str = Field(description="The resolved model identifier sent to the provider.")
+    profile: str = Field(description="The model profile this call was configured from.")
+    message_count: int = Field(
+        description=(
+            "How many messages the request carried, the system prompt aside. It locates "
+            "the transcript prefix this request should be; the digest then confirms it. "
+            "The messages are not copied here because the run keeps its transcript, and "
+            "a copy per turn is quadratic in the length of the run."
+        )
+    )
+    digest: str = Field(
+        description=(
+            "Twelve hex characters over the system prompt and the messages, taken the "
+            "way a sampling set is. It detects a difference and does not explain one, "
+            "which is why what replaced the transcript is recorded where it happened."
+        )
+    )
 
 
 class ModelCallEvent(BaseModel):
@@ -93,6 +138,20 @@ class ToolCallEvent(BaseModel):
     truncated: bool = False
     duration_ms: int = 0
     transport: str | None = Field(default=None, description="Which transport served the call.")
+    retrieval: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "What a retrieval call returned: per record its ``record_id``, the "
+            "``handle`` the model was shown in its place, and its ``score``. The gated "
+            "second pass records the same thing as ``record_ids`` under "
+            "``SecondPassEvent.queries``; one concept keeps one vocabulary. The query "
+            "is not repeated because it is already in ``arguments``. Empty for a tool "
+            "that retrieves nothing. Without it a role's retrieval leaves only the "
+            "query and a character count, and which precedents a role was actually "
+            "served — the question every memory-delivery analysis asks — is answerable "
+            "for the second pass and not for the roles."
+        ),
+    )
 
 
 class SubmissionEvent(BaseModel):
@@ -127,6 +186,19 @@ class InterventionEvent(BaseModel):
     was refused. It exists as its own value because a control's dose is a divisor, and a
     bypass counted as a consultation inflates the denominator."""
     detail: str
+    context: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "The messages this control sent in place of the run's transcript, verbatim "
+            "and once. Empty for every control that only appends to the transcript, "
+            "since there the transcript is the record. The finalizer rescue does not "
+            "append: it compacts the run into a short submit-only brief and sends that "
+            "instead, so a rescued run's decisive turn was made on messages that, "
+            "without this, exist nowhere once the process has ended. Only the brief is "
+            "here; whatever the rescued turns then produced is appended to the "
+            "transcript as any other turn's is."
+        ),
+    )
 
 
 class PolicyDecisionEvent(BaseModel):
@@ -216,7 +288,8 @@ class EnvironmentEvent(BaseModel):
 
 
 EventPayload = Annotated[
-    ModelCallEvent
+    ModelCallStartedEvent
+    | ModelCallEvent
     | ToolCallEvent
     | SubmissionEvent
     | InterventionEvent
