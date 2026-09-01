@@ -14,7 +14,7 @@ from kira.orchestration.engine import (
 )
 from kira.orchestration.graph import build_graph
 from kira.orchestration.modes import resolve_mode
-from kira.orchestration.routing import RoutingPolicy
+from kira.orchestration.routing import RoutingPolicy, apply_handback, pending_handback
 from kira.orchestration.state import initial_state
 from kira.settings.groups import PipelineSettings
 from kira.settings.root import Settings
@@ -181,3 +181,117 @@ def test_a_diagnosis_only_task_outranks_the_configured_mode(
 ) -> None:
     settings = Settings(pipeline=PipelineSettings(mode=configured))  # type: ignore[arg-type]
     assert resolve_mode(target_stage=target_stage, settings=settings) == expected
+
+
+def _reassessing_pipeline(charged: list[str]) -> dict[str, Any]:
+    """Roles that go once around the loop the hard way.
+
+    Verification asks for a re-diagnosis; the new plan then fails to apply and asks for a
+    replan. Every node runs the real hand-back accounting, so what is being exercised is
+    the budget, not the fakes.
+    """
+
+    def cause(summary: str) -> RootCause:
+        return RootCause(
+            fault_type="misconfig",
+            affected_resource="deploy/web",
+            confidence=0.8,
+            evidence=["readiness probe fails"],
+            summary=summary,
+        )
+
+    async def rca(state: IncidentState) -> dict[str, Any]:
+        delta = apply_pending(state, "rca")
+        charged.append("rca")
+        return {**delta, "root_cause": cause(f"attempt {len(charged)}")}
+
+    async def planning(state: IncidentState) -> dict[str, Any]:
+        delta = apply_pending(state, "planning")
+        charged.append("planning")
+        return {
+            **delta,
+            "plan": Plan(
+                steps=[
+                    PlanStep(
+                        action="patch",
+                        target="deploy/web",
+                        params={},
+                        justification="repoint the probe",
+                    )
+                ],
+                expected_outcome="the probe passes",
+                confidence=0.8,
+            ),
+        }
+
+    async def execution(state: IncidentState) -> dict[str, Any]:
+        delta = apply_pending(state, "execution")
+        charged.append("execution")
+        # The first apply is clean, which is the only way the pipeline reaches
+        # verification at all. Every later one fails and asks for a replan, so whether
+        # the incident terminates is entirely a question of whether the budget falls.
+        first = charged.count("execution") == 1
+        return {
+            **delta,
+            "execution_result": ExecutionResult(
+                succeeded=first,
+                steps=[],
+                final_state_summary="applied" if first else "the patch was rejected",
+                confidence=0.5,
+                needs_replan=not first,
+                replan_reason=None if first else "the target does not exist",
+            ),
+        }
+
+    async def verify(state: IncidentState) -> dict[str, Any]:
+        charged.append("verify")
+        return {
+            "verify_result": VerifyResult(
+                recovered=False,
+                verdict="not_recovered",
+                checks=["the request path still 503s"],
+                summary="the symptom persists",
+                confidence=0.8,
+                needs_reassessment=True,
+                reassessment_reason="the cause was somewhere else",
+            )
+        }
+
+    return {"rca": rca, "planning": planning, "execution": execution, "verify": verify}
+
+
+def apply_pending(state: IncidentState, role: str) -> dict[str, Any]:
+    """The hand-back accounting the real node wrapper does before a role runs.
+
+    Including the part that matters here: a hand-back addressed to another role is not
+    this role's to act on, and charges nothing.
+    """
+    handback = pending_handback(state)
+    if handback is None or handback.target.value != role:
+        return {}
+    return dict(apply_handback(state, handback, POLICY))
+
+
+async def test_a_consumed_verdict_stops_being_a_pending_instruction() -> None:
+    """A hand-back is derived from the artifacts, so a verdict left in place is re-derived
+    at every later node entry.
+
+    A reassessment kept naming `rca`. Planning therefore read a hand-back addressed to
+    someone else, treated it as no hand-back at all, and charged nothing — so the budget
+    never fell and planning and execution cycled until the step limit killed the incident,
+    each cycle another mutation of the cluster. The incident ended in an exception rather
+    than an outcome, which is not a result anything downstream can read.
+    """
+    charged: list[str] = []
+    state = seeded(
+        root_cause=None,
+        remediation_retries=0,
+    )
+
+    final = await SequentialEngine(_reassessing_pipeline(charged), POLICY).run(state)
+
+    # Two cycles is the configured budget. Without the clear this raised StepLimitExceeded
+    # after twenty-five role runs.
+    assert final["remediation_retries"] == POLICY.remediation_retries
+    assert charged.count("execution") <= POLICY.remediation_retries + 1
+    assert final["verify_result"] is None

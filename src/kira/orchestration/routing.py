@@ -206,6 +206,11 @@ def apply_handback(state: IncidentState, handback: HandBack, policy: RoutingPoli
                 *state.get("prior_attempts", []),
                 _attempt_record(state, handback),
             ]
+        # A new diagnosis supersedes the plan built on the old one and everything that
+        # plan produced. They are summarised into prior_attempts first, so nothing is
+        # lost; what would be wrong is leaving them live.
+        delta["plan"] = None
+        delta["execution_result"] = None
     else:
         budget = budget.spend_replan().reset_rechecks()
         plan = state.get("plan")
@@ -214,6 +219,18 @@ def apply_handback(state: IncidentState, handback: HandBack, policy: RoutingPoli
                 *state.get("prior_plans", []),
                 {"plan": plan.model_dump(mode="json"), "reason": handback.reason},
             ]
+
+    # The verdict has been acted on, so it stops being a pending instruction.
+    #
+    # This is the whole of the defect. A hand-back is derived from the artifacts rather
+    # than from a flag, which is what lets a resumed run reach the same conclusion as one
+    # that never stopped — but a verdict left in place is re-derived at every subsequent
+    # node entry. A reassessment kept naming rca, so planning read a hand-back addressed
+    # to someone else, treated it as none, and charged nothing: the budget never fell and
+    # planning and execution cycled until the step limit killed the incident, each cycle
+    # a fresh mutation of the cluster. Consuming it and leaving it is the same class of
+    # mistake as reading a flag nobody clears.
+    delta["verify_result"] = None
 
     delta.update(budget.to_state())
     return delta
