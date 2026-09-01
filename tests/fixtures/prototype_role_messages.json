@@ -182,5 +182,36 @@
       "tool_call_id": "c3",
       "content": "(Result not retained in the resumed context.)"
     }
-  ]
+  ],
+  "execution_plan": {
+    "steps": [
+      {
+        "action": "patch",
+        "target": "svc/user",
+        "params": {
+          "targetPort": 8080
+        },
+        "justification": "repoint the service at the port the container listens on"
+      }
+    ],
+    "expected_outcome": "endpoints for svc/user become non-empty and the 5xx rate falls",
+    "rollback": "patch targetPort back to 8081",
+    "confidence": 0.8,
+    "halt": false,
+    "halt_reason": null
+  },
+  "execution_kubelet_root_cause": {
+    "fault_type": "node_failure",
+    "affected_resource": "node/worker-2",
+    "confidence": 0.8,
+    "evidence": [
+      "kubelet on worker-2 is stopped",
+      "node has been NotReady for 6 minutes"
+    ],
+    "summary": "The kubelet on worker-2 is stopped and the node is not posting status.",
+    "halt": false,
+    "halt_reason": null
+  },
+  "execution_first_entry": "## Filesystem access\n- You have a private sandbox directory — your current working directory. Read and write scratch files with relative paths (e.g. `./notes.txt`); saved tool outputs appear under `tool_outputs/`. You never need an absolute path.\n- Do not access memory files directly — use the `memory_search` tool.\n\nRoot cause from RCA:\n```json\n{\n  \"fault_type\": \"misconfiguration\",\n  \"affected_resource\": \"test-hotel-reservation/Service/user\",\n  \"confidence\": 0.7,\n  \"evidence\": [\n    \"endpoints empty for svc/user\",\n    \"targetPort 8081 != containerPort 8080\"\n  ],\n  \"summary\": \"The user Service targets a port nothing listens on.\",\n  \"halt\": false,\n  \"halt_reason\": null\n}\n```\n\nApproved plan:\n```json\n{\n  \"steps\": [\n    {\n      \"action\": \"patch\",\n      \"target\": \"svc/user\",\n      \"params\": {\n        \"targetPort\": 8080\n      },\n      \"justification\": \"repoint the service at the port the container listens on\"\n    }\n  ],\n  \"expected_outcome\": \"endpoints for svc/user become non-empty and the 5xx rate falls\",\n  \"rollback\": \"patch targetPort back to 8081\",\n  \"confidence\": 0.8,\n  \"halt\": false,\n  \"halt_reason\": null\n}\n```\n\nApply the plan step by step. Use Check-and-Set before every mutation.",
+  "execution_kubelet_entry": "## Filesystem access\n- You have a private sandbox directory — your current working directory. Read and write scratch files with relative paths (e.g. `./notes.txt`); saved tool outputs appear under `tool_outputs/`. You never need an absolute path.\n- Do not access memory files directly — use the `memory_search` tool.\n\nRoot cause from RCA:\n```json\n{\n  \"fault_type\": \"node_failure\",\n  \"affected_resource\": \"node/worker-2\",\n  \"confidence\": 0.8,\n  \"evidence\": [\n    \"kubelet on worker-2 is stopped\",\n    \"node has been NotReady for 6 minutes\"\n  ],\n  \"summary\": \"The kubelet on worker-2 is stopped and the node is not posting status.\",\n  \"halt\": false,\n  \"halt_reason\": null\n}\n```\n\n## Kubelet recovery directive\nRCA specifically identifies stopped/unresponsive kubelets. Your first host actions MUST be direct FUNCTION calls to ssh_exec, one per affected configured worker alias, with command exactly `sudo systemctl start kubelet`. Do not use ssh_exec for kubectl reads and do not type `ssh_exec ...` into bash_exec/code_exec; use the ssh_exec function arguments. Only after those calls, verify nodes return Ready with Kubernetes reads. Cordon, drain, taint, deleting pods, or changing workloads cannot repair a stopped kubelet and must not be used as a substitute, even if the approved plan suggests them.\n\nApproved plan:\n```json\n{\n  \"steps\": [\n    {\n      \"action\": \"patch\",\n      \"target\": \"svc/user\",\n      \"params\": {\n        \"targetPort\": 8080\n      },\n      \"justification\": \"repoint the service at the port the container listens on\"\n    }\n  ],\n  \"expected_outcome\": \"endpoints for svc/user become non-empty and the 5xx rate falls\",\n  \"rollback\": \"patch targetPort back to 8081\",\n  \"confidence\": 0.8,\n  \"halt\": false,\n  \"halt_reason\": null\n}\n```\n\nApply the plan step by step. Use Check-and-Set before every mutation."
 }

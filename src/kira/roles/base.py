@@ -10,6 +10,7 @@ A role never reads a global. Everything it needs arrives in its context, which i
 what makes one testable without a cluster, a database or a model.
 """
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -59,6 +60,21 @@ class RoleContext:
     Not optional. Absent it, the approval gate is registered and never consulted, and
     every cluster write a role issues is dispatched ungated — the exact failure the gate
     was made structural to prevent.
+    """
+    write_lock: asyncio.Lock
+    """Held for the duration of any role run that mutates the cluster.
+
+    Multiple incidents can be accepted concurrently, and diagnosis and planning run in
+    parallel safely because they are read-only. Remediation is the sole writer, and two
+    remediations running at once can issue conflicting changes — both scaling the same
+    deployment, or one rolling back while the other rolls forward. One lock, held per
+    run rather than per call, serialises them; the queue is FIFO by asyncio's
+    implementation.
+
+    Required rather than optional, like :attr:`middleware`, because a run that silently
+    received no lock would be indistinguishable from a run that held one. The limitation
+    is that this is in-process only: several replicas need a distributed lock, which is
+    why horizontal scale-out is on the deferred list rather than claimed.
     """
     toolset: ResolvedToolset
     tool_context: ToolContext

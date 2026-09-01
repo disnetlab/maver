@@ -8,6 +8,7 @@ measurement ran. The expectation is therefore the prototype's output, not a tran
 of what this implementation happens to produce.
 """
 
+import asyncio
 import json
 import pathlib
 from typing import Any
@@ -111,6 +112,7 @@ def context(
         journal=journal,
         profile=PROFILE,
         middleware=MiddlewareStack(),
+        write_lock=asyncio.Lock(),
         run_id="r1",
         session_id="s1",
         memory=tools.memory,

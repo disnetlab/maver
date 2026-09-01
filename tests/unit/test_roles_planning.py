@@ -6,6 +6,7 @@ the playbook and ACE features disabled, so the expectation comes from the protot
 rather than from this implementation.
 """
 
+import asyncio
 import json
 import pathlib
 from typing import Any
@@ -123,6 +124,7 @@ def context(
         journal=journal,
         profile=PROFILE,
         middleware=MiddlewareStack(),
+        write_lock=asyncio.Lock(),
         run_id="r1",
         session_id="s1",
         memory=tools.memory,
