@@ -13,8 +13,11 @@ from kira.orchestration.engine import (
     StepLimitExceeded,
 )
 from kira.orchestration.graph import build_graph
+from kira.orchestration.modes import resolve_mode
 from kira.orchestration.routing import RoutingPolicy
 from kira.orchestration.state import initial_state
+from kira.settings.groups import PipelineSettings
+from kira.settings.root import Settings
 
 POLICY = RoutingPolicy(verify_enabled=True, remediation_retries=2, inconclusive_retries=1)
 
@@ -156,3 +159,25 @@ async def test_a_cycling_configuration_is_stopped() -> None:
     generous = RoutingPolicy(verify_enabled=True, remediation_retries=2, inconclusive_retries=99)
     with pytest.raises(StepLimitExceeded):
         await SequentialEngine(nodes, generous).run(seeded())
+
+
+# --- mode dispatch -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("target_stage", "configured", "expected"),
+    [
+        ("full", "multi", "multi"),
+        ("full", "single", "single"),
+        # A diagnosis-only task is a request about what may be done to the environment,
+        # and no configured mode overrides it. In the prototype this held only because
+        # its branch happened to be written first.
+        ("diagnose", "multi", "diagnose"),
+        ("diagnose", "single", "diagnose"),
+    ],
+)
+def test_a_diagnosis_only_task_outranks_the_configured_mode(
+    target_stage: Any, configured: str, expected: str
+) -> None:
+    settings = Settings(pipeline=PipelineSettings(mode=configured))  # type: ignore[arg-type]
+    assert resolve_mode(target_stage=target_stage, settings=settings) == expected

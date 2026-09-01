@@ -41,8 +41,12 @@ dependencies = [
     # Cluster and telemetry access for the default (direct) transport
     "kubernetes>=31.0",
     "httpx>=0.28",
-    # Scheduling for the asynchronous Learning stage and approval timeouts
+    # Scheduling for the asynchronous Learning stage and approval timeouts.
+    # SQLAlchemy is here only as APScheduler's persistent job store: a distillation
+    # scheduled minutes out must survive a restart, and losing one silently loses a
+    # memory record.
     "apscheduler>=3.11",
+    "sqlalchemy>=2.0",
     # Configuration and CLI
     "pyyaml>=6.0",
     "python-dotenv>=1.0",

@@ -1,0 +1,143 @@
+"""What "running an incident" means, in the three shapes it can take.
+
+A registry rather than a chain of conditionals, because the choice between them is the
+single decision the runner makes and it should be readable in one place. The precedence
+is explicit for the same reason: a diagnosis-only task wins over the configured mode,
+and in the prototype it did so only because its branch happened to be written first.
+
+Diagnosis-only exists because some environments grade detection, localisation and
+analysis independently. Running the planning or remediating roles for those tasks would
+mutate the environment before the read-only answer had been graded, which invalidates
+the comparison the task exists to make.
+"""
+
+import logging
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from typing import Any, cast
+
+from kira.contracts.state import IncidentState, TargetStage
+from kira.orchestration.engine import Engine, StageHook
+from kira.orchestration.nodes import IncidentDeps, make_node
+from kira.roles.registry import get_role
+from kira.settings.root import Settings
+
+__all__ = ["MODES", "ModeContext", "mode", "resolve_mode"]
+
+_log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ModeContext:
+    """What every mode needs, whether or not it uses all of it."""
+
+    deps: IncidentDeps
+    engine: Engine
+    on_stage: StageHook | None = None
+
+
+ModeFn = Callable[[IncidentState, ModeContext], Awaitable[IncidentState]]
+
+MODES: dict[str, ModeFn] = {}
+
+
+def mode(name: str) -> Callable[[ModeFn], ModeFn]:
+    """Register a mode under a name.
+
+    Args:
+        name: The mode name.
+
+    Returns:
+        The decorator.
+    """
+
+    def register(fn: ModeFn) -> ModeFn:
+        MODES[name] = fn
+        return fn
+
+    return register
+
+
+def resolve_mode(*, target_stage: TargetStage, settings: Settings) -> str:
+    """Choose the mode for this run.
+
+    Args:
+        target_stage: How far the caller asked the pipeline to go.
+        settings: The run's settings.
+
+    Returns:
+        The mode name.
+    """
+    # Stated rather than implied by the order of two branches: a diagnosis-only task is
+    # a request about what may be done to the environment, and no configured mode
+    # overrides it.
+    if target_stage == "diagnose":
+        return "diagnose"
+    return settings.pipeline.mode
+
+
+@mode("multi")
+async def run_multi(state: IncidentState, ctx: ModeContext) -> IncidentState:
+    """Run the graph: diagnosis, planning, remediation, and verification when enabled.
+
+    Args:
+        state: The seeded incident state.
+        ctx: The run's shared resources.
+
+    Returns:
+        The terminal state.
+    """
+    return await ctx.engine.run(state, on_stage=ctx.on_stage)
+
+
+@mode("single")
+async def run_single(state: IncidentState, ctx: ModeContext) -> IncidentState:
+    """Run the one-agent baseline.
+
+    Its two phases announce themselves as the pipeline's diagnosis and remediation
+    stages, which is what lets one environment driver grade either configuration
+    without knowing which it is looking at. The announcements come from inside the role,
+    because its diagnosis is graded before its remediation begins.
+
+    Args:
+        state: The seeded incident state.
+        ctx: The run's shared resources.
+
+    Returns:
+        The terminal state.
+    """
+    return await _run_one("single", state, ctx, announce=None)
+
+
+@mode("diagnose")
+async def run_diagnose(state: IncidentState, ctx: ModeContext) -> IncidentState:
+    """Run the diagnosing role once and stop, mutating nothing.
+
+    Args:
+        state: The seeded incident state.
+        ctx: The run's shared resources.
+
+    Returns:
+        The terminal state.
+    """
+    return await _run_one("rca", state, ctx, announce="rca")
+
+
+async def _run_one(
+    role: str, state: IncidentState, ctx: ModeContext, *, announce: str | None
+) -> IncidentState:
+    """Run one role through the same wrapper the graph uses, and merge its delta."""
+    delta = await make_node(get_role(role), ctx.deps)(state)
+    merged = cast(IncidentState, {**state, **delta})
+    if announce is not None and ctx.on_stage is not None:
+        await ctx.on_stage(announce, merged)
+    return merged
+
+
+def registered_modes() -> Mapping[str, Any]:
+    """Every mode registered so far.
+
+    Returns:
+        A read-only view of the registry.
+    """
+    return dict(MODES)
