@@ -185,12 +185,18 @@ The target: if LangGraph disappeared, replacing it should take days, not weeks.
 - Only **distilled records** enter the retrieval corpus, marked with a lifecycle
   state. Raw transcripts stay in the audit store. A retrieval corpus of chat logs is
   not a memory system.
-- **Retrieval does not suppress a record for its lifecycle state.** A correct precedent
-  and an incorrect one carry the same weight, deliberately: a record of an attempt that
-  failed tells a later incident what was already tried and what happened. Down-weighting
-  failures would leave retrieval able to teach only successes, and most of what is worth
-  learning from an incident corpus is a negative result. `INVALIDATED` marks a claim
-  that did not hold up or could not be confirmed, closer to inconclusive than to false.
+- **Retrieval never suppresses a record for its lifecycle state, but it does demote
+  one.** A record of an attempt that failed tells a later incident what was already
+  tried and what happened, and most of what is worth learning from an incident corpus is
+  a negative result. Excluding `INVALIDATED` records was measured and lost ground:
+  coverage fell 88% to 72% and 90% to 68%, and 5.7pp and 9.1pp fewer queries were served
+  a true precedent first. Invalidation records what the prior session's remediation did,
+  not whether what it observed was true, so an invalidated record can be both the only
+  same-family precedent in the corpus and perfectly accurate about what it saw. It is
+  therefore ranked at 0.3 of its lexical score and still returned: demotion keeps the
+  coverage and costs only rank, where exclusion throws the coverage away. Do not add a
+  retrievability filter on lifecycle state. `INVALIDATED` marks a claim that did not
+  hold up or could not be confirmed, closer to inconclusive than to false.
 - An operational run status is not a verdict on a lesson. Do not promote a record's
   validity from the fact that its run happened to succeed.
 

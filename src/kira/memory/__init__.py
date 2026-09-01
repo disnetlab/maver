@@ -1,5 +1,13 @@
 """The experience store: what a past incident left behind, and how it is found again."""
 
+from kira.memory.lifecycle import (
+    DEFAULT_LIFECYCLE_WEIGHT,
+    LIFECYCLE_WEIGHTS,
+    IllegalTransition,
+    check_transition,
+    resolve_weights,
+    weight_for,
+)
 from kira.memory.ports import (
     AgentRunEventDraft,
     AgentRunEventRecord,
@@ -21,6 +29,8 @@ from kira.memory.ports import (
 from kira.memory.retrieval import Retriever, build_query
 
 __all__ = [
+    "DEFAULT_LIFECYCLE_WEIGHT",
+    "LIFECYCLE_WEIGHTS",
     "AgentRunEventDraft",
     "AgentRunEventRecord",
     "AgentRunRecord",
@@ -29,6 +39,7 @@ __all__ = [
     "ApprovalStatus",
     "ApprovalStore",
     "DecisionStatus",
+    "IllegalTransition",
     "Retriever",
     "RunStore",
     "SearchHit",
@@ -39,4 +50,7 @@ __all__ = [
     "TextSearch",
     "VectorSearch",
     "build_query",
+    "check_transition",
+    "resolve_weights",
+    "weight_for",
 ]

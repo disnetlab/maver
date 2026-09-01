@@ -61,12 +61,13 @@ _COMPANIONS: dict[str, dict[str, str]] = {
 }
 
 
-# Two shapes the annotation-derived probe cannot synthesise: a tuple of models, and a
-# URL. Explicit here rather than making the deriver understand pydantic types, with the
-# substring the value should be recognisable by once loaded.
+# Three shapes the annotation-derived probe cannot synthesise: a tuple of models, a URL,
+# and a mapping. Explicit here rather than making the deriver understand pydantic types,
+# with the substring the value should be recognisable by once loaded.
 _EXPLICIT_PROBES: dict[str, tuple[str, str]] = {
     "KIRA_AUTHORITY__RULES": ('[{"name": "probe7", "mode": "deny"}]', "probe7"),
     "KIRA_AUTHORITY__WEBHOOK_URL": ("https://probe7.example.com/", "probe7.example.com"),
+    "KIRA_MEMORY__LIFECYCLE_WEIGHTS": ('{"invalidated": 0.7}', "0.7"),
 }
 
 

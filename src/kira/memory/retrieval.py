@@ -20,19 +20,29 @@ anything is relevant, and on this corpus roughly 88% of what a role read at k=5 
 irrelevant. A floor on the normalised score lets the retriever return nothing at all,
 which is a real answer and a more useful one than five unrelated incidents.
 
-One thing deliberately *not* done: records are not weighted by lifecycle state. A
-precedent that turned out wrong carries the same weight as one that turned out right,
-because knowing what was already tried and how it failed is exactly what a later
-incident needs. See :mod:`kira.contracts.lifecycle`.
+**A record is demoted for its lifecycle state, never suppressed.** Excluding invalidated
+records was measured and lost ground: coverage fell 88% -> 72% and 90% -> 68%, and 5.7pp
+and 9.1pp fewer queries were served a true precedent first, because invalidation records
+what the prior session's remediation did rather than whether what it observed was true.
+So an invalidated record ranks at 0.3 of its lexical score and still comes back; knowing
+what was already tried and how it failed is exactly what a later incident needs. State is
+resolved as a candidate is ranked rather than read from the index, so an operator's
+verdict changes the next retrieval and nothing has to be reindexed. See
+:mod:`kira.memory.lifecycle`.
 """
 
-from collections.abc import Sequence
+import logging
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
+from kira.contracts.lifecycle import LifecycleState
 from kira.memory import bm25
+from kira.memory.lifecycle import LIFECYCLE_WEIGHTS, weight_for
 from kira.memory.ports import SearchHit, SearchScope, SessionMemory, TextSearch
 
 __all__ = ["Retriever", "build_query"]
+
+_log = logging.getLogger(__name__)
 
 _BOILERPLATE = (
     "current incident observations",
@@ -95,6 +105,17 @@ class Retriever:
     Divided by token count so the threshold does not move with query length. Zero
     disables the floor, which restores the behaviour of always returning k results.
     """
+    states: Callable[[Sequence[str]], Mapping[str, str]] | None = None
+    """Reads the current lifecycle state of many candidates at once.
+
+    :meth:`kira.memory.ports.SessionStore.get_states` is the implementation. It is here
+    rather than read off each record because the state stored beside a record is a
+    write-time snapshot: an operator's verdict, or a re-grade, changes the session row
+    and leaves that snapshot behind. Supplying nothing falls back to the snapshot, which
+    is what a deployment retrieving from a corpus whose sessions it does not hold has.
+    """
+    weights: Mapping[LifecycleState, float] = LIFECYCLE_WEIGHTS
+    """What a record in each state is worth, from :func:`kira.memory.lifecycle.resolve_weights`."""
 
     def search(
         self,
@@ -124,16 +145,26 @@ class Retriever:
 
         documents = [_document(memory, scope) for memory in candidates]
         floor = self.min_score_per_token * len(tokens)
+        states = self._current_states(candidates)
 
         hits: list[SearchHit] = []
         for index, score in bm25.rank(documents, query):
-            if len(hits) >= self.k:
-                break
             if score < floor:
                 # Ranked best first, so the first hit under the floor ends the list.
+                # The floor reads the lexical score alone, before the lifecycle weight:
+                # it is a relevance test calibrated on that score, and applying it after
+                # the weight would let the demotion drop a record from the results,
+                # which is the exclusion the campaign measured and rejected.
                 break
-            hits.append(_to_hit(candidates[index], scope, score))
-        return hits
+            memory = candidates[index]
+            state = states.get(memory.session_id, memory.lifecycle_state)
+            hits.append(_to_hit(memory, scope, score * weight_for(state, self.weights), state))
+
+        # Weighting reorders, so the ranker's order no longer holds. The session id
+        # breaks a tie, because a tie broken by pool order is a tie broken by whichever
+        # database returned the candidates.
+        hits.sort(key=lambda hit: (-(hit.score or 0.0), hit.session_id))
+        return hits[: self.k]
 
     def scan(
         self,
@@ -168,6 +199,19 @@ class Retriever:
         """
         return self.text.open_record(session_id)
 
+    def _current_states(self, candidates: Sequence[SessionMemory]) -> Mapping[str, str]:
+        """Resolve every candidate's state now, falling back to its stored snapshot."""
+        if self.states is None:
+            return {}
+        try:
+            return self.states([memory.session_id for memory in candidates])
+        except Exception:
+            # A retrieval must not fail because the session store hiccupped. Each
+            # record's own snapshot is stale but serviceable, and returning nothing at
+            # all would be a worse answer than returning a slightly mis-ranked one.
+            _log.warning("could not read lifecycle states; ranking on the stored ones")
+            return {}
+
 
 def _document(memory: SessionMemory, scope: SearchScope) -> str:
     """Select the text a record is indexed and matched on.
@@ -179,12 +223,19 @@ def _document(memory: SessionMemory, scope: SearchScope) -> str:
     return memory.lesson_text if scope == "lesson" else memory.evidence_text
 
 
-def _to_hit(memory: SessionMemory, scope: SearchScope, score: float | None = None) -> SearchHit:
+def _to_hit(
+    memory: SessionMemory,
+    scope: SearchScope,
+    score: float | None = None,
+    state: str | None = None,
+) -> SearchHit:
+    # The resolved state, not the snapshot, so that whatever reads a hit downstream —
+    # prompt formatting, a split by standing — sees what retrieval itself ranked on.
     return SearchHit(
         session_id=memory.session_id,
         summary=_document(memory, scope),
         metadata={
-            "state": memory.lifecycle_state,
+            "state": state or memory.lifecycle_state,
             "fault_category": memory.fault_category,
             "alert_name": memory.alert_name,
             "namespace": memory.namespace,

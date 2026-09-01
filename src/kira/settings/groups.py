@@ -404,6 +404,15 @@ class MemorySettings(SettingsGroup):
         "MEMORY_SEARCH_TOP_K",
         description="Records returned by a retrieval.",
     )
+    lifecycle_weights: dict[str, float] | None = setting(
+        None,
+        "KIRA_MEMORY__LIFECYCLE_WEIGHTS",
+        description=(
+            "Retrieval weight per lifecycle state. None uses the shipped table "
+            "(invalidated 0.3, tentative_success 1.0, human_verified 1.25, else 0.9). "
+            "Present so a frozen arm can pin the exact ranking a past campaign used."
+        ),
+    )
     playbook: bool = setting(
         False,
         "KIRA_MEMORY__PLAYBOOK",

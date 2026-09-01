@@ -17,7 +17,17 @@ registered:
   hypothesis: "a gated second look carrying precedent text beats a single pass"
 settings:
   pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2}
-  memory:     {enabled: true, learning_enabled: false, playbook: false, top_k: 3}
+  memory:
+    enabled: true
+    learning_enabled: false
+    playbook: false
+    top_k: 3
+    # Pinned, and not to the shipped value. Kira ranks an invalidated record at 0.3 of
+    # its lexical score; the campaign this arm is frozen against never set that weight,
+    # so its retrieval ranked invalidated and successful records alike. Reproducing the
+    # campaign means saying so here rather than inheriting a default that has since
+    # changed underneath it.
+    lifecycle_weights: {invalidated: 1.0}
   verify:     {enabled: false}
   secondpass:
     enabled: true
