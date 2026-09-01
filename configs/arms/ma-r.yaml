@@ -14,7 +14,7 @@ registered:
   campaign: second_opinion
   hypothesis: "memory helps as a candidate nominator rather than as context"
 settings:
-  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2}
+  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2, auto_snapshot: true}
   memory:     {enabled: true, role_retrieval: true, learning_enabled: true, playbook: true, top_k: 5}
   verify:     {enabled: false}
   secondpass:

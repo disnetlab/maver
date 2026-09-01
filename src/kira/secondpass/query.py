@@ -18,8 +18,11 @@ the model's own retrieval queries average 8 terms and 89 characters, and the dir
 of that effect reverses by corpus: on one it retrieved below chance at 0.4x a random
 baseline and a tail trim lifted it to 3.2x, on another it was already 7.3x and the trim
 was neutral. A pooled claim about it is Simpson's paradox and was retracted. So the
-budget is a constructor argument with the offline champion as its default, and the arm
-that reproduces the published cells pins the value that actually ran.
+budget is a constructor argument rather than a knob, and its defaults are what the
+campaign ran on: a 3,600-character cap with the boilerplate filter off, and the
+composition reproducing the published cells passes the twelve observation lines that
+campaign passed. The screened mitigations are each one argument away, and turning one on
+is a different experiment rather than a repair to this one.
 """
 
 import logging
@@ -97,11 +100,23 @@ class PreAnchorQuery:
 
     name: str = "pre_anchor"
     observation_lines: int = 8
-    """Eight is the offline champion. The measured MA+S campaign ran twelve with the
-    tail trim off, so the arm that reproduces those cells pins twelve; the A/B that
-    would settle which is better was specified and never run."""
-    max_chars: int = 2400
-    drop_boilerplate: bool = True
+    """Eight is the prototype's own default and the offline champion's budget. The
+    measured MA+S campaign called the builder with twelve, so the composition that
+    reproduces those cells passes twelve; the A/B that would settle which is better was
+    specified and never run."""
+    max_chars: int = 3600
+    """The cap the campaign ran under, kept because a tighter budget is the obvious
+    lever and the wrong one: filtering the query scored better than truncating it, and
+    stacking truncation on the filter changed nothing."""
+    drop_boilerplate: bool = False
+    """Off, because that is how every published cell was retrieved.
+
+    The filter is a screened mitigation, not a repair already banked. 84.6% of the
+    campaign query's body was section headers and empty-state markers that the
+    observation-signal regex admits, and dropping them scored 0.116 same-family
+    precedents per retrieved memory against 0.011 as deployed. The live A/B was written
+    and staged on two hosts and never ran, so the direction of the effect on a diagnosis
+    is still unmeasured."""
     line_chars: int = 360
 
     async def build(self, ctx: SecondPassContext, first: RootCause) -> list[NamedQuery]:

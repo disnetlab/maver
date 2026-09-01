@@ -13,7 +13,7 @@ registered:
   campaign: sweep_20260812
   hypothesis: "decomposing the work into typed roles buys nothing"
 settings:
-  pipeline:   {mode: single, max_turns: 20}
+  pipeline:   {mode: single, max_turns: 20, auto_snapshot: true}
   memory:     {enabled: false, learning_enabled: false, playbook: false}
   verify:     {enabled: false}
   secondpass: {enabled: false}

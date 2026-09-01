@@ -16,7 +16,7 @@ registered:
   campaign: sweep_20260812
   hypothesis: "a gated second look carrying precedent text beats a single pass"
 settings:
-  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2}
+  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2, auto_snapshot: true}
   memory:
     enabled: true
     # The store is readable and no role holds a retrieval tool. That combination is the

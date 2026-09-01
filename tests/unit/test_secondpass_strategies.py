@@ -146,6 +146,21 @@ async def test_the_pre_anchor_query_survives_a_snapshot_failure() -> None:
     ]
 
 
+async def test_the_pre_anchor_query_keeps_the_campaign_budget() -> None:
+    """Every published cell was retrieved unfiltered, under a 3,600-character cap.
+
+    Both screened mitigations shipped off in the campaign, and either one changes what
+    reaches the ranker for every arm that carries a number.
+    """
+    lines = ["RECENT CHANGES (Warning events, last 30m)"] + [
+        f"pod checkout-{i} restarting: CrashLoopBackOff " + "x" * 320 for i in range(8)
+    ]
+    (query,) = await PreAnchorQuery().build(context(snapshot="\n".join(lines)), diagnosis())
+
+    assert "RECENT CHANGES (Warning events" in query.text
+    assert 2400 < len(query.text) <= 3600
+
+
 async def test_merged_queries_are_deduplicated_evidence_first() -> None:
     ctx = context(
         store=FakeStore([[hit("a"), hit("b")], [hit("b"), hit("c")]]),

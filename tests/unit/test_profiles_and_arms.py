@@ -133,6 +133,13 @@ class TestShippedArms:
         assert arm.registered.hypothesis
         assert arm.label
 
+    @pytest.mark.parametrize("name", SHIPPED_ARMS)
+    def test_each_arm_pins_the_snapshot_flag(self, name: str) -> None:
+        """A working snapshot raises 8.6 to 15.0 flags against one injected fault, so
+        snapshot-on is never neutral context: an arm inheriting the default would vary
+        what the diagnosing role is shown without its own file recording that it did."""
+        assert "auto_snapshot" in load_arm(name, ARMS).settings.get("pipeline", {})
+
     def test_the_published_arms_are_frozen(self) -> None:
         """A change to a frozen arm changes what its published number means."""
         for name in ("ma", "ma-v", "ma-s", "ma-r", "single"):

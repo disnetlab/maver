@@ -14,7 +14,7 @@ registered:
   campaign: broad_verify_35b
   hypothesis: "a verification step converts applied-but-not-recovered cells into recovered ones"
 settings:
-  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2}
+  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2, auto_snapshot: true}
   memory:     {enabled: false, learning_enabled: false, playbook: false}
   verify:     {enabled: true, health_gate: false, inconclusive_retries: 1}
   secondpass: {enabled: false}

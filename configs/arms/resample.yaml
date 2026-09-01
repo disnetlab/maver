@@ -14,7 +14,7 @@ registered:
   campaign: so_gate_35b
   hypothesis: "the MA+S gain is the second look rather than the precedent text"
 settings:
-  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2}
+  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2, auto_snapshot: true}
   memory:     {enabled: false, learning_enabled: false, playbook: false}
   verify:     {enabled: false}
   secondpass:
