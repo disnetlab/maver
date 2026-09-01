@@ -164,7 +164,7 @@ async def open_memory(ctx: ToolContext, session_id: str, scope: SearchScope = "e
 
     reference = (session_id or "").strip()
     resolved = ctx.memory_aliases.get(reference, reference)
-    record = ctx.memory.open(resolved)
+    record = None if _withheld(ctx, resolved) else ctx.memory.open(resolved)
     if record is None:
         return json.dumps({"error": "not found", "ref": session_id})
 
@@ -247,7 +247,7 @@ async def session_trace_summary(ctx: ToolContext, session_id: str, agent: str | 
 
     reference = (session_id or "").strip()
     resolved = ctx.memory_aliases.get(reference, reference)
-    record = ctx.sessions.get_session(resolved)
+    record = None if _withheld(ctx, resolved) else ctx.sessions.get_session(resolved)
     if record is None:
         return json.dumps({"error": "not found", "ref": session_id})
 
@@ -260,6 +260,22 @@ async def session_trace_summary(ctx: ToolContext, session_id: str, agent: str | 
     if not summaries:
         return json.dumps({"session_id": reference, "traces": [], "note": "no trace recorded"})
     return json.dumps({"session_id": reference, "traces": summaries}, indent=2)
+
+
+def _withheld(ctx: ToolContext, session_id: str) -> bool:
+    """Whether this record is one retrieval must not serve.
+
+    Exclusion has to hold on the way in as well as on the way out. Search filters the
+    set, but both of the tools that take an identifier accept a raw one, so a role that
+    has the id from anywhere — a trace, an alert field, an earlier turn — reads the
+    withheld record straight out of the store and the leave-one-out set means nothing.
+
+    Refused as not-found rather than as withheld. Naming it would confirm that a record
+    for this incident exists and which identifier it has, which on a generalisation arm
+    is itself a signal about the answer. The call and its arguments are in the journal,
+    so the refusal stays auditable without being legible to the model.
+    """
+    return session_id in ctx.memory_exclude
 
 
 read_only("memory_search")

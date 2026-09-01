@@ -765,6 +765,10 @@ def tool_context_for(
         memory=deployment.storage.retriever if _may_retrieve(deployment, retrieving) else None,
         sessions=deployment.storage.sessions,
         runs=deployment.storage.runs,
+        # The floor the setting promises. It reached the gated second pass and no role,
+        # so a generalisation arm withheld the evaluated incident's own record from the
+        # harness query while every role could still search it up and read it back.
+        memory_exclude=tuple(sorted(deployment.settings.memory.exclude_record_ids)),
     )
 
 
