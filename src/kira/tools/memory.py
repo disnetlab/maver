@@ -13,8 +13,17 @@ The scopes hide different things on purpose. Evidence scope returns what an inci
 looked like and withholds what was concluded about it, because a role that reads a prior
 conclusion tends to adopt it, and the whole value of a precedent is as comparable
 observations rather than as an answer.
+
+Every store call here goes to a thread. The ports are synchronous by design, and the
+deployment behind them is a database on another host: called inline, one of these blocks
+the event loop running the incident, and blocks it for as long as the database takes.
+Nothing above can cut that short, because a timeout is a coroutine and a coroutine cannot
+run while the loop is inside a synchronous call. What actually bounds the wait is the
+backend's own connect and statement timeouts; the hop off the loop is what lets the run
+keep its clock while it waits.
 """
 
+import asyncio
 import json
 from dataclasses import asdict
 from typing import Any
@@ -100,7 +109,9 @@ async def memory_search(
     # A model asking for more than the configuration allows still gets the
     # configured cap, so the number of precedents in context stays a controlled
     # variable rather than something the model can vary mid-run.
-    hits = ctx.memory.search(query, scope=scope, exclude=ctx.memory_exclude)
+    hits = await asyncio.to_thread(
+        ctx.memory.search, query, scope=scope, exclude=ctx.memory_exclude
+    )
     if n_results is not None and n_results > 0:
         hits = hits[:n_results]
     if not hits:
@@ -164,7 +175,9 @@ async def open_memory(ctx: ToolContext, session_id: str, scope: SearchScope = "e
 
     reference = (session_id or "").strip()
     resolved = ctx.memory_aliases.get(reference, reference)
-    record = None if _withheld(ctx, resolved) else ctx.memory.open(resolved)
+    record = (
+        None if _withheld(ctx, resolved) else await asyncio.to_thread(ctx.memory.open, resolved)
+    )
     if record is None:
         return json.dumps({"error": "not found", "ref": session_id})
 
@@ -247,11 +260,15 @@ async def session_trace_summary(ctx: ToolContext, session_id: str, agent: str | 
 
     reference = (session_id or "").strip()
     resolved = ctx.memory_aliases.get(reference, reference)
-    record = None if _withheld(ctx, resolved) else ctx.sessions.get_session(resolved)
+    record = (
+        None
+        if _withheld(ctx, resolved)
+        else await asyncio.to_thread(ctx.sessions.get_session, resolved)
+    )
     if record is None:
         return json.dumps({"error": "not found", "ref": session_id})
 
-    runs = ctx.runs.runs_for(resolved) if ctx.runs is not None else []
+    runs = await asyncio.to_thread(ctx.runs.runs_for, resolved) if ctx.runs is not None else []
     summaries = [
         {"agent": run.agent_name, **run.trace_summary} for run in runs if run.trace_summary
     ]

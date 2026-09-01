@@ -1,9 +1,9 @@
 """The server backend against the shared contract.
 
 The contract is the test budget, so almost nothing here is PostgreSQL-specific. What is
-left are the two claims the shared suite cannot make: that a NUL is a byte this database
-genuinely refuses rather than merely dislikes, and that two writers racing for one event
-sequence both keep their event.
+left are the claims the shared suite cannot make: that a NUL is a byte this database
+genuinely refuses rather than merely dislikes, that two writers racing for one event
+sequence both keep their event, and that a wait on this server is bounded at all.
 
 Needs a live database. Set POSTGRES_TEST_DSN to run it, for instance:
 
@@ -21,11 +21,13 @@ import time
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from typing import Any
 
 import pytest
 from memory_contract import NUL, MemoryStoreContract, OperationalStore, a_run, an_event
 
+from kira.contracts.lifecycle import LifecycleState
 from kira.memory.ports import TextSearch
 
 DSN = os.environ.get("POSTGRES_TEST_DSN", "")
@@ -34,6 +36,7 @@ DSN = os.environ.get("POSTGRES_TEST_DSN", "")
 psycopg = pytest.importorskip("psycopg", reason="the postgres extra is not installed")
 
 from psycopg import sql  # noqa: E402
+from psycopg.conninfo import make_conninfo  # noqa: E402
 from psycopg.types.json import Jsonb  # noqa: E402
 
 from kira.memory.backends.postgres import PostgresStore  # noqa: E402
@@ -120,6 +123,58 @@ def test_the_writer_that_loses_the_sequence_race_is_retried_not_lost(
     assert waited, "the append should have been blocked by the rival's uncommitted sequence"
     assert appended.seq == 2
     assert [event.seq for event in postgres_store.events_for("run-1")] == [1, 2]
+
+
+def test_a_call_blocked_on_a_lock_gives_up_rather_than_waiting_forever(schema: str) -> None:
+    """Nothing above this can end the wait, so the wait has to end itself.
+
+    These calls are made from the event loop running the incident, and a loop cannot time
+    out what it is inside of: with the table locked, a search held the loop and an
+    eight-second ``asyncio.wait_for`` around it never fired. Unbounded, a lock nobody
+    released stopped the whole run instead of failing one call — which is how a hung cell
+    came to be recorded as a model that never answered.
+    """
+    with closing(PostgresStore(DSN, schema=schema, statement_timeout_ms=250)) as store:
+        session = store.create_session({})
+        # In a thread, and outside the lock, so that a regression here fails on this
+        # clock and releases the lock on the way out. Called inline it would hang, which
+        # is the defect and would also be the whole suite.
+        with (
+            ThreadPoolExecutor(max_workers=1) as pool,
+            _raw_connection(schema, autocommit=False) as rival,
+        ):
+            rival.execute("LOCK TABLE sessions IN ACCESS EXCLUSIVE MODE")
+            blocked = pool.submit(
+                store.set_state, session.session_id, LifecycleState.HUMAN_VERIFIED
+            )
+            with pytest.raises(psycopg.errors.QueryCanceled):
+                blocked.result(timeout=10)
+            rival.rollback()
+
+
+def test_the_bounds_the_deployment_set_itself_are_left_alone(schema: str) -> None:
+    """An operator who tuned their DSN knows something this backend does not.
+
+    Written in the keyword spelling, which is the one the rest of this file never
+    exercises: POSTGRES_TEST_DSN is documented as a URI, and both have to parse.
+    """
+    tuned = make_conninfo(DSN, connect_timeout=3, options="-c statement_timeout=7s")
+    with closing(PostgresStore(tuned, schema=schema)) as store:
+        assert _bounds(store) == ("3", "7s")
+    with closing(PostgresStore(DSN, schema=schema)) as store:
+        assert _bounds(store) == ("10", "30s")
+
+
+def _bounds(store: PostgresStore) -> tuple[str, str]:
+    """The connect and statement bounds in force on a connection the store opened.
+
+    Read off the pool rather than off a connection made here, because the claim is about
+    what the store puts on the sessions it uses, not about what the DSN says.
+    """
+    with store._db.read() as conn:
+        timeout = conn.execute("SHOW statement_timeout").fetchone()
+        assert timeout is not None
+        return conn.info.get_parameters()["connect_timeout"], timeout["statement_timeout"]
 
 
 def _raw_connection(schema: str, *, autocommit: bool = True) -> Any:

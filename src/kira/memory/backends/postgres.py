@@ -32,6 +32,14 @@ has no representation for "not a time".
 one server database holds many, and the identifiers that reach it are not all generated
 here — a run id or an approval id is supplied by the caller — so the corpus belongs in
 the key rather than in a convention about how unique those identifiers happen to be.
+
+**Every wait is bounded.** The embedded backend has had a lock-wait bound since it was
+written, ``sqlite3.connect(timeout=10)``; this one had none, so a connection that never
+established and a statement blocked on a lock both waited forever, on whatever thread
+called them. That thread is normally the event loop running the incident, which has no
+other clock: a wrapper timeout cannot cancel a call that never yields. Both waits are
+bounded below, and a bound the deployment arranged for itself always wins, because an
+operator who tuned their DSN or their role knows something this file does not.
 """
 
 import logging
@@ -46,6 +54,7 @@ from typing import TYPE_CHECKING, Any
 
 import psycopg
 from psycopg import sql
+from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
@@ -222,6 +231,22 @@ LIMIT %s
 _SEQUENCE_CONSTRAINT = "agent_run_events_seq_key"
 _SEQUENCE_ATTEMPTS = 5
 
+CONNECT_TIMEOUT_S = 10
+"""How long to wait for a connection to establish.
+
+The server is on the same host or the same cluster network, so a connection that has not
+been made in ten seconds is not being made. libpq reads anything below two as two.
+"""
+
+STATEMENT_TIMEOUT_MS = 30_000
+"""How long one statement may run before the server cancels it.
+
+Above the slowest wait this backend is built to survive — an event insert blocked on a
+rival's uncommitted sequence, which the retry loop exists for and which the race test
+allows fifteen seconds — and far below the hours an evaluation gives one incident. A
+statement over this is not slow, it is stuck.
+"""
+
 _TERMINAL_RUN_STATUSES = frozenset(
     {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
 )
@@ -262,6 +287,30 @@ def _json(value: dict[str, Any] | None) -> Jsonb | None:
     return None if value is None else Jsonb(scrub(value))
 
 
+def _connect_params(dsn: str, connect_timeout: int) -> dict[str, Any]:
+    """The connection keywords to add to what the operator wrote.
+
+    ``conninfo_to_dict`` reads both spellings a DSN comes in, a ``postgresql://`` URI and
+    a keyword string, and reports only what was written rather than what libpq would
+    default. So an operator's own value is visible here, and is left alone.
+    """
+    if "connect_timeout" in conninfo_to_dict(dsn):
+        return {}
+    return {"connect_timeout": connect_timeout}
+
+
+def _statement_timeout(dsn: str, milliseconds: int) -> int | None:
+    """The statement bound to install, or None when the DSN already carries one.
+
+    A DSN sets it through libpq's ``options``, which is also where an operator writes
+    ``statement_timeout=0`` to mean no bound at all. That reads back from the session as
+    "no timeout", indistinguishable from never having set one, so the intent has to be
+    read from the DSN itself.
+    """
+    options = str(conninfo_to_dict(dsn).get("options") or "")
+    return None if "statement_timeout" in options else milliseconds
+
+
 class _Pool:
     """Connections handed out one at a time, because a transaction belongs to one.
 
@@ -275,15 +324,27 @@ class _Pool:
     of threads, and a limit here would be a second thing to tune beside the server's own.
     """
 
-    def __init__(self, dsn: str, schema: str) -> None:
+    def __init__(
+        self,
+        dsn: str,
+        schema: str,
+        *,
+        connect_timeout: int = CONNECT_TIMEOUT_S,
+        statement_timeout_ms: int = STATEMENT_TIMEOUT_MS,
+    ) -> None:
         """Open the first connection and create the schema if it is not there.
 
         Args:
             dsn: Connection string.
             schema: Schema holding the tables.
+            connect_timeout: Seconds to wait for a connection, unless the DSN says.
+            statement_timeout_ms: Milliseconds one statement may run, unless the
+                deployment already says.
         """
         self._dsn = dsn
         self._schema = schema
+        self._connect_params = _connect_params(dsn, connect_timeout)
+        self._statement_timeout_ms = _statement_timeout(dsn, statement_timeout_ms)
         self._lock = threading.Lock()
         self._idle: list[_Connection] = []
         self._open: list[_Connection] = []
@@ -352,7 +413,9 @@ class _Pool:
                 self._idle.append(conn)
 
     def _connect(self) -> _Connection:
-        conn: _Connection = psycopg.connect(self._dsn, autocommit=True, row_factory=dict_row)
+        conn: _Connection = psycopg.connect(
+            self._dsn, autocommit=True, row_factory=dict_row, **self._connect_params
+        )
         try:
             # Unqualified table names throughout, so the schema is named once rather than
             # in every statement. The session is pinned to UTC because a TIMESTAMPTZ is
@@ -360,6 +423,7 @@ class _Pool:
             # have to read back the way they were written.
             conn.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(self._schema)))
             conn.execute("SET TIME ZONE 'UTC'")
+            self._cap_statements(conn)
         except BaseException:
             conn.close()
             raise
@@ -369,6 +433,22 @@ class _Pool:
                 raise RuntimeError("the storage backend is closed")
             self._open.append(conn)
         return conn
+
+    def _cap_statements(self, conn: _Connection) -> None:
+        """Bound this session's statements, unless the deployment already bounds them.
+
+        Asked of the session rather than assumed, so that a timeout set on the role or
+        the database — the usual place an operator puts one — is left alone as surely as
+        one written into the DSN. Only a session reporting no timeout at all gets this.
+        """
+        if self._statement_timeout_ms is None:
+            return
+        row = conn.execute("SHOW statement_timeout").fetchone()
+        if row is not None and row["statement_timeout"] != "0":
+            return
+        conn.execute(
+            sql.SQL("SET statement_timeout = {}").format(sql.Literal(self._statement_timeout_ms))
+        )
 
 
 class PostgresStore:
@@ -385,6 +465,8 @@ class PostgresStore:
         *,
         schema: str = "kira_memory",
         corpus_id: str = "default",
+        connect_timeout: int = CONNECT_TIMEOUT_S,
+        statement_timeout_ms: int = STATEMENT_TIMEOUT_MS,
     ) -> None:
         """Open the database and create the schema if it is not there.
 
@@ -392,9 +474,19 @@ class PostgresStore:
             dsn: Connection string.
             schema: Schema holding the tables.
             corpus_id: The campaign this deployment reads and writes.
+            connect_timeout: Seconds to wait for a connection. A ``connect_timeout``
+                in the DSN wins over this.
+            statement_timeout_ms: Milliseconds one statement may run. A timeout the
+                deployment already sets — in the DSN, on the role, on the database —
+                wins over this.
         """
         self.corpus_id = corpus_id
-        self._db = _Pool(dsn, schema)
+        self._db = _Pool(
+            dsn,
+            schema,
+            connect_timeout=connect_timeout,
+            statement_timeout_ms=statement_timeout_ms,
+        )
         self._db.script(_OPERATIONAL_SCHEMA)
         self.records = PostgresRecordIndex(self._db, corpus_id=corpus_id)
 
