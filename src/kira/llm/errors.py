@@ -36,9 +36,19 @@ class ErrorClass(StrEnum):
 RETRYABLE = frozenset({ErrorClass.TRANSIENT, ErrorClass.RATE_LIMIT})
 
 
-@dataclass(frozen=True, slots=True)
+# Deliberately not frozen, unlike every other value type here. A frozen dataclass
+# refuses attribute assignment, and Python assigns `__traceback__` on an exception as it
+# propagates — through a context manager's exit, or anywhere a library re-raises with an
+# explicit traceback. On a slotted dataclass that refusal surfaces as
+# `TypeError: super(type, obj)...`, which then *replaces* the real failure: a run against
+# an unreachable model endpoint recorded that TypeError as its outcome instead of the
+# model error, and the cause was two layers away from anything the message named.
+@dataclass(slots=True)
 class ModelCallError(Exception):
-    """A model call that failed after exhausting whatever retries applied."""
+    """A model call that failed after exhausting whatever retries applied.
+
+    Mutable so the interpreter can attach a traceback to it. Treat it as read-only.
+    """
 
     error_class: ErrorClass
     provider_type: str

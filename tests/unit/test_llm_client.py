@@ -471,3 +471,20 @@ def _capture(sink: dict[str, Any], raw: Any) -> Any:
         return raw
 
     return _call
+
+
+def test_a_model_failure_survives_being_re_raised() -> None:
+    """Python assigns `__traceback__` on an exception as it propagates. A frozen
+    dataclass refuses that, and on a slotted one the refusal surfaces as a TypeError
+    that then replaces the real failure — a run against an unreachable endpoint
+    recorded that TypeError as its outcome instead of the model error."""
+    error = ModelCallError(
+        error_class=ErrorClass.TERMINAL,
+        provider_type="APIConnectionError",
+        message="connection refused",
+        attempts=1,
+    )
+
+    error.__traceback__ = None
+
+    assert "connection refused" in str(error)
