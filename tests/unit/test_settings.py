@@ -71,6 +71,7 @@ _EXPLICIT_PROBES: dict[str, tuple[str, str]] = {
     "KIRA_TRANSPORT__PROMETHEUS_URL": ("http://probe7.example.com:9090", "probe7.example.com"),
     "KIRA_TRANSPORT__LOKI_URL": ("http://probe7.example.com:3100", "probe7.example.com"),
     "KIRA_TRANSPORT__JAEGER_URL": ("http://probe7.example.com:16686", "probe7.example.com"),
+    "KIRA_ADAPTERS": ('{"probe7": {"conductor_base_url": "http://c:8000"}}', "probe7"),
 }
 
 
@@ -275,7 +276,11 @@ class TestRealDeployments:
             "LLM_TIMEOUT_SECONDS": "1800",
             "VERIFY_STEP_ENABLED": "true",
             "HTTP_INTAKE_ENABLED": "true",
-            "API_PORT": "8080",
+            # The conductor's port in this file, and not this service's. It must not
+            # move the bind port: doing so made the service listen where the conductor
+            # already was while the harness posted to 8080, and the run failed as a
+            # health-check timeout naming nothing.
+            "API_PORT": "8000",
             "WORKDIR": "/workspace",
             "LOG_LEVEL": "INFO",
         }.items():

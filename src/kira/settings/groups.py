@@ -388,6 +388,16 @@ class MemorySettings(SettingsGroup):
         "LEARNING_DELAY_SECONDS",
         description="Wait before distilling, so a late outcome is visible.",
     )
+    learning_timeout_s: int = setting(
+        600,
+        "KIRA_MEMORY__LEARNING_TIMEOUT_S",
+        "LEARNING_TIMEOUT_SECONDS",
+        description=(
+            "Ceiling on a distillation an environment adapter runs inline, while it "
+            "still holds the environment. Bounded because the release waits on it, and "
+            "a hung pass would strand a deployed application."
+        ),
+    )
     learning_verify: bool = setting(
         False,
         "KIRA_MEMORY__LEARNING_VERIFY",
@@ -673,6 +683,15 @@ class IntakeSettings(SettingsGroup):
         "HTTP_INTAKE_ENABLED",
         description="Accept incidents over the HTTP endpoint.",
     )
+    adapters: NameSet = setting(
+        frozenset(),
+        "KIRA_INTAKE__ADAPTERS",
+        description=(
+            "Environment adapters to enable, by registered name. Each supplies the "
+            "transport its tools speak and may mount routes of its own. Empty means "
+            "none: the service runs on the direct transport and its generic intake."
+        ),
+    )
     kafka: KafkaSettings = Field(default_factory=KafkaSettings)
 
 
@@ -836,8 +855,13 @@ class ServerSettings(SettingsGroup):
 
     model_config = group_config("server")
 
-    host: str = setting("0.0.0.0", "KIRA_SERVER__HOST", "API_HOSTNAME", description="Bind address.")
-    port: int = setting(8080, "KIRA_SERVER__PORT", "API_PORT", description="Bind port.")
+    # API_HOSTNAME and API_PORT are deliberately not accepted here. In the evaluation
+    # harness's own deployment files those two names are the *conductor's* address, and
+    # honouring them made this service bind the conductor's port while the harness
+    # posted to 8080 — a run that fails as a health-check timeout naming nothing. They
+    # reach the adapter that gives them their other meaning instead.
+    host: str = setting("0.0.0.0", "KIRA_SERVER__HOST", description="Bind address.")
+    port: int = setting(8080, "KIRA_SERVER__PORT", description="Bind port.")
     workdir: Path = setting(
         Path(".local-workspace"),
         "KIRA_SERVER__WORKDIR",

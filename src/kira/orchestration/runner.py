@@ -23,6 +23,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
+from kira.adapters.base import AdapterTool
 from kira.audit.journal import EventSink, Journal, NullSink
 from kira.contracts.events import StageEvent
 from kira.contracts.lifecycle import RunStatus
@@ -65,7 +66,7 @@ from kira.secondpass.types import (
 )
 from kira.settings.profiles import ModelProfile
 from kira.settings.root import Settings
-from kira.tools.context import ToolContext
+from kira.tools.context import EvidencePolicy, NullEvidencePolicy, ToolContext
 from kira.tools.scope import IncidentScope
 from kira.tools.snapshot import namespace_snapshot
 from kira.tools.toolsets import build_toolset
@@ -103,6 +104,14 @@ class Deployment:
     because it records into that run's journal."""
     hooks: Sequence[AgentHook] = ()
     """Extra middleware, composed after the write gate."""
+    evidence: EvidencePolicy = field(default_factory=NullEvidencePolicy)
+    """A last-mile filter over what tools return, supplied by an environment adapter.
+
+    An environment can leak its own fault injection into the telemetry it serves, which
+    turns a diagnosis into a lookup. Filtering belongs to whatever knows that about its
+    environment, so it arrives here rather than being a rule the tools carry."""
+    tool_extras: tuple[AdapterTool, ...] = ()
+    """Tools an environment adapter supplies, each carrying the roles allowed them."""
     sink: EventSink = field(default_factory=NullSink)
     write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     """One cluster writer per process. Held here rather than in a module global so two
@@ -418,7 +427,7 @@ def _context_builder(
                 ]
             ),
             write_lock=deployment.write_lock,
-            toolset=build_toolset(spec.name, tools),
+            toolset=build_toolset(spec.name, tools, extras=deployment.tool_extras),
             tool_context=tools,
             journal=journal,
             run_id=run_id,
@@ -664,7 +673,7 @@ async def _replay(
     if record.status != "approved":
         return denial_result(record)
 
-    toolset = build_toolset(checkpoint.stage, tools)
+    toolset = build_toolset(checkpoint.stage, tools, extras=deployment.tool_extras)
     bound = toolset.dispatch.get(checkpoint.tool_name)
     if bound is None:
         # Approved, but the tool is not available in this configuration any more.
@@ -694,6 +703,7 @@ def tool_context_for(
         journal=journal,
         settings=deployment.settings.tools,
         scope=resources.scope,
+        evidence=deployment.evidence,
         # Two conditions, not one. A configuration with the store enabled and roles kept
         # retrieval-free is real: the gated second pass reads precedents in the harness
         # while both of its diagnosis runs hold no retrieval tool and receive no memory

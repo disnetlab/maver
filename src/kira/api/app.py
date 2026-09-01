@@ -16,8 +16,13 @@ import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 
+from kira.adapters.registry import (
+    get_adapter,
+    legacy_selection,
+    load_entry_point_adapters,
+)
 from kira.api.deps import Service
 from kira.api.health import router as health_router
 from kira.api.hitl import router as hitl_router
@@ -44,7 +49,7 @@ from kira.settings.root import Settings, load_settings
 from kira.tools.transport.base import ToolTransport
 from kira.tools.transport.direct import direct_transport
 
-__all__ = ["API_PREFIX", "build_deployment", "create_app"]
+__all__ = ["API_PREFIX", "build_deployment", "create_app", "enabled_adapters"]
 
 _log = logging.getLogger(__name__)
 
@@ -151,7 +156,44 @@ def create_app(
     app.include_router(health_router)
     app.include_router(incidents_router, prefix=API_PREFIX)
     app.include_router(hitl_router, prefix=API_PREFIX)
+    for router in _adapter_routers(active):
+        app.include_router(router, prefix=API_PREFIX)
     return app
+
+
+def enabled_adapters(settings: Settings) -> frozenset[str]:
+    """Which environment adapters this deployment runs under.
+
+    Discovery is not selection: every installed adapter is imported so that one which
+    could not be is *reported* rather than silently missing, and only the configured
+    names are enabled. A deployment file written for the prototype selects through the
+    switch its adapter declares, which is why the core never has to name one.
+
+    Args:
+        settings: The resolved configuration.
+
+    Returns:
+        The names to enable.
+    """
+    load_entry_point_adapters()
+    return frozenset(settings.intake.adapters) | legacy_selection()
+
+
+def _adapter_routers(deployment: Deployment) -> list[APIRouter]:
+    """Build each enabled adapter once, to collect the routes it mounts.
+
+    An adapter instance is per episode, so this one is used for nothing else and
+    discarded. Building it here is also the moment its own configuration slice is
+    validated, which turns a typo inside that slice into a startup failure rather than
+    a default that quietly changes what an arm means.
+    """
+    routers: list[APIRouter] = []
+    for name in sorted(enabled_adapters(deployment.settings)):
+        router = get_adapter(name)(deployment.settings).routes()
+        _log.info("environment adapter %s enabled", name)
+        if isinstance(router, APIRouter):
+            routers.append(router)
+    return routers
 
 
 def _authority(settings: Settings, approvals: ApprovalStore) -> Authority:

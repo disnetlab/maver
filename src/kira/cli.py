@@ -22,6 +22,8 @@ import typer
 from pydantic import ValidationError
 
 from kira import __version__
+from kira.adapters.registry import available_adapters
+from kira.api.app import enabled_adapters
 from kira.api.hitl import request_payload
 from kira.memory.factory import build_storage
 from kira.memory.ports import ApprovalStatus, ApprovalStore
@@ -117,7 +119,6 @@ def serve(
     logging.basicConfig(level=logging.INFO)
     bind_host = host or settings.server.host
     bind_port = port or settings.server.port
-    _warn_if_bound_by_a_borrowed_name(host, port)
     typer.echo(f"kira {__version__} listening on {bind_host}:{bind_port}")
     uvicorn.run(
         "kira.api.app:create_app",
@@ -126,25 +127,6 @@ def serve(
         port=bind_port,
         reload=reload,
     )
-
-
-def _warn_if_bound_by_a_borrowed_name(host: str | None, port: int | None) -> None:
-    """Say so when the bind address came from a name that means something else elsewhere.
-
-    ``API_HOSTNAME`` and ``API_PORT`` are accepted as legacy aliases for the bind
-    address, and in the evaluation harness's own environment files the same two names
-    are the *conductor's* address. An environment file reused against this service
-    therefore makes it listen on the conductor's loopback port while the harness posts
-    to 8080, and the run fails as a health-check timeout naming nothing. Until the
-    collision is settled, an operator at least gets told which name decided the bind.
-    """
-    borrowed = {"API_HOSTNAME", "API_PORT"} & set(legacy_names_in_use())
-    if borrowed and host is None and port is None:
-        typer.echo(
-            f"bind address taken from {', '.join(sorted(borrowed))}; set "
-            "KIRA_SERVER__HOST and KIRA_SERVER__PORT if those name something else here",
-            err=True,
-        )
 
 
 @config_app.command("show")
@@ -184,6 +166,23 @@ def config_check() -> None:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2) from exc
     typer.echo("ok")
+
+
+@config_app.command("adapters")
+def config_adapters() -> None:
+    """List the environment adapters this install has, and which ones are enabled.
+
+    An adapter installed but unloadable is the failure this exists for: without it the
+    service starts on the default transport and the run grades nothing, with the import
+    error visible nowhere.
+    """
+    settings = _resolved()
+    enabled = enabled_adapters(settings)
+    for name, status in sorted(available_adapters().items()):
+        mark = "enabled" if name in enabled else "available"
+        typer.echo(f"{name}: {status}" if status != "ready" else f"{name}: {mark}")
+    for name in sorted(enabled - set(available_adapters())):
+        typer.echo(f"{name}: ENABLED BUT NOT INSTALLED", err=True)
 
 
 @approvals_app.command("list")

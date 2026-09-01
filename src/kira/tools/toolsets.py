@@ -18,12 +18,14 @@ actually offered the model meant reconstructing its environment. It is one field
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
+from kira.adapters.base import AdapterTool
 from kira.llm.types import ToolSpec as ModelToolSpec
 from kira.tools.allowlists import RETRIEVAL_TOOLS, ROLE_TOOLSETS
 from kira.tools.context import ToolContext
 from kira.tools.registry import (
     BoundTool,
     ToolRegistryError,
+    ToolSpec,
     definition_for,
     description_for,
     load_descriptions,
@@ -50,6 +52,7 @@ def build_toolset(
     *,
     descriptions: Mapping[str, object] | None = None,
     capabilities: Sequence[str] | None = None,
+    extras: Sequence[AdapterTool] = (),
 ) -> ResolvedToolset:
     """Resolve a role's tools against this run's environment and configuration.
 
@@ -58,12 +61,17 @@ def build_toolset(
         ctx: The run's context, bound into every dispatch.
         descriptions: The description catalogue. Defaults to the shipped one.
         capabilities: What the transport serves. Defaults to asking the bound transport.
+        extras: Tools an environment adapter supplies, each carrying the roles allowed
+            to see it. Unioned after the allowlist rather than named in it, because the
+            core's allowlists must not carry the name of an environment's tool.
 
     Returns:
         The model-facing definitions, the dispatch map, and what was dropped.
 
     Raises:
-        ToolRegistryError: When the role has no allowlist.
+        ToolRegistryError: When the role has no allowlist, or when an adapter's tool
+            collides with a registered name. A silent override would make the audit
+            record say one thing and mean another.
     """
     names = ROLE_TOOLSETS.get(role)
     if names is None:
@@ -77,8 +85,10 @@ def build_toolset(
     dispatch: dict[str, BoundTool] = {}
     dropped: dict[str, str] = {}
 
-    for name in names:
-        spec = specs[name]
+    offered = _offer(role, [specs[name] for name in names], extras, specs)
+
+    for spec in offered:
+        name = spec.name
 
         # A submit tool is never dropped. The loop terminates only by calling it, so a
         # run without one cannot end — it burns its whole budget and reports a timeout.
@@ -94,7 +104,9 @@ def build_toolset(
         definitions.append(
             ModelToolSpec(
                 name=name,
-                description=description_for(name, role, descriptions=catalogue),
+                description=description_for(
+                    name, role, descriptions=spec.descriptions or catalogue
+                ),
                 parameters=definition_for(spec),
             )
         )
@@ -102,3 +114,42 @@ def build_toolset(
             dispatch[name] = BoundTool(spec=spec, ctx=ctx)
 
     return ResolvedToolset(definitions=definitions, dispatch=dispatch, dropped=dropped)
+
+
+def _offer(
+    role: str,
+    allowed: list[ToolSpec],
+    extras: Sequence[AdapterTool],
+    registry: Mapping[str, ToolSpec],
+) -> list[ToolSpec]:
+    """Splice an adapter's tools into the order the model is shown them in.
+
+    Ahead of the submission tool rather than after it. The order within a role's list
+    was hand-tuned and every published measurement was taken with it, and in the
+    configuration these tools came from they sat immediately before the submission.
+
+    Args:
+        role: The role being run.
+        allowed: The role's own tools, in the allowlist's order.
+        extras: What an adapter contributes.
+        registry: The registered tools, for the collision check.
+
+    Returns:
+        Every tool this role is offered, in order.
+
+    Raises:
+        ToolRegistryError: When an adapter's tool collides with a registered name.
+    """
+    added: list[ToolSpec] = []
+    for extra in extras:
+        if role not in extra.roles:
+            continue
+        if extra.spec.name in registry:
+            raise ToolRegistryError(
+                f"adapter tool {extra.spec.name!r} collides with a registered tool name"
+            )
+        added.append(extra.spec)
+    if not added:
+        return allowed
+    cut = next((i for i, spec in enumerate(allowed) if spec.safety == "submit"), len(allowed))
+    return [*allowed[:cut], *added, *allowed[cut:]]

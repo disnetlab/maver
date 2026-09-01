@@ -61,11 +61,15 @@ dependencies = [
 postgres = ["psycopg[binary]>=3.2"]
 vector = ["chromadb>=1.0"]
 kafka = ["aiokafka>=0.12"]
-sregym = ["mcp>=1.9", "httpx-sse>=0.4"]
+sregym = ["mcp>=2.1", "httpx-sse>=0.4"]
 all = ["kira[postgres,vector,kafka,sregym]"]
 
 [project.scripts]
 kira = "kira.cli:app"
+# The harness spawns this as a subprocess and waits for it to exit. It is a console
+# script so a fresh install has the path, and scripts/sregym-driver.py so the path a
+# deployed harness already names keeps working.
+kira-sregym-driver = "kira.adapters.sregym.driver:main"
 
 # Extension seams. A third party ships a role, tool, transport or environment
 # adapter by declaring an entry point in these groups; no fork required.
@@ -76,6 +80,9 @@ kira = "kira.cli:app"
 [project.entry-points."kira.transports"]
 
 [project.entry-points."kira.adapters"]
+# Present in every install, including one without the sregym extra, so the module it
+# names must import without the client library. The import that needs it is deferred.
+sregym = "kira.adapters.sregym"
 
 [project.urls]
 Homepage = "https://github.com/evenodderguy/kira"
@@ -129,6 +136,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["D"]
+# The suite has to be able to exercise an adapter. The rule it stands for is enforced
+# over src/kira by an AST walk in tests/unit/test_adapters.py, which a lint rule cannot
+# do for an adapter nobody has written yet or for an import taken by name.
+"tests/unit/test_sregym_adapter.py" = ["TID251"]
 "src/kira/prompts/*" = ["D"]
 # Field descriptions in the artifact schemas are shipped to the model as its
 # submission tool's JSON Schema and are carried over verbatim. Their typographic
@@ -136,6 +147,9 @@ ignore = [
 "src/kira/contracts/artifacts.py" = ["RUF001", "RUF002", "RUF003"]
 "src/kira/orchestration/graph.py" = ["TID251"]  # the one module allowed to import it
 "src/kira/llm/_provider.py" = ["TID251"]  # the one module allowed to import it
+# An adapter's own modules are the one place its package may be imported from. The ban
+# exists to stop the core naming an environment, not to stop an adapter being written.
+"src/kira/adapters/sregym/*" = ["TID251"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["kira"]

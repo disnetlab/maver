@@ -118,7 +118,7 @@ async def run_learning(
                     ]
                 ),
                 write_lock=deployment.write_lock,
-                toolset=build_toolset(spec.name, tools),
+                toolset=build_toolset(spec.name, tools, extras=deployment.tool_extras),
                 tool_context=tools,
                 journal=journal,
                 run_id=f"{session_id}:learning:1",

@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 __all__ = [
     "AuditEvent",
+    "EnvironmentEvent",
     "EventPayload",
     "InterventionEvent",
     "ModelCallEvent",
@@ -194,6 +195,21 @@ class SecondPassEvent(BaseModel):
     selector_response: str | None = None
 
 
+class EnvironmentEvent(BaseModel):
+    """An adapter acting on the environment that hosts this incident.
+
+    Named for the environment rather than for any one of them, so the closed union
+    below stays free of a benchmark's name while an adapter can still write into the
+    incident's own ordered log instead of a ledger beside it.
+    """
+
+    kind: Literal["environment"] = "environment"
+    adapter: str
+    action: Literal["acquired", "submitted", "graded", "released", "failed"]
+    detail: str = ""
+    ok: bool = True
+
+
 EventPayload = Annotated[
     ModelCallEvent
     | ToolCallEvent
@@ -201,7 +217,8 @@ EventPayload = Annotated[
     | InterventionEvent
     | PolicyDecisionEvent
     | StageEvent
-    | SecondPassEvent,
+    | SecondPassEvent
+    | EnvironmentEvent,
     Field(discriminator="kind"),
 ]
 

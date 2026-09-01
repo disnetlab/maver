@@ -94,18 +94,6 @@ exec_kubectl_cmd_safely:
       Omit save_as for normal short reads; use save_as only when output may be
       long or needs bash_exec/code_exec post-processing.
 
-rollback_command:
-  default: >-
-    Roll back the last kubectl write you successfully executed with
-    exec_kubectl_cmd_safely. Takes no arguments. Routed through the HITL gate
-    like any cluster write. Call get_previous_rollbackable_cmd first to confirm
-    what will be reverted; repeated calls roll back successive commands.
-
-get_previous_rollbackable_cmd:
-  default: >-
-    List the kubectl commands you previously executed that can still be rolled
-    back, in the order rollback_command would revert them. Read-only.
-
 namespace_snapshot:
   default: >-
     Read-only structured snapshot of one namespace in a single call: workloads

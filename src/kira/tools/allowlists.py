@@ -57,8 +57,6 @@ ROLE_TOOLSETS: dict[str, tuple[str, ...]] = {
         "bash_exec",
         "code_exec",
         "ssh_exec",
-        "rollback_command",
-        "get_previous_rollbackable_cmd",
         "submit_execution_result",
     ),
     # Verify is read-only end-to-end: re-evaluate the alert/SLI, exercise the
@@ -104,8 +102,6 @@ ROLE_TOOLSETS: dict[str, tuple[str, ...]] = {
         "exec_kubectl_cmd_safely",
         "bash_exec",
         "code_exec",
-        "rollback_command",
-        "get_previous_rollbackable_cmd",
         "submit_diagnosis",
         "submit_mitigation",
     ),

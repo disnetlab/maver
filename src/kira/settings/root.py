@@ -26,7 +26,13 @@ from kira.settings.groups import (
     VerifySettings,
 )
 
+ADAPTER_ENV_NAME = f"{ENV_PREFIX}ADAPTERS"
+"""Where an adapter's configuration slice is read from."""
+
+_ADAPTER_SLICE_PREFIX = f"{ADAPTER_ENV_NAME}__"
+
 __all__ = [
+    "ADAPTER_ENV_NAME",
     "AliasedField",
     "Settings",
     "get_settings",
@@ -58,6 +64,16 @@ class Settings(SettingsGroup):
     transport: TransportSettings = Field(default_factory=TransportSettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
+    adapters: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices(ADAPTER_ENV_NAME),
+        description=(
+            "Per-adapter configuration, keyed by registered adapter name and read from "
+            "KIRA_ADAPTERS__<NAME>__<FIELD>. Untyped here on purpose: an adapter "
+            "validates its own slice with its own model, which is what keeps the core "
+            "free of the field names of environments it must not know about."
+        ),
+    )
 
     @model_validator(mode="after")
     def _cross_group_invariants(self) -> "Settings":
@@ -178,7 +194,14 @@ def unknown_prefixed_names(env: Mapping[str, str] | None = None) -> list[str]:
     """
     environ = os.environ if env is None else env
     known = known_env_names()
-    return sorted(n for n in environ if n.startswith(ENV_PREFIX) and n not in known)
+    return sorted(
+        n
+        for n in environ
+        # An adapter's own slice is checked by the adapter, at startup, against its own
+        # model. Checking it here would mean the settings layer holding the field names
+        # of every environment it exists not to know about.
+        if n.startswith(ENV_PREFIX) and n not in known and not n.startswith(_ADAPTER_SLICE_PREFIX)
+    )
 
 
 def _alias_names(info: FieldInfo) -> list[str]:
