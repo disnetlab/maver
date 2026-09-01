@@ -1,0 +1,30 @@
+{
+  "scoped_only": {
+    "raw": "[{'labels': {'alertname': 'HighErrorRate', 'namespace': 'shop'}, 'annotations': {'summary': 'HighErrorRate is firing'}}]",
+    "rendered": "[{'labels': {'alertname': 'HighErrorRate', 'namespace': 'shop'}, 'annotations': {'summary': 'HighErrorRate is firing'}}]"
+  },
+  "empty": {
+    "raw": "[]",
+    "rendered": "No firing alerts"
+  },
+  "all_four": {
+    "raw": "[{'labels': {'alertname': 'HighErrorRate', 'namespace': 'shop'}, 'annotations': {'summary': 'HighErrorRate is firing'}}, {'labels': {'alertname': 'PodCrashLooping', 'namespace': 'other-app'}, 'annotations': {'summary': 'PodCrashLooping is firing'}}, {'labels': {'alertname': 'EtcdHighFsync'}, 'annotations': {'summary': 'EtcdHighFsync is firing'}}, {'labels': {'alertname': 'OldAlert', 'namespace': 'gone-ns'}, 'annotations': {'summary': 'OldAlert is firing'}, 'stale_namespace': \"namespace 'gone-ns' is absent from the Kubernetes API; this firing alert is stale and must not be treated as an active incident\"}]",
+    "rendered": "INCIDENT-SCOPED firing alerts for namespace 'shop': [{'labels': {'alertname': 'HighErrorRate', 'namespace': 'shop'}, 'annotations': {'summary': 'HighErrorRate is firing'}}]\nOUT-OF-SCOPE firing alerts from other namespaces (not evidence for this incident unless live dependency evidence links them): [{'labels': {'alertname': 'PodCrashLooping', 'namespace': 'other-app'}, 'annotations': {'summary': 'PodCrashLooping is firing'}}]\nUNSCOPED firing alerts (do not assign them to this incident without live resource/dependency evidence): [{'labels': {'alertname': 'EtcdHighFsync'}, 'annotations': {'summary': 'EtcdHighFsync is firing'}}]\nSTALE firing alerts whose namespace no longer exists (never active incident evidence): [{'labels': {'alertname': 'OldAlert', 'namespace': 'gone-ns'}, 'annotations': {'summary': 'OldAlert is firing'}, 'stale_namespace': \"namespace 'gone-ns' is absent from the Kubernetes API; this firing alert is stale and must not be treated as an active incident\"}]"
+  },
+  "no_scoped_but_foreign": {
+    "raw": "[{'labels': {'alertname': 'PodCrashLooping', 'namespace': 'other-app'}, 'annotations': {'summary': 'PodCrashLooping is firing'}}, {'labels': {'alertname': 'EtcdHighFsync'}, 'annotations': {'summary': 'EtcdHighFsync is firing'}}]",
+    "rendered": "No firing alerts scoped to incident namespace 'shop'.\nOUT-OF-SCOPE firing alerts from other namespaces (not evidence for this incident unless live dependency evidence links them): [{'labels': {'alertname': 'PodCrashLooping', 'namespace': 'other-app'}, 'annotations': {'summary': 'PodCrashLooping is firing'}}]\nUNSCOPED firing alerts (do not assign them to this incident without live resource/dependency evidence): [{'labels': {'alertname': 'EtcdHighFsync'}, 'annotations': {'summary': 'EtcdHighFsync is firing'}}]"
+  },
+  "unparseable": {
+    "raw": "prometheus is unreachable",
+    "rendered": "prometheus is unreachable"
+  },
+  "blank_namespace": {
+    "raw": "[{'labels': {'alertname': 'Weird', 'namespace': '   '}, 'annotations': {'summary': 'Weird is firing'}}]",
+    "rendered": "No firing alerts scoped to incident namespace 'shop'.\nUNSCOPED firing alerts (do not assign them to this incident without live resource/dependency evidence): [{'labels': {'alertname': 'Weird', 'namespace': '   '}, 'annotations': {'summary': 'Weird is firing'}}]"
+  },
+  "no_scope": {
+    "raw": "[{'labels': {'alertname': 'HighErrorRate', 'namespace': 'shop'}, 'annotations': {'summary': 'HighErrorRate is firing'}}, {'labels': {'alertname': 'PodCrashLooping', 'namespace': 'other-app'}, 'annotations': {'summary': 'PodCrashLooping is firing'}}]",
+    "rendered": "[{'labels': {'alertname': 'HighErrorRate', 'namespace': 'shop'}, 'annotations': {'summary': 'HighErrorRate is firing'}}, {'labels': {'alertname': 'PodCrashLooping', 'namespace': 'other-app'}, 'annotations': {'summary': 'PodCrashLooping is firing'}}]"
+  }
+}

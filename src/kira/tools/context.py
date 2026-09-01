@@ -17,6 +17,7 @@ from kira.audit.journal import Journal
 from kira.memory.ports import RunStore, SessionStore
 from kira.memory.retrieval import Retriever
 from kira.settings.groups import ToolSettings
+from kira.tools.scope import IncidentScope
 from kira.tools.transport.base import ToolTransport
 from kira.tools.workspace import SessionWorkspace
 
@@ -141,6 +142,13 @@ class ToolContext:
     """The calling role. This is the stage the approval gate keys on."""
     session_id: str
     journal: Journal
+    scope: IncidentScope = field(default_factory=IncidentScope)
+    """What the alert said about this incident, and what has been discovered about it.
+
+    Trusted context rather than a tool argument: the telemetry wrappers read the
+    namespace to keep one application's evidence out of another's incident, and a value
+    the model could set would defeat that.
+    """
     settings: ToolSettings = field(default_factory=ToolSettings)
     """Tool-layer limits, injected rather than read from the process.
 

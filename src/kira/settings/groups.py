@@ -592,12 +592,6 @@ class IntakeSettings(SettingsGroup):
         "HTTP_INTAKE_ENABLED",
         description="Accept incidents over the HTTP endpoint.",
     )
-    annotate_stale_namespaces: bool = setting(
-        False,
-        "KIRA_INTAKE__ANNOTATE_STALE_NAMESPACES",
-        "STALE_ALERT_ANNOTATION_ENABLED",
-        description="Mark alerts that may have carried over from a previous incident.",
-    )
     kafka: KafkaSettings = Field(default_factory=KafkaSettings)
 
 
@@ -640,6 +634,16 @@ class ToolSettings(SettingsGroup):
         "KIRA_TOOLS__BLIND_NAMESPACES",
         "BLIND_NAMESPACES",
         description="Namespaces removed from telemetry results before a role sees them.",
+    )
+    annotate_stale_namespaces: bool = setting(
+        False,
+        "KIRA_TOOLS__ANNOTATE_STALE_NAMESPACES",
+        "STALE_ALERT_ANNOTATION_ENABLED",
+        description=(
+            "Check each firing alert's namespace against the cluster and mark the "
+            "ones whose namespace no longer exists. Off by default: it costs one "
+            "cluster read per distinct namespace on every alert query."
+        ),
     )
     host_recovery_nodes: NameSet = setting(
         frozenset(),
