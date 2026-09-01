@@ -50,6 +50,7 @@ from kira.roles.policy import (
     repair_submission,
     repeat_breaker_message,
 )
+from kira.tools.errors import call_failed
 
 __all__ = ["LoopResult", "SubmitGuard", "ToolFn", "run_until_submit"]
 
@@ -470,7 +471,7 @@ async def run_until_submit(
                     tool=call_.name,
                     arguments=arguments,
                     rationale=call_.arguments.get(RATIONALE_ARG),
-                    succeeded=not result.content.startswith("error:"),
+                    succeeded=not call_failed(result.content),
                     result_chars=len(result.content),
                 )
             )

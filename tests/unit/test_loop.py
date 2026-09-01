@@ -16,6 +16,7 @@ from kira.roles.policy import (
     no_tool_nudge_message,
     repeat_breaker_message,
 )
+from kira.tools.errors import call_failed
 
 FIXTURE = (
     pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "prototype_control_messages.json"
@@ -398,3 +399,23 @@ def test_the_turn_budget_leaves_room_for_the_rescue_it_may_grant() -> None:
     limits = LoopLimits(max_turns=20, finalizer_rescues=1, submit_validation_rejections=3)
     assert limits.turn_budget == 23
     assert LoopLimits(max_turns=20, finalizer_rescues=0).turn_budget == 20
+
+
+@pytest.mark.parametrize(
+    ("content", "failed"),
+    [
+        ("error: the backend is unreachable", True),
+        ('exit_code=1\nError from server (NotFound): pods "x" not found', True),
+        ("exit_code=1 (no output)\nThe command failed silently.", True),
+        ("exit_code=0\nNAME READY\npod-1 1/1", False),
+        ("exit_code=0 (no output)\nThe command ran and printed nothing.", False),
+        ("NAME READY\npod-1 1/1", False),
+    ],
+)
+def test_a_failed_command_is_recorded_as_one(content: str, failed: bool) -> None:
+    """Two shapes of failure, because there are two kinds. A tool that could not act
+    says so with the prefix; a command that ran and exited non-zero says so with its
+    exit code. Reading only the prefix journalled the second as a successful call — so
+    two transports disagreed about the same failure in the log that exists to be
+    compared across them."""
+    assert call_failed(content) is failed

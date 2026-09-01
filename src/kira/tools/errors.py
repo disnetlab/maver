@@ -12,7 +12,13 @@ model-facing interface — a prompt was written against results of this size —
 constants with a provenance, not a parameter each call site picks for itself.
 """
 
-__all__ = ["EXEC_OUTPUT_LIMIT", "OUTPUT_LIMIT", "format_exit_result", "tool_error"]
+__all__ = [
+    "EXEC_OUTPUT_LIMIT",
+    "OUTPUT_LIMIT",
+    "call_failed",
+    "format_exit_result",
+    "tool_error",
+]
 
 OUTPUT_LIMIT = 16384
 """Characters a cluster or telemetry read may return before it is saved to a file."""
@@ -64,3 +70,25 @@ def format_exit_result(returncode: int, output: str) -> str:
         "The command failed silently. Re-running it returns this same empty result. "
         "Run it again with stderr shown, or check that the command and its inputs exist."
     )
+
+
+def call_failed(content: str) -> bool:
+    """Say whether a tool result records a failure.
+
+    Two shapes, because there are two kinds of failure and the audit log conflated
+    them. A tool that could not act at all says so with the prefix above. A command
+    that ran and exited non-zero says so with its exit code, and reading only the
+    prefix recorded that as a successful call — so a transport whose backend reports
+    the exit code and one whose backend flags the error disagreed about the same
+    failure, in the log that exists to be compared across them.
+
+    Args:
+        content: The tool result, as the model will read it.
+
+    Returns:
+        True when the result records a failure.
+    """
+    if content.startswith("error:"):
+        return True
+    head = content.split("\n", 1)[0]
+    return head.startswith("exit_code=") and not head.startswith("exit_code=0")

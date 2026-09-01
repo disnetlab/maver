@@ -113,10 +113,14 @@ class McpTransport:
     def timeout_seconds(self) -> int:
         """How long one call may take before it is abandoned.
 
+        Floored at a second. The configured value is a float and truncating it toward
+        zero turns anything under one second into no timeout at all, which the kubectl
+        tool then uses to compute a deadline that has already passed.
+
         Returns:
-            The per-call timeout.
+            The per-call timeout, never below one second.
         """
-        return int(self._timeout)
+        return max(1, int(self._timeout))
 
     async def kubectl(self, argv: Sequence[str]) -> str:
         """Run one kubectl invocation on the server that holds the credentials.
