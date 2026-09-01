@@ -90,6 +90,9 @@ class IncidentState(TypedDict, total=False):
     prior_attempts: list[dict[str, Any]]
     prior_plans: list[dict[str, Any]]
 
-    # Terminal outputs surfaced to the caller.
-    final_answer: str | None
+    # Why the incident ended badly, when it did. There is deliberately no second
+    # terminal field for a role's closing text: a role that ends without submitting
+    # records its terminal reason here, and its full transcript sits on its run row,
+    # which is where a reader looks for it. The prototype declared such a field in two
+    # generations and never wrote it once.
     error: str | None

@@ -78,6 +78,13 @@ class SessionRecord:
     root_cause: dict[str, Any] | None = None
     plan: dict[str, Any] | None = None
     execution_result: dict[str, Any] | None = None
+    verify_result: dict[str, Any] | None = None
+    """The recovery verdict, when verification ran.
+
+    Here as well as on the run row because this is the artefact that decided the
+    incident's outcome, and a reader holding only the session record would otherwise be
+    able to see the claim that a fix was applied but not the check that disproved it.
+    """
     distilled: bool = False
     notes: str | None = None
 
@@ -253,6 +260,7 @@ class SessionStore(Protocol):
         root_cause: dict[str, Any] | None = None,
         plan: dict[str, Any] | None = None,
         execution_result: dict[str, Any] | None = None,
+        verify_result: dict[str, Any] | None = None,
         notes: str | None = None,
     ) -> None:
         """Attach what a role produced to its session.
@@ -266,6 +274,7 @@ class SessionStore(Protocol):
             root_cause: The diagnosis, when one was submitted.
             plan: The remediation plan, when one was submitted.
             execution_result: What execution did, when it ran.
+            verify_result: The recovery verdict, when verification ran.
             notes: Free text for an operator.
         """
         ...

@@ -145,12 +145,14 @@ class MemoryStoreContract:
         session = store.create_session({})
         store.update_artefacts(session.session_id, root_cause={"cause": "memory limit too low"})
         store.update_artefacts(session.session_id, plan={"steps": ["raise the limit"]})
+        store.update_artefacts(session.session_id, verify_result={"verdict": "recovered"})
         store.update_artefacts(session.session_id, notes="operator paged")
 
         read = store.get_session(session.session_id)
         assert read is not None
         assert read.root_cause == {"cause": "memory limit too low"}
         assert read.plan == {"steps": ["raise the limit"]}
+        assert read.verify_result == {"verdict": "recovered"}
         assert read.notes == "operator paged"
         assert read.execution_result is None
 

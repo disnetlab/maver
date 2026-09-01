@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     root_cause_json     TEXT,
     plan_json           TEXT,
     execution_json      TEXT,
+    verify_json         TEXT,
     distilled           INTEGER NOT NULL DEFAULT 0,
     notes               TEXT
 );
@@ -343,6 +344,7 @@ class SqliteStore:
         root_cause: dict[str, Any] | None = None,
         plan: dict[str, Any] | None = None,
         execution_result: dict[str, Any] | None = None,
+        verify_result: dict[str, Any] | None = None,
         notes: str | None = None,
     ) -> None:
         """Attach what a role produced to its session.
@@ -355,6 +357,7 @@ class SqliteStore:
             root_cause: The diagnosis, when one was submitted.
             plan: The remediation plan, when one was submitted.
             execution_result: What execution did, when it ran.
+            verify_result: The recovery verdict, when verification ran.
             notes: Free text for an operator.
         """
         assignments: list[str] = []
@@ -363,6 +366,7 @@ class SqliteStore:
             ("root_cause_json", _dumps_optional(root_cause)),
             ("plan_json", _dumps_optional(plan)),
             ("execution_json", _dumps_optional(execution_result)),
+            ("verify_json", _dumps_optional(verify_result)),
             ("notes", _text(notes)),
         ):
             if value is not None:
@@ -952,6 +956,7 @@ def _to_session(row: sqlite3.Row) -> SessionRecord:
         root_cause=_loads(row["root_cause_json"]),
         plan=_loads(row["plan_json"]),
         execution_result=_loads(row["execution_json"]),
+        verify_result=_loads(row["verify_json"]),
         distilled=bool(row["distilled"]),
         notes=row["notes"],
     )

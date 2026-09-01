@@ -1,0 +1,155 @@
+"""Running the routing to completion, with and without the framework.
+
+Two implementations of one protocol. :class:`LangGraphEngine` drives the compiled graph;
+:class:`SequentialEngine` walks the same predicates in an explicit loop and imports
+nothing. Both are supported configurations, selected by settings, so the framework-free
+path is a deployment option rather than a fixture that only tests use.
+
+That is what makes the containment claim checkable. A parametrised test runs both engines
+over the same fake roles and asserts the same terminal state and the same sequence of
+stage-hook calls, which is the cheapest available evidence that if the dependency
+disappeared, deleting ``graph.py`` and defaulting to the sequential engine would be the
+whole migration.
+
+Note that neither class imports LangGraph. The graph arrives already compiled, from the
+one module permitted to build it, and this file only calls two methods on it.
+"""
+
+import logging
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from typing import Any, Protocol, cast
+
+from kira.contracts.routing import Route
+from kira.contracts.state import IncidentState
+from kira.orchestration.nodes import NodeFn
+from kira.orchestration.routing import (
+    RoutingPolicy,
+    after_execution,
+    after_planning,
+    after_rca,
+    after_verify,
+)
+
+__all__ = ["Engine", "LangGraphEngine", "SequentialEngine", "StageHook", "StepLimitExceeded"]
+
+_log = logging.getLogger(__name__)
+
+StageHook = Callable[[str, IncidentState], Awaitable[None]]
+"""Called with ``(node_name, state)`` after each role completes. It must not raise."""
+
+STEP_LIMIT = 25
+"""How many role runs one incident may take before it is treated as a runaway.
+
+Matched to the graph executor's own default so that a configuration able to cycle
+forever is stopped in both engines rather than only in one. The longest legitimate path
+through the edge table is well inside it; a run that reaches this bound has a routing
+bug, not an unusually hard incident.
+"""
+
+_ROUTERS: Mapping[str, Callable[[IncidentState, RoutingPolicy], Route]] = {
+    "rca": after_rca,
+    "planning": after_planning,
+    "execution": after_execution,
+    "verify": after_verify,
+}
+
+ENTRY = "rca"
+"""Where an incident starts. The same edge ``graph.py`` draws from the graph's start."""
+
+
+class StepLimitExceeded(RuntimeError):
+    """An incident took more role runs than :data:`STEP_LIMIT` allows."""
+
+
+class Engine(Protocol):
+    """Runs the routing to completion."""
+
+    async def run(
+        self, state: IncidentState, *, on_stage: StageHook | None = None
+    ) -> IncidentState:
+        """Run the incident from its seeded state to a terminal one.
+
+        Args:
+            state: The seeded incident state.
+            on_stage: Notified after each role completes, with the accumulated state.
+
+        Returns:
+            The terminal state.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class LangGraphEngine:
+    """Drives the compiled graph."""
+
+    graph: Any
+    """The object ``build_graph`` returned. Held as Any so this module stays free of the
+    framework's types along with its imports."""
+
+    async def run(
+        self, state: IncidentState, *, on_stage: StageHook | None = None
+    ) -> IncidentState:
+        """Run the graph, streaming only when someone is listening.
+
+        Args:
+            state: The seeded incident state.
+            on_stage: Notified after each role completes.
+
+        Returns:
+            The terminal state.
+        """
+        if on_stage is None:
+            return cast(IncidentState, await self.graph.ainvoke(state))
+
+        # Our nodes return a delta, so each update's value is merged onto the accumulated
+        # IncidentState; the hook is notified after each node completes.
+        accumulated: dict[str, Any] = dict(state)
+        async for update in self.graph.astream(state, stream_mode="updates"):
+            for node_name, node_delta in update.items():
+                accumulated = {**accumulated, **node_delta}
+                await on_stage(node_name, cast(IncidentState, accumulated))
+        return cast(IncidentState, accumulated)
+
+
+@dataclass(frozen=True, slots=True)
+class SequentialEngine:
+    """Walks the same edge table by hand.
+
+    Sixty lines and no dependency. The routing tests run against this, which means the
+    edge table is exercised without the framework in the loop and a failure there points
+    at a predicate rather than at an executor.
+    """
+
+    nodes: Mapping[str, NodeFn]
+    policy: RoutingPolicy
+
+    async def run(
+        self, state: IncidentState, *, on_stage: StageHook | None = None
+    ) -> IncidentState:
+        """Run each role and follow its predicate until one routes to the end.
+
+        Args:
+            state: The seeded incident state.
+            on_stage: Notified after each role completes.
+
+        Returns:
+            The terminal state.
+
+        Raises:
+            StepLimitExceeded: The incident took more role runs than the limit allows.
+        """
+        accumulated = state
+        current = ENTRY
+        for _ in range(STEP_LIMIT):
+            delta = await self.nodes[current](accumulated)
+            accumulated = cast(IncidentState, {**accumulated, **delta})
+            if on_stage is not None:
+                await on_stage(current, accumulated)
+            route = _ROUTERS[current](accumulated, self.policy)
+            if route is Route.END:
+                return accumulated
+            current = route.value
+        _log.error("incident %s exceeded %d role runs", state.get("session_id", ""), STEP_LIMIT)
+        raise StepLimitExceeded(f"incident exceeded {STEP_LIMIT} role runs")
