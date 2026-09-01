@@ -25,7 +25,7 @@ def test_the_embedded_database_lives_under_this_deployment_s_workspace(
     try:
         session = stack.sessions.create_session({"alertname": "HighErrorRate"})
         assert stack.sessions.get_session(session.session_id) is not None
-        assert (tmp_path / "memory" / "kira.sqlite").is_file()
+        assert (tmp_path / "memory" / "default.sqlite").is_file()
     finally:
         stack.close()
 

@@ -12,6 +12,7 @@ which is why a backend supplies all of them together rather than one at a time.
 """
 
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,7 +82,34 @@ def build_storage(settings: Settings) -> StorageStack:
 
 
 def _database_path(settings: Settings) -> Path:
-    """Place the embedded database beside the run's other durable state."""
+    """Place the embedded database beside the run's other durable state.
+
+    Named for the corpus rather than fixed, which is how one campaign's records are kept
+    out of another's: the partition is the database, so a run configured for a different
+    corpus cannot read the previous one even by mistake.
+    """
     directory = settings.server.workdir / "memory"
     directory.mkdir(parents=True, exist_ok=True)
-    return directory / "kira.sqlite"
+    return directory / f"{_slug(settings.memory.corpus_id)}.sqlite"
+
+
+def _slug(corpus_id: str) -> str:
+    """Render a corpus name as a filename, refusing anything that could escape.
+
+    Args:
+        corpus_id: The configured corpus.
+
+    Returns:
+        The stem of its database file.
+
+    Raises:
+        ValueError: When the name is empty or is not a plain identifier. A corpus name
+            reaches the filesystem, so it is validated rather than sanitised: silently
+            rewriting it would put a campaign's records somewhere nobody looked.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", corpus_id):
+        raise ValueError(
+            f"memory.corpus_id {corpus_id!r} is not a usable name: it must start "
+            "alphanumeric and contain only letters, digits, dot, dash or underscore"
+        )
+    return corpus_id

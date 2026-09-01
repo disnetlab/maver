@@ -425,7 +425,10 @@ class MemorySettings(SettingsGroup):
         "default",
         "KIRA_MEMORY__CORPUS_ID",
         "MEMORY_EXPERIMENT_ID",
-        description="Partitions records so separate campaigns cannot read each other's.",
+        description=(
+            "Names this campaign's corpus. The partition is the database itself, so a "
+            "run configured for one corpus cannot read another's."
+        ),
     )
     top_k: int = setting(
         5,
