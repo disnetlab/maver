@@ -1,0 +1,3 @@
+recovered=true is not available: the incident namespace is still unhealthy.
+{{FAILURES}}
+Either show these are not part of this incident with positive evidence that they predate it — RCA not mentioning them is not such evidence — or submit not_recovered with a hand-back (needs_reassessment if the cause looks wrong, needs_replan if the cause is right but the fix was incomplete).

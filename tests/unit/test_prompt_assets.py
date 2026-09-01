@@ -40,6 +40,18 @@ MINIMAL_VARIANT_ROLES = {"rca", "planning", "execution"}
 
 MEMORY_STATE_TO_MODE = {"enabled": "learning", "disabled": "non_learning"}
 
+# Assets whose prototype source is Python, not a prompt file. The health gate's
+# model-facing blocks were string literals inside `agent/agents/health_gate.py`, and the
+# house rule that prompt text lives in .txt files applies to them on the way in. There is
+# nothing here to diff against, so they are listed by name: an asset added without a
+# prototype counterpart still fails unless someone writes down where it came from.
+CARRIED_FROM_PROTOTYPE_CODE = {
+    Path("runtime/verify/health_gate_header.txt"),
+    Path("runtime/verify/health_gate_healthy.txt"),
+    Path("runtime/verify/health_gate_unhealthy.txt"),
+    Path("runtime/verify/submit_while_unhealthy.txt"),
+}
+
 
 def _prototype_source(relative: Path) -> Path:
     """Map a shipped asset back to the prototype file it was copied from."""
@@ -78,6 +90,8 @@ def _shipped_assets() -> list[Path]:
 @pytest.mark.skipif(not PROTOTYPE.is_dir(), reason=f"prototype prompts not at {PROTOTYPE}")
 @pytest.mark.parametrize("relative", _shipped_assets(), ids=str)
 def test_every_shipped_asset_is_byte_identical_to_the_prototype(relative: Path) -> None:
+    if relative in CARRIED_FROM_PROTOTYPE_CODE:
+        pytest.skip("carried from prototype Python; no prompt file to diff against")
     expected = _prototype_source(relative).read_bytes()
     if relative.parts[0] == "roles":
         text = expected.decode("utf-8")

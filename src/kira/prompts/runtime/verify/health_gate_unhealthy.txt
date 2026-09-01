@@ -1,0 +1,6 @@
+UNHEALTHY — {{COUNT}} signal(s):
+{{FAILURES}}
+These are live failures in the incident namespace. They are in scope for
+this incident whether or not RCA's diagnosis mentioned them: a wrong
+diagnosis puts the real fault outside its own chain by definition.
+You cannot submit recovered while any of them stands.

@@ -1,0 +1,1 @@
+every pod Running/Ready, no container restarting repeatedly.

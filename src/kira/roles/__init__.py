@@ -5,7 +5,12 @@ role module nobody imports is a role the graph cannot find — and the failure i
 node rather than an error, which is why the imports are here rather than left to a caller.
 """
 
-from kira.roles import execution, planning, rca  # noqa: F401 - imported for their registrations
+from kira.roles import (  # noqa: F401 - imported for their registrations
+    execution,
+    planning,
+    rca,
+    verify,
+)
 from kira.roles.base import RoleContext, RoleOutcome, RoleSpec, StateDelta
 from kira.roles.loop import LoopResult, SubmitGuard, ToolFn, run_until_submit
 from kira.roles.policy import LoopLimits, RepeatDecision, RepeatedCallTracker, repair_submission
@@ -17,6 +22,7 @@ from kira.roles.registry import (
     role,
     validate_roles,
 )
+from kira.roles.trace_summary import build_trace_summary
 
 __all__ = [
     "LoopLimits",
@@ -30,6 +36,7 @@ __all__ = [
     "StateDelta",
     "SubmitGuard",
     "ToolFn",
+    "build_trace_summary",
     "get_role",
     "load_plugin_roles",
     "registered_roles",
