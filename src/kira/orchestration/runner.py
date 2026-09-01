@@ -624,7 +624,10 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
                 deployment, resources, None, {checkpoint.stage: transcript}
             ),
         )
-        nodes = {name: make_node(get_role(name), deps) for name in GRAPH_ROLES}
+        # The same composition the first pass ran under. Building the roles a second
+        # way here would let a continuation re-enter a diagnosis without the second
+        # opinion the arm is defined by, and the run would silently be two arms.
+        nodes = _nodes(deployment, deps, resources)
         try:
             final_state = await SequentialEngine(nodes, deps.policy).run(
                 state, start=checkpoint.stage
