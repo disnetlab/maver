@@ -8,7 +8,10 @@ from kira.audit.journal import ListSink
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
 from kira.memory.ports import AgentRunRecord
+from kira.orchestration.bootstrap import register_post_incident_hooks
+from kira.orchestration.hooks import clear_hooks, registered_hooks
 from kira.orchestration.learning import build_packet, run_learning
+from kira.orchestration.outcomes import Outcome
 from kira.orchestration.runner import Deployment
 from kira.settings.groups import MemorySettings, ServerSettings
 from kira.settings.profiles import load_profile
@@ -67,7 +70,7 @@ class FakeModel:
 def deployment(tmp_path: pathlib.Path, **memory: Any) -> tuple[Deployment, FakeModel]:
     settings = Settings(
         server=ServerSettings(workdir=tmp_path),
-        memory=MemorySettings(enabled=True, learning_enabled=True, **memory),
+        memory=MemorySettings(**{"enabled": True, "learning_enabled": True, **memory}),
     )
     model = FakeModel()
     return (
@@ -161,3 +164,36 @@ async def test_nothing_is_distilled_for_a_session_that_is_gone(
     assert await run_learning("no-such-session", deploy) == "nothing_to_distil"
     assert model.calls == 0
     deploy.storage.close()
+
+
+async def test_the_loop_closes_on_every_terminal_outcome(tmp_path: pathlib.Path) -> None:
+    """A run that stopped deliberately, with a stated reason, is one of the more
+    informative things a corpus can hold: it records a judgement that the system should
+    not act, which a later incident facing the same evidence needs to know was already
+    considered."""
+    clear_hooks()
+    deploy, _ = deployment(tmp_path)
+    try:
+        register_post_incident_hooks(deploy.settings)
+        # Registering twice is what a restarted process does, and it must not raise.
+        register_post_incident_hooks(deploy.settings)
+
+        hook = registered_hooks()["learning"]
+        assert hook.on_outcomes == frozenset(Outcome)
+        assert hook.delay_seconds == deploy.settings.memory.learning_delay_s
+    finally:
+        clear_hooks()
+        deploy.storage.close()
+
+
+async def test_no_hook_is_registered_when_nothing_will_be_distilled(
+    tmp_path: pathlib.Path,
+) -> None:
+    clear_hooks()
+    deploy, _ = deployment(tmp_path, learning_enabled=False)
+    try:
+        register_post_incident_hooks(deploy.settings)
+        assert registered_hooks() == {}
+    finally:
+        clear_hooks()
+        deploy.storage.close()

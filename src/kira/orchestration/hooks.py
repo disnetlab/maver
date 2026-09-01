@@ -32,9 +32,13 @@ class PostIncidentHook:
     """Work to schedule once an incident has reached one of the outcomes it names."""
 
     name: str
-    job_fn: Callable[..., Awaitable[None]]
+    job_fn: Callable[..., Awaitable[Any]]
     """Must be a module-level function. The scheduler restores a job by dotted import
-    path, so a closure or a lambda is a job that cannot survive a restart."""
+    path, so a closure or a lambda is a job that cannot survive a restart.
+
+    Its return value is a short status for the scheduler's log, not a result anything
+    acts on: by the time a job runs, the incident that scheduled it is long closed.
+    """
     on_outcomes: frozenset[Outcome]
     delay_seconds: int = 0
     kwargs: Mapping[str, Any] = field(default_factory=dict)

@@ -19,12 +19,13 @@ from kira.contracts.artifacts import LearningPacket, LearningResult, RoleTraceSu
 from kira.memory.distil import distil
 from kira.middleware.base import MiddlewareStack
 from kira.middleware.write_gate import WriteGate
+from kira.orchestration.jobs import bound_deployment
 from kira.orchestration.runner import Deployment, incident_context, tool_context_for
 from kira.roles.base import RoleContext
 from kira.roles.registry import get_role
 from kira.tools.toolsets import build_toolset
 
-__all__ = ["build_packet", "run_learning"]
+__all__ = ["build_packet", "distil_incident", "run_learning"]
 
 _log = logging.getLogger(__name__)
 
@@ -138,3 +139,26 @@ async def run_learning(
         sessions=deployment.storage.sessions,
     )
     return "distilled"
+
+
+async def distil_incident(session_id: str, **kwargs: Any) -> str:
+    """The scheduled form of :func:`run_learning`.
+
+    Separate because a scheduler restores a job by dotted import path and hands it only
+    its keyword arguments: there is nowhere for a deployment to come from except the one
+    the process bound at startup.
+
+    Args:
+        session_id: The incident to distil.
+        **kwargs: Passed through. ``external_feedback`` is the one that means something;
+            anything else is tolerated so a job stored by an older build still runs.
+
+    Returns:
+        A short status for the job log.
+    """
+    feedback = kwargs.get("external_feedback")
+    return await run_learning(
+        session_id,
+        bound_deployment(),
+        external_feedback=feedback if isinstance(feedback, dict) else None,
+    )
