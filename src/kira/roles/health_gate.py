@@ -221,14 +221,19 @@ def _waiting_reason(statuses: list[Any]) -> str:
     return ""
 
 
-def _pod_failures(raw: str, now: datetime | None = None) -> tuple[list[str], list[str]]:
+def _pod_failures(raw: str, now: datetime | None = None) -> tuple[list[str] | None, list[str]]:
     """Extract the unhealthy pods from ``kubectl get pods -o json``.
 
     ``now`` is injectable so the transient-state grace period is testable without sleeping.
+
+    Returns:
+        The failure lines and any notes, or None for the failures when the inventory
+        could not be read at all — which is not the same as an inventory with nothing
+        wrong in it.
     """
     items, note = _parse_items(raw)
     if items is None:
-        return [], [note]
+        return None, [note]
 
     failures: list[str] = []
     notes: list[str] = []
@@ -312,6 +317,15 @@ async def sweep_namespace_health(ctx: ToolContext, namespace: str) -> HealthGate
         return HealthGate(checked=False, error=raw.strip()[:200], namespace=ns)
 
     failures, notes = _pod_failures(raw)
+    if failures is None:
+        # A body it could not read is a sweep that did not happen. Counting it as one
+        # that did kept the gate off the blocking path, which was the intent, but it
+        # also rendered the healthy block into Verify's opening turn: the model was told
+        # every pod was Running and Ready on the strength of an unparsed response, and
+        # the audit row recorded a gate that ran and found a clean namespace.
+        _log.warning("health gate: pod inventory unreadable for ns=%s: %s", ns, notes[0][:160])
+        return HealthGate(checked=False, error=notes[0][:200], namespace=ns)
+
     _log.info("health gate: ns=%s swept, %d failure(s)", ns, len(failures))
     return HealthGate(
         checked=True,

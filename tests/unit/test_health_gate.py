@@ -85,16 +85,17 @@ async def test_a_gate_that_could_not_look_never_blocks(tmp_path: Path) -> None:
     refused = await sweep(tmp_path, "error: read_kubectl only runs read-only kubectl")
     unparseable = await sweep(tmp_path, "<html>gateway timeout</html>")
 
-    for gate in (raised, refused):
+    # A body it could not read is a sweep that did not happen, and belongs with the two
+    # that could not run at all. It used to count as one that ran: that kept the gate off
+    # the blocking path, which was right, but it also rendered the healthy block into
+    # Verify's opening turn — the model read "every pod Running/Ready" off a response
+    # nothing had parsed — and wrote a clean namespace into the audit row.
+    for gate in (raised, refused, unparseable):
         assert gate.checked is False
         assert gate.blocks_recovered is False
         assert gate.error
         assert gate.context_text() == ""
-
-    # An unparseable body still counts as a sweep that ran, so it must report no failures
-    # and say why in an observation rather than block on what it could not read.
-    assert unparseable.blocks_recovered is False
-    assert any("unparseable" in note for note in unparseable.observations)
+    assert "unparseable" in (unparseable.error or "")
 
     # A healthy namespace and a gate that never looked both produce zero blocks, which is
     # the pair the audit record and the context block exist to tell apart.
