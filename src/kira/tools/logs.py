@@ -12,8 +12,8 @@ exists from the shape of the answer.
 
 from typing import Any
 
-from kira.tools.context import ToolContext
-from kira.tools.errors import OUTPUT_LIMIT
+from kira.tools.context import ToolContext, redact_query
+from kira.tools.errors import OUTPUT_LIMIT, tool_error
 from kira.tools.policy import read_only
 from kira.tools.registry import tool
 
@@ -57,9 +57,16 @@ async def get_logs(ctx: ToolContext, query: str, last_n_minutes: int = 15) -> st
     Returns:
         Matching log lines, saved to the session workspace when they exceed the limit.
     """
-    raw = await ctx.transport.query_logs(
-        ctx.evidence.filter_query(query), last_n_minutes=last_n_minutes
-    )
+    # Through the wrapper, not the policy directly. Rewriting a query fails closed —
+    # a query that was not rewritten reaches somewhere the environment meant to hide,
+    # and a model that can ask about a hidden namespace learns it exists from the shape
+    # of the answer. Calling the policy here would let that failure leave the tool as a
+    # bare exception instead of as a refusal the role can read.
+    try:
+        scoped = redact_query(ctx.evidence, query)
+    except Exception as exc:
+        return tool_error(f"the query could not be scoped: {type(exc).__name__}")
+    raw = await ctx.transport.query_logs(scoped, last_n_minutes=last_n_minutes)
     return ctx.workspace.save_tool_output(raw, "loki_logs", OUTPUT_LIMIT)
 
 

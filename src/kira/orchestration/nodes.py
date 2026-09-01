@@ -20,6 +20,7 @@ from kira.contracts.events import StageEvent, SubmissionEvent
 from kira.contracts.routing import HandBack
 from kira.contracts.state import IncidentState
 from kira.middleware.authority import ApprovalPending
+from kira.observability.tracing import span
 from kira.orchestration.budget import RetryBudget
 from kira.orchestration.routing import RoutingPolicy, apply_handback, pending_handback
 from kira.roles.base import RoleContext, RoleOutcome, RoleSpec, StateDelta
@@ -141,7 +142,16 @@ def make_node(spec: RoleSpec, deps: IncidentDeps) -> NodeFn:
 
         context = deps.build_context(spec, state, handback, run_id)
         try:
-            outcome = await spec.run(context)
+            with span(
+                f"kira.role.{spec.name}",
+                {
+                    "session.id": state.get("session_id", ""),
+                    "kira.run_id": run_id,
+                    "kira.handback": handback.kind if handback is not None else None,
+                },
+            ) as role_span:
+                outcome = await spec.run(context)
+                role_span.set_attribute("kira.submitted", outcome.artifact is not None)
         except ApprovalPending as pending:
             # Not a failure. The pipeline catches it, checkpoints and exits cleanly, so
             # the run row stays open for the resume to close. The state and the run are

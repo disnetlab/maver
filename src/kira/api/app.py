@@ -33,6 +33,7 @@ from kira.memory.factory import build_storage
 from kira.memory.ports import ApprovalStore
 from kira.middleware.authority import Authority, AutoApprove, DenyAll
 from kira.middleware.human_approval import HumanApproval
+from kira.observability.tracing import configure_tracing
 from kira.orchestration.bootstrap import register_post_incident_hooks
 from kira.orchestration.control import RunRegistry
 from kira.orchestration.jobs import (
@@ -130,6 +131,10 @@ def create_app(
         # has to tell it which deployment it belongs to.
         bind_deployment(active)
         register_post_incident_hooks(active.settings)
+        # Instrumented either way; only export depends on a collector being configured.
+        # Code that runs only when someone is watching is code the measured runs never
+        # exercised.
+        configure_tracing(active.settings)
         try:
             yield
         finally:

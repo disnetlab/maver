@@ -36,6 +36,8 @@ from kira.middleware.authority import ApprovalPending, Authority, AutoApprove
 from kira.middleware.base import AgentHook, MiddlewareStack
 from kira.middleware.human_approval import approval_granted
 from kira.middleware.write_gate import WriteGate
+from kira.observability.tracing import span
+from kira.observability.usage import RecordingCompletion
 from kira.orchestration.budget import RetryBudget
 from kira.orchestration.engine import Engine, LangGraphEngine, SequentialEngine, StageHook
 from kira.orchestration.graph import build_graph
@@ -324,7 +326,7 @@ def _second_pass_node(
                 session_id=state.get("session_id", ""),
                 alert=dict(state.get("alert") or {}),
                 state=state,
-                completion=deployment.completion,
+                completion=RecordingCompletion(deployment.completion, journal, deployment.profile),
                 sampling=deployment.profile.aux_sampling or deployment.profile.sampling,
                 memory=deployment.storage.retriever if deployment.settings.memory.enabled else None,
                 snapshot=snapshot,
@@ -414,7 +416,7 @@ def _context_builder(
             state=state,
             handback=handback,
             settings=deployment.settings,
-            completion=deployment.completion,
+            completion=RecordingCompletion(deployment.completion, journal, deployment.profile),
             profile=deployment.profile,
             middleware=MiddlewareStack(
                 [
@@ -505,46 +507,85 @@ async def run_incident(
             build_context=_context_builder(deployment, resources, on_stage),
         )
         mode = resolve_mode(target_stage=target_stage, settings=deployment.settings)
-        try:
-            final_state = await MODES[mode](
+        with span(
+            "kira.incident",
+            {
+                "session.id": session_id,
+                "alert.name": str(alert.get("alertname") or ""),
+                "kira.mode": mode,
+                "kira.target_stage": target_stage,
+            },
+        ) as incident_span:
+            return await _run_mode(
+                mode,
                 state,
-                ModeContext(
-                    deps=deps,
-                    engine=_engine(deployment, deps, resources),
-                    on_stage=on_stage,
-                ),
-            )
-        except ApprovalPending as pending:
-            # Not an error. Park the incident where it stopped and let the caller unwind
-            # cleanly; nothing is persisted as terminal and no hook fires, because the
-            # run has not finished — it is waiting.
-            _park_run(deployment, pending)
-            save_checkpoint(
-                deployment.storage.sessions, cast(IncidentState, pending.state), pending
-            )
-            raise
-
-        record = resolve_outcome(final_state)
-        try:
-            persist_outcome(
-                final_state,
-                record,
-                deployment.storage.sessions,
+                deployment,
+                deps,
+                resources,
+                on_stage=on_stage,
+                session_id=session_id,
+                journal=journal,
+                target_stage=target_stage,
+                fire_post_hooks=fire_post_hooks,
                 finalize_run_status=finalize_run_status,
+                incident_span=incident_span,
             )
-        except Exception:
-            # A storage failure must never kill a finished pipeline: the caller still
-            # reports its outcome from the in-memory state, and an unsanitised byte in
-            # an artifact once cost a fully graded run here.
-            _log.exception("persisting the outcome failed; continuing from memory")
 
-        if fire_post_hooks and target_stage == "full":
-            # A diagnosis-only task has no remediation outcome to learn from. Never
-            # distil it as a successful incident memory entry.
-            await fire_hooks(record.outcome, session_id, workdir=deployment.settings.server.workdir)
 
-        _record_completion(journal, final_state, record, deps.policy)
-        return final_state
+async def _run_mode(
+    mode: str,
+    state: IncidentState,
+    deployment: Deployment,
+    deps: IncidentDeps,
+    resources: IncidentResources,
+    *,
+    on_stage: StageHook | None,
+    session_id: str,
+    journal: Journal,
+    target_stage: TargetStage,
+    fire_post_hooks: bool,
+    finalize_run_status: bool,
+    incident_span: Any,
+) -> IncidentState:
+    """Run the chosen mode and record what it came to."""
+    try:
+        final_state = await MODES[mode](
+            state,
+            ModeContext(
+                deps=deps,
+                engine=_engine(deployment, deps, resources),
+                on_stage=on_stage,
+            ),
+        )
+    except ApprovalPending as pending:
+        # Not an error. Park the incident where it stopped and let the caller unwind
+        # cleanly; nothing is persisted as terminal and no hook fires, because the
+        # run has not finished — it is waiting.
+        _park_run(deployment, pending)
+        save_checkpoint(deployment.storage.sessions, cast(IncidentState, pending.state), pending)
+        raise
+
+    record = resolve_outcome(final_state)
+    try:
+        persist_outcome(
+            final_state,
+            record,
+            deployment.storage.sessions,
+            finalize_run_status=finalize_run_status,
+        )
+    except Exception:
+        # A storage failure must never kill a finished pipeline: the caller still
+        # reports its outcome from the in-memory state, and an unsanitised byte in
+        # an artifact once cost a fully graded run here.
+        _log.exception("persisting the outcome failed; continuing from memory")
+
+    if fire_post_hooks and target_stage == "full":
+        # A diagnosis-only task has no remediation outcome to learn from. Never
+        # distil it as a successful incident memory entry.
+        await fire_hooks(record.outcome, session_id, workdir=deployment.settings.server.workdir)
+
+    _record_completion(journal, final_state, record, deps.policy)
+    return final_state
 
 
 def _park_run(deployment: Deployment, pending: ApprovalPending) -> None:
