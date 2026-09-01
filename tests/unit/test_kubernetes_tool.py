@@ -6,6 +6,7 @@ from kira.tools.kubernetes import (
     _bound_blocking_wait,
     _reject,
     classify,
+    kubectl_authority,
     tokenize,
 )
 
@@ -159,3 +160,11 @@ def test_cluster_wide_reads_are_scoping_not_safety_and_can_be_turned_off() -> No
     assert classify(tokenize("kubectl get pods -A"), POLICY) == "blocked"
     open_policy = KubernetesPolicy(deny_all_namespaces=False)
     assert classify(tokenize("kubectl get pods -A"), open_policy) == "read"
+
+
+@pytest.mark.parametrize("arguments", [{}, {"cmd": ""}, {"cmd": "   "}, {"cmd": None}])
+def test_a_call_with_no_readable_command_is_a_write(arguments: dict[str, object]) -> None:
+    """The gate is deciding whether to ask a human. An argument shape the classifier
+    cannot read is not evidence that nothing will be changed, and classifying it as a
+    read sends it past the gate with the audit record saying a write was a read."""
+    assert kubectl_authority(arguments) == "write"

@@ -230,9 +230,16 @@ def kubectl_authority(arguments: Mapping[str, Any]) -> Authority:
         arguments: The model's arguments.
 
     Returns:
-        What the call is asking for.
+        What the call is asking for. A call carrying no readable command is classified
+        as a write, not as a read: the gate is deciding whether to ask a human, and an
+        argument shape the classifier cannot read is not evidence that nothing will be
+        changed. The dispatch below would reject it anyway, but the audit record would
+        have said a write was a read.
     """
-    return classify(tokenize(str(arguments.get("cmd", ""))))
+    command = str(arguments.get("cmd") or "").strip()
+    if not command:
+        return "write"
+    return classify(tokenize(command))
 
 
 def _bare_shell_operator(argv: Sequence[str]) -> str | None:

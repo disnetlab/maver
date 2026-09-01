@@ -142,9 +142,13 @@ def make_node(spec: RoleSpec, deps: IncidentDeps) -> NodeFn:
         context = deps.build_context(spec, state, handback, run_id)
         try:
             outcome = await spec.run(context)
-        except ApprovalPending:
+        except ApprovalPending as pending:
             # Not a failure. The pipeline catches it, checkpoints and exits cleanly, so
-            # the run row stays open for the resume to close.
+            # the run row stays open for the resume to close. The state and the run are
+            # attached here because this is the layer that has them: the gate sees one
+            # call and the loop sees one transcript.
+            pending.state = dict(state)
+            pending.run_id = run_id
             raise
         except Exception as exc:
             deps.runs.finish(

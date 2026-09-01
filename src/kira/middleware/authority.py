@@ -76,6 +76,11 @@ class ApprovalPending(Exception):
     tool_name: str
     tool_arguments: dict[str, Any]
     messages: list[dict[str, Any]] = field(default_factory=list)
+    state: dict[str, Any] = field(default_factory=dict)
+    """The incident state the paused role was entered with, attached by the node wrapper
+    on the way out. Empty here for the same reason ``messages`` is: the gate sees one
+    call, not the run around it."""
+    run_id: str = ""
 
 
 @runtime_checkable

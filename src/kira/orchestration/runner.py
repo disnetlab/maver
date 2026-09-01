@@ -17,7 +17,7 @@ survived for as long as it did.
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,7 +31,9 @@ from kira.contracts.state import IncidentState, TargetStage
 from kira.llm.types import Completion
 from kira.memory.factory import StorageStack
 from kira.memory.ports import AgentRunRecord, AgentRunStatus
-from kira.middleware.base import MiddlewareStack
+from kira.middleware.authority import ApprovalPending, Authority, AutoApprove
+from kira.middleware.base import AgentHook, MiddlewareStack
+from kira.middleware.write_gate import WriteGate
 from kira.orchestration.budget import RetryBudget
 from kira.orchestration.engine import Engine, LangGraphEngine, SequentialEngine, StageHook
 from kira.orchestration.graph import build_graph
@@ -39,6 +41,7 @@ from kira.orchestration.hooks import fire_hooks
 from kira.orchestration.modes import MODES, ModeContext, resolve_mode
 from kira.orchestration.nodes import ContextBuilder, IncidentDeps, make_node
 from kira.orchestration.outcomes import OutcomeRecord, persist_outcome, resolve_outcome
+from kira.orchestration.resume import save_checkpoint
 from kira.orchestration.routing import RoutingPolicy
 from kira.orchestration.state import initial_state
 from kira.roles.base import RoleContext, RoleSpec, StateDelta
@@ -70,7 +73,11 @@ class Deployment:
     completion: Completion
     profile: ModelProfile
     transport_for: TransportFactory
-    middleware: MiddlewareStack = field(default_factory=MiddlewareStack)
+    authority: Authority = field(default_factory=AutoApprove)
+    """Who rules on a cluster write. The gate that consults it is built per role run,
+    because it records into that run's journal."""
+    hooks: Sequence[AgentHook] = ()
+    """Extra middleware, composed after the write gate."""
     sink: EventSink = field(default_factory=NullSink)
     write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     """One cluster writer per process. Held here rather than in a module global so two
@@ -253,7 +260,16 @@ def _context_builder(
             settings=deployment.settings,
             completion=deployment.completion,
             profile=deployment.profile,
-            middleware=deployment.middleware,
+            middleware=MiddlewareStack(
+                [
+                    WriteGate(
+                        authority=deployment.authority,
+                        settings=deployment.settings.authority,
+                        journal=journal,
+                    ),
+                    *deployment.hooks,
+                ]
+            ),
             write_lock=deployment.write_lock,
             toolset=build_toolset(spec.name, tools),
             tool_context=tools,
@@ -331,10 +347,19 @@ async def run_incident(
             build_context=_context_builder(deployment, resources, on_stage),
         )
         mode = resolve_mode(target_stage=target_stage, settings=deployment.settings)
-        final_state = await MODES[mode](
-            state,
-            ModeContext(deps=deps, engine=_engine(deployment, deps), on_stage=on_stage),
-        )
+        try:
+            final_state = await MODES[mode](
+                state,
+                ModeContext(deps=deps, engine=_engine(deployment, deps), on_stage=on_stage),
+            )
+        except ApprovalPending as pending:
+            # Not an error. Park the incident where it stopped and let the caller unwind
+            # cleanly; nothing is persisted as terminal and no hook fires, because the
+            # run has not finished — it is waiting.
+            save_checkpoint(
+                deployment.storage.sessions, cast(IncidentState, pending.state), pending
+            )
+            raise
 
         record = resolve_outcome(final_state)
         try:

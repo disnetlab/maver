@@ -35,6 +35,7 @@ from kira.llm.types import (
     ToolSpec,
     serialise_tool_results,
 )
+from kira.middleware.authority import ApprovalPending
 from kira.middleware.base import MiddlewareStack, ToolRequest, TurnContext
 from kira.roles.policy import (
     RATIONALE_ARG,
@@ -447,17 +448,23 @@ async def run_until_submit(
             # every non-submit schema. It stays in the transcript, so the trace survives
             # to the next turn, but it is not a parameter any tool accepts.
             arguments = {k: v for k, v in call_.arguments.items() if k != RATIONALE_ARG}
-            result = await stack.run_tool(
-                ToolRequest(
-                    call_id=call_.id,
-                    name=call_.name,
-                    arguments=arguments,
-                    role=role,
-                    session_id=session_id,
-                    rationale=call_.arguments.get(RATIONALE_ARG),
-                ),
-                dispatch_one,
-            )
+            try:
+                result = await stack.run_tool(
+                    ToolRequest(
+                        call_id=call_.id,
+                        name=call_.name,
+                        arguments=arguments,
+                        role=role,
+                        session_id=session_id,
+                        rationale=call_.arguments.get(RATIONALE_ARG),
+                    ),
+                    dispatch_one,
+                )
+            except ApprovalPending as pending:
+                # The transcript is the loop's, and the run has to be restartable from
+                # where it stopped rather than from its opening turn.
+                pending.messages = list(state.transcript)
+                raise
             log.record(
                 ToolCallEvent(
                     tool=call_.name,

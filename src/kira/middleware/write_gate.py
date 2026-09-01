@@ -20,6 +20,7 @@ from kira.contracts.events import PolicyDecisionEvent
 from kira.llm.types import ToolResult
 from kira.middleware.authority import ActionRequest, ApprovalPending, Authority, Decision
 from kira.middleware.base import ToolHandler, ToolRequest
+from kira.middleware.human_approval import take_grant
 from kira.settings.authority import AuthoritySettings
 from kira.tools.policy import ActionClass, ToolPolicy, policy_for
 
@@ -162,6 +163,33 @@ class WriteGate:
             targets=policy.targets(arguments),
             rule=rule.name if rule is not None else None,
         )
+
+        grant = take_grant()
+        if grant is not None:
+            # A replay of a decided request. It is checked against what was actually
+            # approved rather than trusted: a grant that covered a different call would
+            # let a resume dispatch something no operator ever saw, and the transcript
+            # would show an approval beside it.
+            if not grant.matches(request.name, arguments):
+                self._record(
+                    request,
+                    policy="prompt",
+                    decision="denied",
+                    reason="approval grant does not match the recorded request",
+                    request_id=grant.request_id,
+                )
+                return self._refuse(
+                    request,
+                    "denied by HITL gate: approval grant does not match the recorded request",
+                )
+            self._record(
+                request,
+                policy="prompt",
+                decision="approved",
+                reason="replaying an approved request",
+                request_id=grant.request_id,
+            )
+            return await handler(request)
 
         if mode == "deny":
             decision = Decision(

@@ -30,8 +30,13 @@ __all__ = [
     "Correction",
     "MiddlewareStack",
     "ModelHandler",
+    "ModelWrappingHook",
+    "NamedHook",
+    "ReviewingHook",
+    "ShapingHook",
     "ToolHandler",
     "ToolRequest",
+    "ToolWrappingHook",
     "TurnContext",
 ]
 
@@ -88,15 +93,20 @@ ToolHandler = Callable[[ToolRequest], Awaitable[ToolResult]]
 
 
 @runtime_checkable
-class AgentHook(Protocol):
-    """A cross-cutting concern attached to the model/tool loop.
+class NamedHook(Protocol):
+    """The only thing every hook must have.
 
-    Every method is optional; the stack skips what a hook does not implement. A hook
-    that raises is logged and skipped rather than ending the run, because a run cut
-    short by a misbehaving accessory is worse than a run that lost one accessory.
+    A hook is identified by name in the audit log and in the warning written when one
+    misbehaves, so the name is what the stack genuinely requires. Everything else is
+    checked for at the point of use.
     """
 
     name: str
+
+
+@runtime_checkable
+class ShapingHook(NamedHook, Protocol):
+    """Shapes a request before it is sent."""
 
     def before_model(self, ctx: TurnContext, request: ModelRequest) -> ModelRequest | None:
         """Shape the request from loop state, before it is sent.
@@ -109,6 +119,11 @@ class AgentHook(Protocol):
             A replacement request, or None to leave it unchanged.
         """
         ...
+
+
+@runtime_checkable
+class ReviewingHook(NamedHook, Protocol):
+    """Inspects a completed turn and may intervene."""
 
     def after_model(self, ctx: TurnContext, response: ModelResponse) -> Correction | None:
         """Inspect a completed turn and decide whether to intervene.
@@ -125,6 +140,11 @@ class AgentHook(Protocol):
         """
         ...
 
+
+@runtime_checkable
+class ModelWrappingHook(NamedHook, Protocol):
+    """Owns the model round-trip."""
+
     async def wrap_model_call(
         self, ctx: TurnContext, request: ModelRequest, handler: ModelHandler
     ) -> ModelResponse:
@@ -140,6 +160,11 @@ class AgentHook(Protocol):
         """
         ...
 
+
+@runtime_checkable
+class ToolWrappingHook(NamedHook, Protocol):
+    """Owns one tool invocation."""
+
     async def wrap_tool_call(self, request: ToolRequest, handler: ToolHandler) -> ToolResult:
         """Own one tool invocation.
 
@@ -154,6 +179,41 @@ class AgentHook(Protocol):
             The result.
         """
         ...
+
+
+AgentHook = ShapingHook | ReviewingHook | ModelWrappingHook | ToolWrappingHook
+"""A hook implements at least one of the four phases, and the stack skips the rest.
+
+Declared as a union rather than as one protocol with four optional methods, because
+Python has no way to say a protocol member is optional: a single protocol naming all
+four would be satisfied by no real hook, which is what it was. The stack checks for each
+method at the point it would call it, so a hook that implements one phase is a valid
+hook. A hook that raises is logged and skipped rather than ending the run, because a run
+cut short by a misbehaving accessory is worse than a run that lost one accessory.
+"""
+
+
+_PHASES = (ShapingHook, ReviewingHook, ModelWrappingHook, ToolWrappingHook)
+
+
+def _check(hook: object) -> None:
+    """Refuse a hook that would be silently inert.
+
+    Each phase is dispatched only to the hooks that implement it, so a hook missing a
+    name, or implementing no phase at all, would simply never run. That is the failure
+    a stack is least likely to notice: nothing errors, and the concern the hook exists
+    to enforce is quietly absent. It is a startup error instead.
+
+    Args:
+        hook: The candidate.
+
+    Raises:
+        TypeError: When the hook has no name, or implements no phase.
+    """
+    if not isinstance(hook, NamedHook):
+        raise TypeError(f"{type(hook).__name__} is not a hook: it has no name")
+    if not any(isinstance(hook, phase) for phase in _PHASES):
+        raise TypeError(f"hook {hook.name!r} implements no phase and would never run")
 
 
 class MiddlewareStack:
@@ -181,15 +241,17 @@ class MiddlewareStack:
         """
         self.hooks = list(hooks)
         self._on_error = on_error or self._log_error
+        for hook in self.hooks:
+            _check(hook)
 
-    def _report(self, hook: AgentHook, phase: str, exc: BaseException) -> None:
+    def _report(self, hook: NamedHook, phase: str, exc: BaseException) -> None:
         self._on_error(getattr(hook, "name", type(hook).__name__), phase, exc)
 
     @staticmethod
     def _log_error(hook: str, phase: str, exc: BaseException) -> None:
         _log.warning("hook %s failed in %s and was skipped: %s", hook, phase, exc, exc_info=exc)
 
-    def _guard(self, hook: AgentHook, phase: str, call: Callable[[], Any]) -> Any:
+    def _guard(self, hook: NamedHook, phase: str, call: Callable[[], Any]) -> Any:
         try:
             return call()
         except Exception as exc:
@@ -207,7 +269,7 @@ class MiddlewareStack:
             The request after every hook has had a chance to shape it.
         """
         for hook in self.hooks:
-            if not hasattr(hook, "before_model"):
+            if not isinstance(hook, ShapingHook):
                 continue
             try:
                 shaped = hook.before_model(ctx, request)
@@ -229,7 +291,7 @@ class MiddlewareStack:
             The first correction requested, or None.
         """
         for hook in self.hooks:
-            if not hasattr(hook, "after_model"):
+            if not isinstance(hook, ReviewingHook):
                 continue
             try:
                 correction = hook.after_model(ctx, response)
@@ -255,13 +317,13 @@ class MiddlewareStack:
         """
         wrapped = handler
         for hook in reversed(self.hooks):
-            if not hasattr(hook, "wrap_model_call"):
+            if not isinstance(hook, ModelWrappingHook):
                 continue
             wrapped = self._wrap_model(hook, ctx, wrapped)
         return await wrapped(request)
 
     @staticmethod
-    def _wrap_model(hook: AgentHook, ctx: TurnContext, nxt: ModelHandler) -> ModelHandler:
+    def _wrap_model(hook: ModelWrappingHook, ctx: TurnContext, nxt: ModelHandler) -> ModelHandler:
         async def _call(request: ModelRequest) -> ModelResponse:
             return await hook.wrap_model_call(ctx, request, nxt)
 
@@ -283,13 +345,13 @@ class MiddlewareStack:
         """
         wrapped = handler
         for hook in reversed(self.hooks):
-            if not hasattr(hook, "wrap_tool_call"):
+            if not isinstance(hook, ToolWrappingHook):
                 continue
             wrapped = self._wrap_tool(hook, wrapped)
         return await wrapped(request)
 
     @staticmethod
-    def _wrap_tool(hook: AgentHook, nxt: ToolHandler) -> ToolHandler:
+    def _wrap_tool(hook: ToolWrappingHook, nxt: ToolHandler) -> ToolHandler:
         async def _call(request: ToolRequest) -> ToolResult:
             return await hook.wrap_tool_call(request, nxt)
 
