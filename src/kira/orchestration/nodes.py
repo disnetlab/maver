@@ -25,7 +25,7 @@ from kira.orchestration.routing import RoutingPolicy, apply_handback, pending_ha
 from kira.roles.base import RoleContext, RoleOutcome, RoleSpec, StateDelta
 from kira.roles.trace_summary import build_trace_summary
 
-__all__ = ["IncidentDeps", "NodeFn", "make_node"]
+__all__ = ["ContextBuilder", "IncidentDeps", "NodeFn", "RunRecorder", "make_node"]
 
 _log = logging.getLogger(__name__)
 

@@ -46,6 +46,15 @@ class PipelineSettings(SettingsGroup):
         "AGENT_MODE",
         description="Three typed roles, or one goal-only agent over a single transcript.",
     )
+    engine: Literal["langgraph", "sequential"] = setting(
+        "langgraph",
+        "KIRA_PIPELINE__ENGINE",
+        description=(
+            "Which executor walks the routing. Both run the same nodes and the same "
+            "predicates; sequential imports no framework and exists so the containment "
+            "claim is a supported configuration rather than a fixture."
+        ),
+    )
     max_turns: int = setting(
         20,
         "KIRA_PIPELINE__MAX_TURNS",

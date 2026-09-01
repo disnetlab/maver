@@ -92,11 +92,26 @@ def test_only_one_module_imports_the_graph_executor() -> None:
     replacing it would take days.
     """
     importers = [
-        path.relative_to(SRC).as_posix()
-        for path in SRC.rglob("*.py")
-        if "langgraph" in path.read_text(encoding="utf-8")
+        path.relative_to(SRC).as_posix() for path in SRC.rglob("*.py") if _imports_langgraph(path)
     ]
     assert importers == ["orchestration/graph.py"]
+
+
+def _imports_langgraph(path: pathlib.Path) -> bool:
+    """Say whether a module imports the executor.
+
+    Imports, not text. The engine setting names its two values as strings and a
+    docstring may explain the rule it is subject to; neither is a dependency, and a
+    substring scan cannot tell any of them apart.
+    """
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import) and any(
+            alias.name.split(".")[0] == "langgraph" for alias in node.names
+        ):
+            return True
+        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "langgraph":
+            return True
+    return False
 
 
 def test_the_permitted_surface_is_four_operations() -> None:
