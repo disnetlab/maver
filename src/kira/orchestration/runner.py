@@ -20,6 +20,7 @@ import logging
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -204,7 +205,12 @@ class _RunRecorder:
                 agent_name=role,
                 attempt=attempt,
                 status="running",
-                started_at="",
+                # A real instant, not a placeholder the store is expected to fill in.
+                # One backend accepted the empty string and ordered runs by insertion
+                # instead; the other refused it, and refusing it at the first role of
+                # every incident released the environment with nothing submitted, which
+                # grades as an agent that never answered.
+                started_at=datetime.now(UTC).isoformat(),
                 metadata={"after": after} if after else {},
             )
         )
