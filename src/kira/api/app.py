@@ -22,6 +22,7 @@ from kira.api.deps import Service
 from kira.api.health import router as health_router
 from kira.api.hitl import router as hitl_router
 from kira.api.incidents import router as incidents_router
+from kira.audit.store_sink import StoreSink
 from kira.llm.client import LLMClient
 from kira.memory.factory import build_storage
 from kira.memory.ports import ApprovalStore
@@ -90,6 +91,10 @@ def build_deployment(settings: Settings) -> Deployment:
         profile=profile,
         transport_for=transport_for,
         authority=_authority(settings, storage.approvals),
+        # Not the discarding default. Every model call, tool call, submission and
+        # authority decision is meant to reach the ordered per-incident log, and a run
+        # that built its events and dropped them is a run nobody can audit afterwards.
+        sink=StoreSink(storage.runs),
     )
 
 
