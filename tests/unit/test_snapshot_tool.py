@@ -291,3 +291,57 @@ async def test_a_failed_endpoints_read_does_not_manufacture_a_finding(tmp_path) 
 
     assert "0 endpoints" not in report
     assert "eps:?" in report
+
+
+def all_reads(**overrides: str) -> dict[str, str]:
+    """Every read the snapshot makes, empty unless a test cares about one."""
+    return {name: listing([]) for name in _RESOURCE.values()} | overrides
+
+
+async def test_a_termination_is_dated_against_the_incident_boundary(tmp_path: Path) -> None:
+    """The boundary was parsed, validated, carried on the scope — and never passed.
+
+    Everything that uses it was live and unreachable: the header line, the comparison,
+    and the label on a restart's termination time. The snapshot is the diagnosing role's
+    opening message, so without them every old restart in the namespace reads as evidence
+    of the incident, which is the failure the split exists to prevent.
+    """
+    pod = {
+        "metadata": {"name": "payment-7f9d", "namespace": "shop"},
+        "status": {
+            "phase": "Running",
+            "containerStatuses": [
+                {
+                    "name": "payment",
+                    "ready": True,
+                    "restartCount": 1,
+                    "lastState": {
+                        "terminated": {
+                            "reason": "Error",
+                            "exitCode": 1,
+                            "finishedAt": "2026-08-30T11:59:00Z",
+                        }
+                    },
+                }
+            ],
+        },
+    }
+    transport = FakeCluster(all_reads(pods=listing([pod])))
+    ctx = context(tmp_path, transport)
+    ctx.scope.namespace = "shop"
+    ctx.scope.observation_window_start = "2026-08-30T12:00:00Z"
+
+    rendered = await namespace_snapshot(ctx, "shop")
+
+    assert "Incident observation boundary: 2026-08-30T12:00:00Z" in rendered
+    assert "[BEFORE incident boundary]" in rendered
+
+
+async def test_another_namespace_is_not_dated_against_this_incident(tmp_path: Path) -> None:
+    """A boundary belongs to one incident. Labelling another namespace's terminations
+    against it would date them by an event that has nothing to do with them."""
+    ctx = context(tmp_path, FakeCluster(all_reads()))
+    ctx.scope.namespace = "shop"
+    ctx.scope.observation_window_start = "2026-08-30T12:00:00Z"
+
+    assert "Incident observation boundary" not in await namespace_snapshot(ctx, "other")

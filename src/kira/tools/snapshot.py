@@ -663,9 +663,11 @@ async def namespace_snapshot(ctx: ToolContext, namespace: str, since_minutes: in
         if _load_items(raw[key]) is None:
             raw[key] = await bounded(cmds[key])
 
-    # The incident observation boundary, and with it the BEFORE / AT-AFTER labels on
-    # termination times, arrives once the incident scope is a field on the context.
-    return _render(ns, since, raw)
+    # Only when the snapshot is of the incident's own namespace. A boundary belongs to
+    # one incident, and labelling another namespace's terminations against it would date
+    # them by an event that has nothing to do with them.
+    boundary = ctx.scope.observation_window_start if ctx.scope.namespace == ns else None
+    return _render(ns, since, raw, boundary)
 
 
 read_only("namespace_snapshot")
