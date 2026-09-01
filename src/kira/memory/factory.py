@@ -15,7 +15,9 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
+from typing import Protocol
 
 from kira.memory.backends.sqlite import SqliteStore
 from kira.memory.lifecycle import resolve_weights
@@ -26,6 +28,23 @@ from kira.settings.root import Settings
 __all__ = ["StorageStack", "build_storage"]
 
 _log = logging.getLogger(__name__)
+
+_MISSING_EXTRA = "memory.backend='postgres' needs the postgres extra: install kira[postgres]"
+
+
+class _Backend(SessionStore, ApprovalStore, RunStore, Protocol):
+    """What a backend module supplies, as one object.
+
+    The three operational ports, the corpus index beside them, and the way to close the
+    connection they share. One object rather than four, because the stores and the index share a database and
+    therefore a transaction boundary. This is the shape :func:`build_storage` needs and
+    the only thing it knows about either backend.
+    """
+
+    @property
+    def records(self) -> TextSearch: ...
+
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,16 +73,11 @@ def build_storage(settings: Settings) -> StorageStack:
             naming what to install. Raised here at startup rather than at the first
             incident, because a deployment that cannot persist has nothing useful to do.
     """
-    if settings.memory.backend == "postgres":
-        # The settings group already refuses this backend without a connection string,
-        # so reaching here means the driver, not the configuration, is what is absent.
-        raise ValueError(
-            "memory.backend='postgres' needs the postgres extra: install kira[postgres]"
-        )
-
-    path = _database_path(settings)
-    _log.info("opening the embedded experience store at %s", path)
-    store = SqliteStore(path)
+    store = (
+        _open_postgres(settings)
+        if settings.memory.backend == "postgres"
+        else _open_sqlite(settings)
+    )
     return StorageStack(
         sessions=store,
         approvals=store,
@@ -79,6 +93,52 @@ def build_storage(settings: Settings) -> StorageStack:
         ),
         close=store.close,
     )
+
+
+def _open_sqlite(settings: Settings) -> _Backend:
+    """Open the embedded database under this deployment's workspace."""
+    path = _database_path(settings)
+    _log.info("opening the embedded experience store at %s", path)
+    return SqliteStore(path)
+
+
+def _open_postgres(settings: Settings) -> _Backend:
+    """Open the server database, loading the driver only where it is needed.
+
+    Imported by name rather than with a statement so that the module needing the extra
+    never sits on the import path of an install without it, and because a function-local
+    import statement is a lint error in this repository.
+
+    Args:
+        settings: The run's settings.
+
+    Returns:
+        The server backend, its schema already created.
+
+    Raises:
+        ValueError: When the extra is not installed, naming what to install. The
+            settings group already refuses this backend without a connection string, so
+            reaching here means the driver rather than the configuration is what is
+            absent.
+    """
+    memory = settings.memory
+    if memory.postgres_dsn is None:  # pragma: no cover - the settings group refuses this
+        raise ValueError("memory.backend='postgres' requires memory.postgres_dsn")
+    try:
+        module = import_module("kira.memory.backends.postgres")
+    except ImportError as exc:
+        raise ValueError(f"{_MISSING_EXTRA} ({exc})") from exc
+    _log.info(
+        "opening the server experience store in schema %s for corpus %s",
+        memory.postgres_schema,
+        memory.corpus_id,
+    )
+    store: _Backend = module.PostgresStore(
+        memory.postgres_dsn.get_secret_value(),
+        schema=memory.postgres_schema,
+        corpus_id=memory.corpus_id,
+    )
+    return store
 
 
 def _database_path(settings: Settings) -> Path:

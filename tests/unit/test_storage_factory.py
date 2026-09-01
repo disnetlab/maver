@@ -1,6 +1,7 @@
 """Opening the configured stores, once, at startup."""
 
 import pathlib
+import sys
 
 import pytest
 
@@ -31,9 +32,16 @@ def test_the_embedded_database_lives_under_this_deployment_s_workspace(
 
 
 def test_an_unavailable_backend_fails_at_startup_and_says_what_to_install(
-    tmp_path: pathlib.Path,
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A deployment that cannot persist has nothing useful to do, so it should not
-    discover that on its first incident."""
+    discover that on its first incident.
+
+    The driver is hidden rather than assumed absent: this suite runs with the extra
+    installed, and the failure being pinned is the one an install without it gets.
+    """
+    monkeypatch.setitem(sys.modules, "psycopg", None)
+    monkeypatch.delitem(sys.modules, "kira.memory.backends.postgres", raising=False)
+
     with pytest.raises(ValueError, match=r"kira\[postgres\]"):
         build_storage(settings_for(tmp_path, backend="postgres", postgres_dsn="postgresql://x/y"))

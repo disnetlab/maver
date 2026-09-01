@@ -3,10 +3,11 @@
 # rather than being dropped, which is the difference between applying an overlay with
 # `-k` and applying this file with `-f`.
 #
-# The memory backend deliberately stays `embedded`. The settings layer accepts
-# `postgres` and the storage factory then refuses it at startup, naming the extra to
-# install, because that backend is not implemented yet. Setting it here would produce a
-# pod that cannot start.
+# The memory backend deliberately stays `embedded`. `postgres` is implemented and is the
+# right choice for a deployment whose records have to outlive the pod, but it needs the
+# image built with the postgres extra and `KIRA_MEMORY__POSTGRES_DSN` in the secret;
+# without both, the storage factory refuses it at startup rather than at the first
+# incident. Switching this key alone would produce a pod that cannot start.
 apiVersion: v1
 kind: ConfigMap
 metadata:

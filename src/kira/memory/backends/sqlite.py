@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from kira.contracts.lifecycle import LifecycleState, RunStatus
+from kira.memory.backends.sanitise import scrub, scrub_mapping, scrub_optional, scrub_text
 from kira.memory.bm25 import tokenize
 from kira.memory.ports import (
     AgentRunEventDraft,
@@ -154,47 +155,13 @@ def _parse_time(text: str) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
-def _scrub_text(text: str) -> str:
-    """Strip NUL from a string bound to a TEXT column.
-
-    A NUL is not merely ugly here. SQLite stores it but its own scalar functions treat
-    TEXT as NUL-terminated, so a value containing one reports the wrong ``length()`` and
-    stops matching ``LIKE`` past the byte; PostgreSQL cannot store it in ``text`` or
-    ``jsonb`` at all, and in the prototype one such byte in tool output failed the write,
-    which made the episode skip every submission and produced a stub result that read as
-    an agent that never answered. Removing it at the write boundary is a deliberate,
-    lossy choice: one unprintable byte is worth less than the record it would cost.
-    """
-    return text.replace("\x00", "") if "\x00" in text else text
-
-
-def _scrub(value: object) -> object:
-    if isinstance(value, str):
-        return _scrub_text(value)
-    if isinstance(value, dict):
-        return {_scrub(key): _scrub(item) for key, item in value.items()}
-    if isinstance(value, list | tuple):
-        return [_scrub(item) for item in value]
-    return value
-
-
 def _dumps(value: object) -> str:
     """Serialise for a JSON column, scrubbing NUL anywhere inside it."""
-    return json.dumps(_scrub(value))
-
-
-def _scrub_dict(value: dict[str, Any]) -> dict[str, Any]:
-    """What a dict looks like once stored, for a record handed straight back."""
-    scrubbed: dict[str, Any] = json.loads(_dumps(value))
-    return scrubbed
+    return json.dumps(scrub(value))
 
 
 def _dumps_optional(value: object | None) -> str | None:
     return None if value is None else _dumps(value)
-
-
-def _text(value: str | None) -> str | None:
-    return None if value is None else _scrub_text(value)
 
 
 def _loads(payload: str | None) -> dict[str, Any] | None:
@@ -367,7 +334,7 @@ class SqliteStore:
             ("plan_json", _dumps_optional(plan)),
             ("execution_json", _dumps_optional(execution_result)),
             ("verify_json", _dumps_optional(verify_result)),
-            ("notes", _text(notes)),
+            ("notes", scrub_optional(notes)),
         ):
             if value is not None:
                 assignments.append(f"{column} = ?")
@@ -423,7 +390,7 @@ class SqliteStore:
                 "awaiting_request_id = ?, ended_at = COALESCE(ended_at, ?) WHERE session_id = ?",
                 (
                     status.value,
-                    _text(current_stage),
+                    scrub_optional(current_stage),
                     _dumps_optional(checkpoint),
                     awaiting_request_id,
                     ended_at,
@@ -456,9 +423,9 @@ class SqliteStore:
         """
         stored = replace(
             record,
-            summary=_scrub_text(record.summary),
-            prompt=_text(record.prompt),
-            reason=_text(record.reason),
+            summary=scrub_text(record.summary),
+            prompt=scrub_optional(record.prompt),
+            reason=scrub_optional(record.reason),
             created_at=record.created_at or _now(),
         )
         with self._db.write() as conn:
@@ -549,7 +516,14 @@ class SqliteStore:
             cursor = conn.execute(
                 "UPDATE approvals SET status = ?, decided_at = ?, decided_by = ?, reason = ? "
                 "WHERE request_id = ? AND status = ?",
-                (status, _now(), _scrub_text(decided_by), _text(reason), request_id, "pending"),
+                (
+                    status,
+                    _now(),
+                    scrub_text(decided_by),
+                    scrub_optional(reason),
+                    request_id,
+                    "pending",
+                ),
             )
             if cursor.rowcount != 1:
                 return None
@@ -622,7 +596,7 @@ class SqliteStore:
                     record.ended_at,
                     _dumps_optional(record.output),
                     _dumps_optional(record.trace_summary),
-                    _text(record.error),
+                    scrub_optional(record.error),
                     _dumps(record.metadata),
                 ),
             )
@@ -657,7 +631,7 @@ class SqliteStore:
                     _now(),
                     _dumps_optional(output),
                     _dumps_optional(trace_summary),
-                    _text(error),
+                    scrub_optional(error),
                     agent_run_id,
                 ),
             )
@@ -739,7 +713,7 @@ class SqliteStore:
             pipeline_id=event.pipeline_id,
             seq=seq,
             event_type=event.event_type,
-            payload=_scrub_dict(event.payload),
+            payload=scrub_mapping(event.payload),
             created_at=event.created_at,
             role=event.role,
             tool_call_id=event.tool_call_id,
@@ -802,8 +776,8 @@ class SqliteRecordIndex:
                 "VALUES (?, ?, ?, ?)",
                 (
                     memory.session_id,
-                    _scrub_text(memory.evidence_text),
-                    _scrub_text(memory.lesson_text),
+                    scrub_text(memory.evidence_text),
+                    scrub_text(memory.lesson_text),
                     _dumps(payload),
                 ),
             )
