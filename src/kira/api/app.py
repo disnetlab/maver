@@ -42,6 +42,7 @@ from kira.orchestration.control import RunRegistry
 from kira.orchestration.jobs import (
     bind_deployment,
     schedule_approval_resume,
+    schedule_approval_sweep,
     schedule_approval_timeout,
     unbind_deployment,
 )
@@ -173,6 +174,10 @@ def create_app(
         # has to tell it which deployment it belongs to.
         bind_deployment(active)
         register_post_incident_hooks(active.settings)
+        # A decision recorded straight into the store — by the CLI from inside the pod,
+        # or by anything else holding it — has nothing else to wake the incident it
+        # unblocks.
+        schedule_approval_sweep(active.settings.authority.poll_interval_s)
         # Instrumented either way; only export depends on a collector being configured.
         # Code that runs only when someone is watching is code the measured runs never
         # exercised.

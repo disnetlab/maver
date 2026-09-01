@@ -19,6 +19,7 @@ from kira.memory.factory import build_storage
 from kira.memory.ports import ApprovalRecord
 from kira.middleware.authority import ApprovalPending
 from kira.middleware.human_approval import HumanApproval, approval_granted, take_grant
+from kira.orchestration import jobs
 from kira.orchestration.resume import ApprovalCheckpoint, denial_result, load_checkpoint
 from kira.orchestration.runner import Deployment, resume_after_decision, run_incident
 from kira.settings.authority import AuthoritySettings
@@ -606,4 +607,39 @@ async def test_a_resume_does_not_close_a_run_its_driver_owns(tmp_path: pathlib.P
     finished = deploy.storage.sessions.get_session(session.session_id)
     assert finished is not None
     assert finished.run_status not in ("completed", "failed")
+    deploy.storage.close()
+
+
+async def test_a_decision_recorded_in_the_store_is_noticed(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Three ways to decide were offered and only one of them worked.
+
+    The API route schedules the continuation itself. The CLI's default path writes to the
+    store directly — deliberately, because that is what works from inside a pod with no
+    port open — and nothing then woke the incident: not the API, and not the expiry sweep,
+    which passes over a request that has already been decided. The operator saw the
+    approval recorded and the run stayed parked. The setting describing how often a
+    decision made elsewhere is noticed had been declared from the start, and read nowhere.
+    """
+    deploy, session_id, _ = await park(tmp_path)
+    stored = deploy.storage.sessions.get_session(session_id)
+    assert stored is not None and stored.awaiting_request_id
+    request_id = stored.awaiting_request_id
+
+    scheduled: list[str] = []
+    monkeypatch.setattr(jobs, "schedule_approval_resume", scheduled.append)
+    jobs.bind_deployment(deploy)
+    try:
+        assert await jobs.sweep_decided_approvals() == "nothing waiting"
+
+        # The CLI's local path: straight into the store, no API, no scheduler.
+        deploy.storage.approvals.decide(
+            request_id, status="approved", decided_by="an operator", reason="ok"
+        )
+
+        assert await jobs.sweep_decided_approvals() == "resumed 1"
+        assert scheduled == [request_id]
+    finally:
+        jobs.unbind_deployment()
     deploy.storage.close()

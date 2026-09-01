@@ -197,6 +197,63 @@ async def _release_abandoned(session_id: str, adapter_name: str, deployment: Dep
         )
 
 
+async def sweep_decided_approvals(**_: Any) -> str:
+    """Continue any incident whose decision was recorded somewhere this process saw.
+
+    Three ways to decide were offered, and only one of them worked. The API route
+    schedules the continuation itself, but the CLI's default path writes to the store
+    directly — deliberately, because that is what works from inside a pod with no port
+    open — and a webhook could do the same. Those decisions were durable, correct, and
+    inert: the operator saw the approval recorded, and the incident stayed parked with
+    nothing left to wake it. Not even the expiry sweep, which passes over a request that
+    has already been decided.
+
+    So the store is the source of truth for a decision, and this is what notices one. The
+    setting that says how often has existed since the beginning, describing exactly this.
+
+    Args:
+        **_: Ignored. A restored job may carry arguments a later version added.
+
+    Returns:
+        A short status for the job log.
+    """
+    deployment = bound_deployment()
+    sessions = deployment.storage.sessions
+    resumed = 0
+    for status in ("approved", "denied", "timed_out"):
+        for record in deployment.storage.approvals.list_requests(status=status):
+            session = sessions.get_session(record.session_id)
+            if session is None or session.run_status != RunStatus.AWAITING_HUMAN.value:
+                continue
+            if session.awaiting_request_id != record.request_id:
+                continue
+            _log.info(
+                "approval %s was decided elsewhere; continuing incident %s",
+                record.request_id,
+                record.session_id,
+            )
+            schedule_approval_resume(record.request_id)
+            resumed += 1
+    return f"resumed {resumed}" if resumed else "nothing waiting"
+
+
+def schedule_approval_sweep(interval_s: int) -> None:
+    """Run the decided-elsewhere sweep on a repeating schedule.
+
+    Args:
+        interval_s: Seconds between sweeps.
+    """
+    scheduler_for(bound_deployment().settings.server.workdir).add_job(
+        sweep_decided_approvals,
+        "interval",
+        seconds=max(1, interval_s),
+        id="approval.sweep",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+
+
 def schedule_approval_timeout(request_id: str, expires_at: str) -> None:
     """Arm one request's expiry.
 

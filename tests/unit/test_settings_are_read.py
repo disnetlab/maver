@@ -40,7 +40,6 @@ DECLARED_FOR_UNBUILT_WORK = {
     # deleted because the shape of the configuration is part of the design, but an
     # operator setting one today changes nothing, and that is worth failing over the
     # day someone believes otherwise.
-    "authority.poll_interval_s": "no poller sweeps for decisions made elsewhere",
     "authority.webhook_url": "pause notification is not implemented",
     "authority.webhook_timeout_s": "pause notification is not implemented",
     "intake.kafka.topic": "the queue intake is a phase-two extra",
