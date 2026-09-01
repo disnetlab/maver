@@ -16,6 +16,9 @@ from kira.roles.policy import repair_submission
 from kira.roles.trace_summary import build_trace_summary
 from kira.tools.context import NullEvidencePolicy, redact
 
+pytestmark = pytest.mark.parity
+"""Prototype-pinned throughout: see the module docstring for where the data came from."""
+
 
 def response(**kw) -> ModelResponse:
     kw.setdefault("text", None)

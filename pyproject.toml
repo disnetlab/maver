@@ -191,6 +191,11 @@ asyncio_default_fixture_loop_scope = "function"
 markers = [
     "integration: requires a live cluster, database or model endpoint",
     "slow: deselect with -m 'not slow'",
+    # The checks that guard the published numbers, selectable on their own so a
+    # reviewer can run exactly those. A test earns this marker when its expectation
+    # was taken from the prototype or from an archived measurement, and not when it
+    # merely covers the same area: `make test-parity`.
+    "parity: pins behaviour measured on the research prototype",
 ]
 filterwarnings = ["error"]
 

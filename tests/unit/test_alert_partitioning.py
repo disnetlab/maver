@@ -68,6 +68,7 @@ def context(tmp_path: pathlib.Path, transport: FakeTransport, *, annotate: bool)
     )
 
 
+@pytest.mark.parity
 @pytest.mark.parametrize("case", sorted(FIXTURE), ids=str)
 def test_the_partitioning_matches_the_prototype(case: str) -> None:
     """Nothing is dropped and every bucket is labelled: a foreign alert can be a real

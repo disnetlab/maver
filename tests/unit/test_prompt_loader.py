@@ -113,6 +113,7 @@ def test_a_role_without_cluster_tools_may_not_declare_the_kubectl_marker() -> No
         compose_role_prompt("invented", retrieval_enabled=False, override="{{KUBECTL_GUIDANCE}}")
 
 
+@pytest.mark.parity
 @pytest.mark.parametrize(
     ("role", "expected"),
     [
@@ -139,6 +140,7 @@ def test_the_kubectl_block_map_mirrors_the_prototype(role: str, expected: str) -
 COMPOSED = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "composed_prompts"
 
 
+@pytest.mark.parity
 @pytest.mark.parametrize("role", SHIPPED_ROLES)
 @pytest.mark.parametrize("retrieval_enabled", [True, False])
 def test_composition_is_byte_identical_to_the_prototype(role: str, retrieval_enabled: bool) -> None:

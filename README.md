@@ -18,6 +18,7 @@ No telemetry leaves the cluster. The model runs on your own infrastructure.
 ```bash
 uv sync --all-extras
 make check                       # lint, types, and the whole test suite
+make test-parity                 # only the checks that pin the published numbers
 uv run kira config check         # validate the configuration a server would start on
 uv run kira serve                # listen on 0.0.0.0:8080
 python examples/run_incident.py examples/alerts/high-error-rate.json

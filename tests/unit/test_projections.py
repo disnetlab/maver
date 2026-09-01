@@ -189,6 +189,7 @@ def render(case: dict[str, Any]) -> dict[str, Any]:
 MARKER = "INCIDENT-BOUND (this incident only — not an answer for yours):"
 
 
+@pytest.mark.parity
 @pytest.mark.parametrize("name", sorted(BY_NAME))
 def test_projections_are_byte_identical_except_the_marker(name: str) -> None:
     """Every label, separator and template is corpus text and model-facing text at once.
@@ -219,6 +220,7 @@ def test_the_incident_bound_marker_is_always_present(name: str) -> None:
     assert MARKER in render(BY_NAME[name])["lesson_text"]
 
 
+@pytest.mark.parity
 @pytest.mark.skipif(not PROTOTYPE.exists(), reason="the prototype tree is not on disk")
 def test_the_golden_file_came_from_the_prototype() -> None:
     """Re-derive the golden file from the prototype so it cannot become our own output."""

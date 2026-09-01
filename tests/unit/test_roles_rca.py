@@ -29,6 +29,9 @@ from kira.tools.context import ToolContext
 from kira.tools.toolsets import build_toolset
 from kira.tools.workspace import SessionWorkspace
 
+pytestmark = pytest.mark.parity
+"""Prototype-pinned throughout: see the module docstring for where the data came from."""
+
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 
 FIXTURE = json.loads(

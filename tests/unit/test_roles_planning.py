@@ -11,6 +11,8 @@ import json
 import pathlib
 from typing import Any
 
+import pytest
+
 from kira.audit.journal import Journal, ListSink
 from kira.contracts.artifacts import RootCause
 from kira.contracts.routing import HandBack, Route
@@ -132,6 +134,7 @@ def context(
     return ctx, model, sink
 
 
+@pytest.mark.parity
 async def test_first_entry_carries_the_alert_and_the_diagnosis_it_must_not_revisit(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -143,6 +146,7 @@ async def test_first_entry_carries_the_alert_and_the_diagnosis_it_must_not_revis
     assert outcome.artifact is not None
 
 
+@pytest.mark.parity
 async def test_a_replan_keeps_the_cause_and_lists_the_plans_that_failed(
     tmp_path: pathlib.Path,
 ) -> None:

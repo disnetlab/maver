@@ -21,4 +21,43 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
+      # Deselects everything needing a live service. What needs a database is the
+      # postgres job below; what needs a cluster runs nowhere, and says so.
       - run: uv run pytest -m "not integration" --cov --cov-report=term-missing
+
+  # The backend the evaluation campaigns run on. The unit suite covers the memory
+  # ports and the contract suite covers this backend against them, but until this job
+  # existed nothing ran an incident on it, and the gap between the two held a defect
+  # that failed every incident here at its first role while the whole suite stayed
+  # green. Running these only where a developer happens to have a server is how that
+  # went unnoticed once already.
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: kira
+          POSTGRES_PASSWORD: kira
+          POSTGRES_DB: kira
+        ports:
+          - 5432:5432
+        # The job starts as soon as the container does, which is before the server
+        # accepts connections. Without this the first test races the database.
+        options: >-
+          --health-cmd "pg_isready -U kira -d kira"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      # --all-extras for psycopg: without the driver these tests skip at import, which
+      # is one of the two ways this job could report green having tested nothing. The
+      # target's --no-skips is the other half, and turns any skip into a failure.
+      - run: uv sync --all-extras --locked
+      - run: make test-postgres
+        env:
+          POSTGRES_TEST_DSN: postgresql://kira:kira@localhost:5432/kira

@@ -142,6 +142,7 @@ def context(
     return ctx, completion
 
 
+@pytest.mark.parity
 async def test_the_opening_turn_carries_the_diagnosis_and_the_approved_plan(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -153,6 +154,7 @@ async def test_the_opening_turn_carries_the_diagnosis_and_the_approved_plan(
     assert outcome.artifact is not None
 
 
+@pytest.mark.parity
 def test_a_stopped_kubelet_gets_the_directive_and_the_least_privileged_repair() -> None:
     """Cordoning, draining or patching cannot restore a node whose kubelet is down, so
     that one case opens on the host action instead of on a Kubernetes read."""

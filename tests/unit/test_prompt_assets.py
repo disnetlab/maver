@@ -16,6 +16,9 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.parity
+"""Prototype-pinned throughout: see the module docstring for where the data came from."""
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHIPPED = REPO_ROOT / "src" / "kira" / "prompts"
 

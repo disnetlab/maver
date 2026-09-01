@@ -1,6 +1,12 @@
 # Kira on a host outside the cluster, reaching the API server over a private network.
 #
-#   docker compose -f deploy/docker/docker-compose.yml up -d --build
+#   make compose-up
+#
+# or, without make, which is the same command with the revision stamp supplied by
+# hand:
+#
+#   REVISION=$(git rev-parse HEAD) \
+#     docker compose -f deploy/docker/docker-compose.yml up -d --build
 #
 # The service has no authentication and can issue cluster writes. Keep it on a private
 # network behind a reverse proxy; never publish it.
@@ -11,6 +17,13 @@ services:
       dockerfile: deploy/docker/Dockerfile
       args:
         BASE_IMAGE: python:3.12-slim
+        # The commit the image records and /healthz reports, so a deploy can tell the
+        # container it just built from a stale one nobody recreated. Compose cannot run
+        # git itself, so the value is interpolated from the environment and
+        # `make compose-up` supplies it; a bare `docker compose build` falls back to the
+        # same `unknown` the Dockerfile defaults to rather than failing.
+        REVISION: ${REVISION:-unknown}
+        VERSION: ${VERSION:-0.0.0+dev}
     image: kira:local
     container_name: kira
     restart: unless-stopped

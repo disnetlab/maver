@@ -14,6 +14,7 @@ FIXTURE = json.loads(
 )
 
 
+@pytest.mark.parity
 @pytest.mark.parametrize("case", FIXTURE["cases"], ids=lambda c: c["query"][:30])
 def test_the_scorer_matches_the_prototype_exactly(case: dict) -> None:
     """The ranker is the measured mechanism, so its arithmetic is a held-constant input.
@@ -28,6 +29,7 @@ def test_the_scorer_matches_the_prototype_exactly(case: dict) -> None:
         assert got == pytest.approx(want, abs=1e-12)
 
 
+@pytest.mark.parity
 @pytest.mark.parametrize(("text", "expected"), list(FIXTURE["tokenize"].items()))
 def test_tokenisation_matches_the_prototype(text: str, expected: list[str]) -> None:
     assert bm25.tokenize(text) == expected

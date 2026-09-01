@@ -129,6 +129,7 @@ def context(tmp_path: pathlib.Path, *, health_gate: bool = False) -> tuple[RoleC
     return ctx, model
 
 
+@pytest.mark.parity
 async def test_the_opening_turn_says_nothing_about_what_was_diagnosed_or_applied(
     tmp_path: pathlib.Path,
 ) -> None:

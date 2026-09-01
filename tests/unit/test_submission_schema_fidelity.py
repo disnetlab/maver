@@ -61,10 +61,12 @@ FIELD_CASES = [
 ]
 
 
+@pytest.mark.parity
 def test_the_fixture_covers_every_submission_model() -> None:
     assert set(FIXTURE) == set(MODELS)
 
 
+@pytest.mark.parity
 @pytest.mark.parametrize("name", sorted(MODELS), ids=sorted(MODELS))
 def test_the_class_level_description_matches_the_prototype(name: str) -> None:
     """Six of these shipped no description at all. That is the value to preserve."""
@@ -72,6 +74,7 @@ def test_the_class_level_description_matches_the_prototype(name: str) -> None:
     assert MODELS[name].model_json_schema().get("description") == expected
 
 
+@pytest.mark.parity
 @pytest.mark.parametrize(
     ("name", "field", "expected"), FIELD_CASES, ids=[f"{n}.{f}" for n, f, _ in FIELD_CASES]
 )
@@ -82,6 +85,7 @@ def test_every_field_description_matches_the_prototype(
     assert info.description == expected
 
 
+@pytest.mark.parity
 @pytest.mark.parametrize("name", sorted(MODELS), ids=sorted(MODELS))
 def test_no_field_was_added_or_removed(name: str) -> None:
     """A field added here changes what validates, on a schema held constant."""
@@ -128,6 +132,7 @@ def test_nested_step_models_add_nothing_at_the_items_level(
     assert "description" not in schema["$defs"][ref]
 
 
+@pytest.mark.parity
 def test_only_the_measured_container_repairs_are_attached() -> None:
     """The tolerant decoders exist where a measured failure justified them, nowhere else.
 

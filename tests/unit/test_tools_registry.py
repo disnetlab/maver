@@ -36,6 +36,7 @@ def read_only(name: str, **kwargs: object) -> ToolSpec:
 # --- what the model is sent -------------------------------------------------------
 
 
+@pytest.mark.parity
 @pytest.mark.parametrize("name", sorted(SCHEMAS))
 def test_submit_schemas_normalise_exactly_as_the_prototype(name: str) -> None:
     """The schema a submission validates against is a held-constant input.

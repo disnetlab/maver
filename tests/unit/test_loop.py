@@ -79,6 +79,7 @@ DISPATCH = {"get_logs": echo, "get_metrics": echo, "get_traces": echo, SUBMIT: e
 # --- fidelity: the text the model actually receives ------------------------------
 
 
+@pytest.mark.parity
 @pytest.mark.parametrize("key", sorted(k for k in PROTOTYPE if k != "compact_rescue"))
 def test_control_messages_are_byte_identical_to_the_prototype(key: str) -> None:
     """Corrective wording is a held-constant input to every published measurement.
@@ -141,6 +142,7 @@ def test_control_messages_are_byte_identical_to_the_prototype(key: str) -> None:
     assert rendered == PROTOTYPE[key]
 
 
+@pytest.mark.parity
 def test_compact_rescue_context_matches_the_prototype() -> None:
     """The rescue brief's section order, truncation and joining are all load-bearing."""
     built = compact_rescue_context(
