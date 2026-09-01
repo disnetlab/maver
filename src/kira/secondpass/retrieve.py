@@ -13,6 +13,7 @@ incorrect card is indistinguishable transplant poison, and MA+S has no nominator
 filter it.
 """
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -108,7 +109,14 @@ class StorePrecedents:
                 per_query[query.name] = ()
                 continue
             try:
-                hits = ctx.memory.search(query.text, scope=self.scope, exclude=exclude)
+                # Off the loop. The store is a database on another host and the port is
+                # synchronous, so called inline this holds the incident for as long as
+                # the database takes and nothing above can cut it short: a timeout is a
+                # coroutine, and a coroutine cannot run while the loop is inside a
+                # synchronous call. Same call, same reason, as the retrieval tool.
+                hits = await asyncio.to_thread(
+                    ctx.memory.search, query.text, scope=self.scope, exclude=exclude
+                )
             except Exception as exc:
                 raise PrecedentSourceError(f"searching for {query.name!r} failed: {exc}") from exc
             hits = hits[: self.k]

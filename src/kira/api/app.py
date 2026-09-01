@@ -29,6 +29,7 @@ from kira.api.deps import Service
 from kira.api.health import router as health_router
 from kira.api.hitl import router as hitl_router
 from kira.api.incidents import router as incidents_router
+from kira.audit.journal import EventSink
 from kira.audit.store_sink import StoreSink
 from kira.llm.client import LLMClient
 from kira.memory.factory import build_storage
@@ -107,6 +108,22 @@ def build_deployment(settings: Settings) -> Deployment:
     )
 
 
+def _flush_sink(sink: EventSink) -> None:
+    """Let the audit sink write its backlog, if it has one.
+
+    Asked for by name rather than declared on :class:`~kira.audit.journal.EventSink`,
+    because holding a backlog is one sink's implementation detail and the protocol is
+    what a role has to satisfy to be written to at all.
+    """
+    closer = getattr(sink, "close", None)
+    if closer is None:
+        return
+    try:
+        closer()
+    except Exception:
+        _log.exception("the audit sink did not shut down cleanly")
+
+
 async def _drain(service: Service, timeout_s: float) -> None:
     """Let the incidents already in flight finish before the process goes.
 
@@ -167,6 +184,11 @@ def create_app(
             shutdown_scheduler()
             unbind_deployment()
             if owned:
+                # Before the stores, because this is what writes to them: the sink
+                # queues its events rather than waiting on each one, so the tail of
+                # every incident is still in hand at this point. A deployment somebody
+                # else built is theirs to flush, like the stores under it.
+                _flush_sink(active.sink)
                 active.storage.close()
 
     docs = active.settings.server.environment != "production"

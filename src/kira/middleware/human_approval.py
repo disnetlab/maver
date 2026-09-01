@@ -15,6 +15,7 @@ as its first six argument tokens, so a patch showed the resource and not the pat
 — the only part that says what changes. Approving that is not review.
 """
 
+import asyncio
 import logging
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -172,7 +173,12 @@ class HumanApproval:
             created_at=now.isoformat(),
             expires_at=expires_at,
         )
-        self._store.create_request(record)
+        # Off the loop. This runs on every gated write, and it is the row a person is
+        # waiting to be shown: written inline it would hold the loop, and with it every
+        # other incident in the process and the route the operator reads it through.
+        # Ordered before the raise as it always was, so the pause is still atomic to a
+        # reader — a session never waits on a request that does not exist yet.
+        await asyncio.to_thread(self._store.create_request, record)
         if expires_at is not None and self._arm is not None:
             try:
                 self._arm(request_id, expires_at)

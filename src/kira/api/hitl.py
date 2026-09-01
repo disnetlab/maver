@@ -9,8 +9,16 @@ The payload is wider than the prototype's. It gained ``action``, ``selectors``,
 ``targets``, ``rule`` and ``command``, which are what make a request reviewable: the
 prototype summarised a write as its first six argument tokens, so a patch showed the
 resource and never the patch body.
+
+Every store call here goes to a thread. There is one event loop in this process: an
+incident runs as a task created inside a request handler, so a store call made inline by
+a route does not hold "the API" apart from the work — it holds the incidents too, and
+the readiness probe with them. The store is a database on another host and the port is
+synchronous, so that wait is the database's to end and no timeout written here could cut
+it short.
 """
 
+import asyncio
 import logging
 from typing import Any, Literal, cast
 
@@ -93,7 +101,9 @@ async def list_approval_requests(
         The matching requests.
     """
     selected = None if status in ("all", "") else cast(ApprovalStatus, status)
-    records = service.deployment.storage.approvals.list_requests(status=selected)
+    records = await asyncio.to_thread(
+        service.deployment.storage.approvals.list_requests, status=selected
+    )
     return {"requests": [request_payload(record) for record in records[:limit]]}
 
 
@@ -111,7 +121,7 @@ async def read_approval_request(request_id: str, service: ServiceDep) -> dict[st
     Raises:
         HTTPException: 404 when there is no such request.
     """
-    record = service.deployment.storage.approvals.get_request(request_id)
+    record = await asyncio.to_thread(service.deployment.storage.approvals.get_request, request_id)
     if record is None:
         raise HTTPException(status_code=404, detail="request_id not found")
     return request_payload(record)
@@ -142,7 +152,8 @@ async def decide_approval_request(
             The store decides by compare-and-set, so a duplicate cannot dispatch a
             second time and this is the same answer either way.
     """
-    record = service.deployment.storage.approvals.decide(
+    record = await asyncio.to_thread(
+        service.deployment.storage.approvals.decide,
         request_id,
         status="approved" if body.approve else "denied",
         decided_by=body.decided_by,

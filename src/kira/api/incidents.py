@@ -8,6 +8,12 @@ one, rather than either side being asked to move.
 
 Accepting an incident returns immediately. The run itself is minutes to hours of model
 calls, so the caller is given a session id and polls it.
+
+Which is why the store calls on these routes go to a thread. The run is a task on this
+same event loop, created here, so a read made inline by the poller is not a cost the API
+pays on its own — it stops the very incident being polled, and a harness polls one every
+few seconds for hours. The exception is :func:`_record_failure`, which runs once as a
+crashed run unwinds and is discussed there.
 """
 
 import asyncio
@@ -77,7 +83,7 @@ async def create_incident(body: IncidentRequest, service: ServiceDep) -> dict[st
     # is already on it, in the same shape, so the caller needs no new branch.
     existing = service.runs.find(fingerprint(body.alert))
     if existing is not None:
-        record = service.deployment.storage.sessions.get_session(existing)
+        record = await asyncio.to_thread(service.deployment.storage.sessions.get_session, existing)
         _log.info("alert already being handled by %s; not starting a second run", existing)
         return {
             "session_id": existing,
@@ -96,7 +102,7 @@ async def create_incident(body: IncidentRequest, service: ServiceDep) -> dict[st
             detail=f"already handling {limit} incidents",
             headers={"Retry-After": "60"},
         )
-    return start_incident(body.alert, target_stage=body.target_stage, service=service)
+    return await start_incident(body.alert, target_stage=body.target_stage, service=service)
 
 
 @router.get("/incidents/{session_id}")
@@ -114,7 +120,7 @@ async def read_incident(session_id: str, service: ServiceDep) -> dict[str, Any]:
     Raises:
         HTTPException: 404 when there is no such incident.
     """
-    record = service.deployment.storage.sessions.get_session(session_id)
+    record = await asyncio.to_thread(service.deployment.storage.sessions.get_session, session_id)
     if record is None:
         raise HTTPException(status_code=404, detail="incident not found")
     return {
@@ -137,8 +143,14 @@ async def read_incident(session_id: str, service: ServiceDep) -> dict[str, Any]:
     }
 
 
-def start_incident(alert: dict[str, Any], *, target_stage: str, service: Service) -> dict[str, Any]:
+async def start_incident(
+    alert: dict[str, Any], *, target_stage: str, service: Service
+) -> dict[str, Any]:
     """Open a session, put a task on it, and hand back what to poll.
+
+    A coroutine because it always was one in effect: it creates the incident's task, and
+    :func:`asyncio.create_task` has never been callable without a running loop. Saying so
+    is what lets the two writes below go to a thread.
 
     Args:
         alert: The payload that raised the incident.
@@ -150,10 +162,10 @@ def start_incident(alert: dict[str, Any], *, target_stage: str, service: Service
         session was opened.
     """
     sessions = service.deployment.storage.sessions
-    record = sessions.create_session(alert)
+    record = await asyncio.to_thread(sessions.create_session, alert)
     # A created session and a session being worked on are different things, and the
     # field a poller keys on has to tell them apart from the moment the task exists.
-    sessions.set_run_status(record.session_id, RunStatus.RUNNING)
+    await asyncio.to_thread(sessions.set_run_status, record.session_id, RunStatus.RUNNING)
 
     # Registered before the task, so a run that finishes inside one loop iteration
     # cannot be unregistered before it was ever registered.
@@ -206,7 +218,13 @@ async def run_incident_task(
 
 
 def _record_failure(deployment: Deployment, session_id: str, exc: BaseException) -> None:
-    """Leave a crashed incident in a state a reader can tell is over."""
+    """Leave a crashed incident in a state a reader can tell is over.
+
+    Written inline, unlike the routes above. This runs once, as the task unwinds, and
+    the incident it is closing has already stopped: there is nothing left for the loop
+    to be freed up for that these five writes are in the way of, and a hop off it would
+    only add a way for the record of a crash to be lost.
+    """
     detail = f"{type(exc).__name__}: {exc}"
     try:
         sessions = deployment.storage.sessions

@@ -7,6 +7,7 @@ a run crashes rather than finishes.
 """
 
 import asyncio
+import dataclasses
 import json
 import pathlib
 from typing import Any
@@ -358,5 +359,62 @@ async def test_intake_refuses_rather_than_queues_when_it_is_full(
         assert accepted.status_code == 202
         assert refused.status_code == 429
         assert refused.headers["Retry-After"] == "60"
+        await settle(app.state.service)
+    deploy.storage.close()
+
+
+class _NeedsTheLoop:
+    """A session store whose reads need the event loop to run something for them.
+
+    On the loop's own thread the answer can never come, so a route that reads inline
+    fails here on this clock instead of hanging the suite.
+    """
+
+    STALLED = 2.0
+
+    def __init__(self, sessions: Any, loop: asyncio.AbstractEventLoop) -> None:
+        self._sessions = sessions
+        self._loop = loop
+
+    async def _anything(self) -> None:
+        """Work for the loop to do, whose completion is the proof that it is free."""
+
+    def get_session(self, session_id: str) -> Any:
+        pending = asyncio.run_coroutine_threadsafe(self._anything(), self._loop)
+        try:
+            pending.result(timeout=self.STALLED)
+        except TimeoutError:
+            raise AssertionError(
+                "the poll route read the session store on the event loop, which stalled"
+            ) from None
+        return self._sessions.get_session(session_id)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._sessions, name)
+
+
+async def test_polling_an_incident_does_not_stall_the_incident(tmp_path: pathlib.Path) -> None:
+    """There is one event loop in this process, not one for the API and one for the runs.
+
+    An incident is a task created inside the intake handler, so it runs on the loop that
+    serves requests. A store read made inline by the poll route therefore does not cost
+    the API alone: it stops every incident this process is handling, and a harness polls
+    one of them every few seconds for hours.
+    """
+    deploy = deployment(tmp_path)
+    deploy = dataclasses.replace(
+        deploy,
+        storage=dataclasses.replace(
+            deploy.storage,
+            sessions=_NeedsTheLoop(deploy.storage.sessions, asyncio.get_running_loop()),
+        ),
+    )
+    app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
+
+    async with client(app) as http:
+        accepted = await http.post("/api/v1/incidents", json={"alert": ALERT})
+        assert accepted.status_code == 202
+        polled = await http.get(f"/api/v1/incidents/{accepted.json()['session_id']}")
+        assert polled.status_code == 200
         await settle(app.state.service)
     deploy.storage.close()
