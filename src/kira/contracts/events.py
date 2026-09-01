@@ -117,10 +117,15 @@ class InterventionEvent(BaseModel):
         "no_tool_nudge",
         "repeat_breaker",
         "finalizer_rescue",
+        "submit_guard",
         "turn_limit",
         "timeout",
     ]
-    action: Literal["warned", "refused", "rescued", "ended_run"]
+    action: Literal["warned", "refused", "rescued", "bypassed", "ended_run"]
+    """``bypassed`` is a control that was reached and not consulted, because its own
+    budget was spent. It is not ``warned``: nothing was said to the model and nothing
+    was refused. It exists as its own value because a control's dose is a divisor, and a
+    bypass counted as a consultation inflates the denominator."""
     detail: str
 
 

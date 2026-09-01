@@ -1,11 +1,14 @@
+import asyncio
 import json
 import pathlib
 
 import pytest
 
 from kira.audit.journal import Journal, ListSink
-from kira.contracts.events import InterventionEvent
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, ToolSpec, Usage
+from kira.contracts.events import InterventionEvent, SubmissionEvent
+from kira.llm.types import ModelRequest, ModelResponse, ToolCall, ToolResult, ToolSpec, Usage
+from kira.middleware.authority import ApprovalPending
+from kira.middleware.base import MiddlewareStack, ToolHandler, ToolRequest
 from kira.roles.loop import run_until_submit
 from kira.roles.policy import (
     LoopLimits,
@@ -234,6 +237,169 @@ async def test_a_rescue_context_never_holds_an_unanswered_tool_call() -> None:
     for message in sent:
         for pending in message.get("tool_calls") or []:
             assert pending["id"] in answered, "rescue context would be rejected as malformed"
+
+
+async def test_a_spiral_that_also_submits_is_still_a_spiral() -> None:
+    """Both circuit breakers were silent whenever the turn carried a submission.
+
+    The mixed-submit branch dispatched the other calls and then went straight back
+    around: it never scored them against the repeat breaker, and it reported a
+    submission-rejection count it never advanced. A model repeating one query beside a
+    premature submission therefore spent its entire turn budget with neither control
+    firing and with every rejection in the log reading as the first one.
+    """
+    turns = [
+        turn(call("get_logs", {"q": "x"}, id=f"t{i}"), call(SUBMIT, {"ok": True}, id=f"s{i}"))
+        for i in range(20)
+    ]
+    sink = ListSink()
+    result = await run_until_submit(
+        model=FakeModel(turns),
+        role="rca",
+        system="s",
+        tools=TOOLS,
+        dispatch=DISPATCH,
+        submit_tool=SUBMIT,
+        messages=[{"role": "user", "content": "go"}],
+        # No rescue, so the breaker's own verdict is what ends the run.
+        limits=LoopLimits(finalizer_rescues=0),
+        journal=Journal(sink, session_id="s1", stage="rca"),
+    )
+
+    assert result.status == "repeated_call_no_progress"
+    assert result.turns_used == LoopLimits().repeat_stop
+    breaks = [
+        e.payload
+        for e in sink.events
+        if isinstance(e.payload, InterventionEvent) and e.payload.control == "repeat_breaker"
+    ]
+    assert [b.action for b in breaks][-1] == "ended_run"
+    attempts = [
+        e.payload.attempt
+        for e in sink.events
+        if isinstance(e.payload, SubmissionEvent) and not e.payload.accepted
+    ]
+    assert attempts == list(range(1, len(attempts) + 1))
+
+
+async def test_a_guard_that_is_out_of_budget_says_so_before_it_lets_one_through() -> None:
+    """An exhausted guard accepts, and the acceptance has to be legible as one.
+
+    Accepting is deliberate: a run whose guard will never be satisfied still has to
+    end. What the log could not say is that the guard was never asked — the trailing
+    submission event was byte-identical to one the guard had passed. The guard's dose
+    is a divisor, and a bypass counted as a consultation inflates the denominator.
+    """
+    consulted = 0
+
+    def guard(args: dict, calls: int, messages: list) -> str:
+        nonlocal consulted
+        consulted += 1
+        return "never good enough"
+
+    model = FakeModel([turn(call(SUBMIT, {"ok": True}, id=f"s{i}")) for i in range(3)])
+    sink = ListSink()
+    result = await run_until_submit(
+        model=model,
+        role="rca",
+        system="s",
+        tools=TOOLS,
+        dispatch=DISPATCH,
+        submit_tool=SUBMIT,
+        messages=[{"role": "user", "content": "go"}],
+        submit_guard=guard,
+        limits=LoopLimits(submit_guard_rejections=2),
+        journal=Journal(sink, session_id="s1", stage="rca"),
+    )
+
+    assert result.submitted, "the acceptance itself is not what changed"
+    assert consulted == 2
+    bypassed = [
+        e.payload
+        for e in sink.events
+        if isinstance(e.payload, InterventionEvent) and e.payload.control == "submit_guard"
+    ]
+    assert [b.action for b in bypassed] == ["bypassed"]
+
+
+@pytest.mark.parametrize("raised_by", ["hook", "tool"])
+async def test_a_parallel_siblings_result_survives_the_pause_beside_it(raised_by: str) -> None:
+    """A pause unwinds the run; it does not unwind the calls running next to it.
+
+    ``asyncio.gather`` with the default ``return_exceptions=False`` propagates the pause
+    the moment it is raised and leaves the siblings running, so a write that had already
+    landed on the cluster reached no transcript. The resumed run then opened on a request
+    whose assistant turn carried a call nobody had answered — rejected outright by an
+    OpenAI-compatible server — and, had it got past that, would have reissued a write the
+    cluster had already taken. Unreachable today only because every shipped write stage
+    runs its calls serially, and one setting names another.
+
+    Both raisers, because a pause reaching the loop from a tool rather than from a hook
+    is the same defect in a different hat: the blanket ``except Exception`` around
+    dispatch answered it with an ``error:`` string, and the run carried on past the
+    decision it was waiting for.
+    """
+    written: list[str] = []
+    landed = asyncio.Event()
+
+    async def sibling_write(**kwargs: object) -> str:
+        written.append("applied")
+        landed.set()
+        return "written"
+
+    def pause(call_id: str, arguments: dict) -> ApprovalPending:
+        return ApprovalPending(
+            request_id="r1",
+            session_id="s1",
+            stage="rca",
+            tool_call_id=call_id,
+            tool_name="get_logs",
+            tool_arguments=dict(arguments),
+        )
+
+    async def pausing_tool(**kwargs: object) -> str:
+        # Pause only once the sibling's write has landed, so this is about what the
+        # pause leaves behind rather than about who won a race.
+        await landed.wait()
+        raise pause("p1", dict(kwargs))
+
+    class Pausing:
+        name = "pausing"
+
+        async def wrap_tool_call(self, request: ToolRequest, handler: ToolHandler) -> ToolResult:
+            if request.name != "get_logs":
+                return await handler(request)
+            await landed.wait()
+            raise pause(request.call_id, dict(request.arguments))
+
+    dispatch = {**DISPATCH, "get_metrics": sibling_write}
+    stack = MiddlewareStack()
+    if raised_by == "hook":
+        stack = MiddlewareStack([Pausing()])
+    else:
+        dispatch["get_logs"] = pausing_tool
+
+    model = FakeModel(
+        [turn(call("get_logs", {"q": "x"}, id="p1"), call("get_metrics", {"q": "y"}, id="w1"))]
+    )
+    with pytest.raises(ApprovalPending) as raised:
+        await run_until_submit(
+            model=model,
+            role="rca",
+            system="s",
+            tools=TOOLS,
+            dispatch=dispatch,
+            submit_tool=SUBMIT,
+            messages=[{"role": "user", "content": "go"}],
+            middleware=stack,
+        )
+
+    assert written == ["applied"]
+    # The continuation appends the paused call's own result and replays from here, so
+    # every other call in the turn has to be answered already.
+    checkpointed = raised.value.messages
+    answered = {m["tool_call_id"] for m in checkpointed if m["role"] == "tool"}
+    assert answered == {"w1"}
 
 
 # --- protocol behaviour the archive was measured under ---------------------------

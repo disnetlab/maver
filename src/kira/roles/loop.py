@@ -298,6 +298,53 @@ async def run_until_submit(
         log.record(InterventionEvent(control="finalizer_rescue", action="rescued", detail=reason))
         return True
 
+    def note_repeats(calls: Sequence[ToolCall], results: Sequence[ToolResult]) -> LoopResult | None:
+        """Score the calls a turn actually dispatched, and act on what the breaker says.
+
+        Shared by both dispatching paths rather than written out on each. A turn that
+        also carried a submission is still a turn that ran these calls, and scoring it
+        on one path only let a model repeat one query until its whole budget was gone
+        with the breaker never counting past one.
+
+        Args:
+            calls: The calls that were dispatched.
+            results: What each returned, in the same order.
+
+        Returns:
+            The run's result when the breaker ends it, or None to take another turn.
+        """
+        decision = repeats.observe([(c, r.content) for c, r in zip(calls, results, strict=True)])
+        if decision.stop:
+            names = ", ".join(decision.stop)
+            log.record(
+                InterventionEvent(control="repeat_breaker", action="ended_run", detail=names)
+            )
+            if request_rescue("repeated_call_no_progress"):
+                return None
+            return finish("repeated_call_no_progress", reason=f"repeated_call_no_progress: {names}")
+        if decision.strong or decision.soft:
+            strong = bool(decision.strong)
+            tripped = decision.strong if strong else decision.soft
+            alternatives = [
+                t.name for t in tools if t.name != submit_tool and t.name not in decision.repeated
+            ]
+            message = repeat_breaker_message(
+                tools=tripped,
+                count=decision.count,
+                submit_tool=submit_tool,
+                alternatives=alternatives,
+                strong=strong,
+            )
+            state.transcript.append({"role": "user", "content": message})
+            log.record(
+                InterventionEvent(
+                    control="repeat_breaker",
+                    action="refused" if strong else "warned",
+                    detail=f"{', '.join(tripped)} repeated {decision.count} times",
+                )
+            )
+        return None
+
     for turn_index in range(limits.turn_budget):
         rescue_turn = state.rescue_turns_left > 0
         if rescue_turn:
@@ -441,6 +488,11 @@ async def run_until_submit(
                 else:
                     try:
                         content = str(await fn(**req.arguments))
+                    except ApprovalPending:
+                        # A pause is not a failed call. Reported to the model as one, the
+                        # run would carry on past the decision it is waiting for, and the
+                        # request an operator answers would belong to nothing.
+                        raise
                     except Exception as exc:  # surfaced to the model as a tool error
                         content = f"error: {type(exc).__name__}: {exc}"
                 return ToolResult(tool_call_id=req.call_id, name=req.name, content=content)
@@ -480,7 +532,26 @@ async def run_until_submit(
         async def execute_all(calls: Sequence[ToolCall]) -> list[ToolResult]:
             if serial_tool_calls:
                 return [await execute(c) for c in calls]
-            return list(await asyncio.gather(*(execute(c) for c in calls)))
+            settled = await asyncio.gather(*(execute(c) for c in calls), return_exceptions=True)
+            pending: ApprovalPending | None = None
+            results: list[ToolResult] = []
+            for outcome in settled:
+                if isinstance(outcome, ToolResult):
+                    results.append(outcome)
+                elif isinstance(outcome, ApprovalPending):
+                    pending = pending or outcome
+                else:
+                    raise outcome
+            if pending is None:
+                return results
+            # A sibling of the paused call has already run to completion — gather does
+            # not unwind the others — so whatever it wrote is already written. Letting
+            # the pause propagate on its own left that call unanswered in the transcript
+            # the resume replays from, which is both a malformed request and an
+            # invitation for the role to reissue a write the cluster has taken.
+            state.transcript.extend(serialise_tool_results(results))
+            pending.messages = list(state.transcript)
+            raise pending
 
         # A submission is terminal, so it must be the only call in its turn. Emitted
         # alongside investigation tools it is premature by construction: the model has
@@ -504,14 +575,21 @@ async def run_until_submit(
                 rescue_ctx.append_results(rendered)
             state.transcript.append({"role": "user", "content": rejection})
             for c in submit_calls:
+                # A handed-back submission, so it spends from the same budget the parse
+                # and validation rejections spend from. Reporting the count without ever
+                # advancing it made every rejection in a spiral read as the first one.
+                state.submit_rejections += 1
                 log.record(
                     SubmissionEvent(
                         artifact=c.name,
                         accepted=False,
-                        attempt=state.submit_rejections + 1,
+                        attempt=state.submit_rejections,
                         validation_error="mixed_tool_calls",
                     )
                 )
+            ended = note_repeats(others, executed)
+            if ended is not None:
+                return ended
             continue
 
         if submit_calls:
@@ -546,23 +624,40 @@ async def run_until_submit(
             # policy, and letting it answer first means an incomplete-but-recognisable
             # submission can be turned into useful feedback instead of consuming the
             # generic validation-retry budget.
-            if submit_guard is not None and state.guard_rejections < limits.submit_guard_rejections:
-                verdict = await _maybe_await(
-                    submit_guard(dict(call_.arguments), state.tool_calls_made, state.transcript)
-                )
-                if verdict:
-                    state.guard_rejections += 1
-                    is_note = str(verdict).startswith(_GUARD_CONTENT_MARK)
-                    _hand_back(state, call_, str(verdict), note=is_note, rescue=handed_back)
+            if submit_guard is not None:
+                if state.guard_rejections >= limits.submit_guard_rejections:
+                    # Taken anyway: a run whose guard will never be satisfied still has
+                    # to end. What the record could not say is that this one was never
+                    # asked — the acceptance that follows is otherwise identical to a
+                    # guard's approval, and the guard's dose is what an arm's gap is
+                    # divided by.
                     log.record(
-                        SubmissionEvent(
-                            artifact=call_.name,
-                            accepted=False,
-                            attempt=state.guard_rejections,
-                            validation_error=str(verdict),
+                        InterventionEvent(
+                            control="submit_guard",
+                            action="bypassed",
+                            detail=(
+                                f"guard budget spent after {state.guard_rejections} "
+                                "rejections; submission accepted unconsulted"
+                            ),
                         )
                     )
-                    continue
+                else:
+                    verdict = await _maybe_await(
+                        submit_guard(dict(call_.arguments), state.tool_calls_made, state.transcript)
+                    )
+                    if verdict:
+                        state.guard_rejections += 1
+                        is_note = str(verdict).startswith(_GUARD_CONTENT_MARK)
+                        _hand_back(state, call_, str(verdict), note=is_note, rescue=handed_back)
+                        log.record(
+                            SubmissionEvent(
+                                artifact=call_.name,
+                                accepted=False,
+                                attempt=state.guard_rejections,
+                                validation_error=str(verdict),
+                            )
+                        )
+                        continue
 
             # Repair the narrow slips that are worth repairing before validating. A
             # confidence of 1.4 is a formatting mistake, not a failure to diagnose, and
@@ -624,38 +719,9 @@ async def run_until_submit(
         if rescue_turn and rescue_ctx is not None:
             rescue_ctx.append_results(rendered)
 
-        decision = repeats.observe(
-            [(c, r.content) for c, r in zip(response.tool_calls, results, strict=True)]
-        )
-        if decision.stop:
-            names = ", ".join(decision.stop)
-            log.record(
-                InterventionEvent(control="repeat_breaker", action="ended_run", detail=names)
-            )
-            if request_rescue("repeated_call_no_progress"):
-                continue
-            return finish("repeated_call_no_progress", reason=f"repeated_call_no_progress: {names}")
-        if decision.strong or decision.soft:
-            strong = bool(decision.strong)
-            tripped = decision.strong if strong else decision.soft
-            alternatives = [
-                t.name for t in tools if t.name != submit_tool and t.name not in decision.repeated
-            ]
-            message = repeat_breaker_message(
-                tools=tripped,
-                count=decision.count,
-                submit_tool=submit_tool,
-                alternatives=alternatives,
-                strong=strong,
-            )
-            state.transcript.append({"role": "user", "content": message})
-            log.record(
-                InterventionEvent(
-                    control="repeat_breaker",
-                    action="refused" if strong else "warned",
-                    detail=f"{', '.join(tripped)} repeated {decision.count} times",
-                )
-            )
+        ended = note_repeats(response.tool_calls, results)
+        if ended is not None:
+            return ended
 
     log.record(
         InterventionEvent(control="turn_limit", action="ended_run", detail="max_turns_exceeded")
