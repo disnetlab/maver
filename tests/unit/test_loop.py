@@ -19,6 +19,7 @@ from kira.roles.policy import (
     no_tool_nudge_message,
     repeat_breaker_message,
 )
+from kira.settings.groups import RuntimeSettings
 from kira.tools.errors import call_failed
 
 FIXTURE = (
@@ -587,3 +588,45 @@ def test_a_failed_command_is_recorded_as_one(content: str, failed: bool) -> None
     two transports disagreed about the same failure in the log that exists to be
     compared across them."""
     assert call_failed(content) is failed
+
+
+MEASURED_LIMITS: dict[str, int] = {
+    "max_turns": 20,
+    "no_tool_nudges": 2,
+    "submit_guard_rejections": 2,
+    "submit_validation_rejections": 3,
+    "repeat_soft": 3,
+    "repeat_hard": 6,
+    "repeat_stop": 9,
+    "max_tool_calls_per_turn": 8,
+    "keep_reasoning_max_chars": 6000,
+    "finalizer_rescues": 1,
+    "finalizer_min_content_chars": 800,
+    "finalizer_tool_results": 8,
+    "finalizer_tool_result_chars": 1600,
+    "finalizer_assistant_chars": 6000,
+}
+
+
+def test_the_loop_limits_are_the_ones_that_were_measured() -> None:
+    """LoopLimits says its defaults are what every published measurement used, and
+    nothing checked it.
+
+    Each of these is a held-constant input to a published number, and each has the
+    property that changing it produces a perfectly plausible run: fewer turns, one more
+    rescue, a breaker that fires sooner. There is no error to notice and no symptom to
+    investigate, only a different number.
+    """
+    limits = LoopLimits()
+    assert {name: getattr(limits, name) for name in MEASURED_LIMITS} == MEASURED_LIMITS
+    assert set(MEASURED_LIMITS) == set(limits.__dataclass_fields__)
+
+
+def test_the_settings_default_to_the_same_limits() -> None:
+    """Two places hold these numbers: the dataclass the loop reads, and the settings
+    group an operator sets. They are only equal by hand, and a run resolves through the
+    settings — so the dataclass's defaults could drift into being documentation of a
+    configuration nothing produces.
+    """
+    resolved = LoopLimits.from_settings(RuntimeSettings(), max_turns=MEASURED_LIMITS["max_turns"])
+    assert {name: getattr(resolved, name) for name in MEASURED_LIMITS} == MEASURED_LIMITS
