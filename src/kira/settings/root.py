@@ -1,17 +1,20 @@
 """The root settings object, its validation, and the run's configuration snapshot."""
 
+import logging
 import os
 from collections.abc import Iterator, Mapping
 from difflib import get_close_matches
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, NamedTuple
 
 from pydantic import AliasChoices, Field, model_validator
 from pydantic.fields import FieldInfo
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 
+from kira.settings.arms import Arm, arm_digest, load_arm
 from kira.settings.authority import AuthoritySettings
-from kira.settings.base import ENV_PREFIX, SettingsGroup
+from kira.settings.base import ENV_PREFIX, SettingsGroup, setting
 from kira.settings.groups import (
     IntakeSettings,
     MemorySettings,
@@ -43,14 +46,21 @@ as a misspelling and refuse to start the very container that sets it.
 __all__ = [
     "ADAPTER_ENV_NAME",
     "AliasedField",
+    "ArmOverrides",
+    "ArmYamlSource",
     "Settings",
+    "arm_overrides",
     "get_settings",
     "known_env_names",
     "legacy_names_in_use",
     "load_settings",
     "reset_settings",
+    "resolved_arm",
     "unknown_prefixed_names",
 ]
+
+
+_log = logging.getLogger(__name__)
 
 
 class Settings(SettingsGroup):
@@ -60,6 +70,20 @@ class Settings(SettingsGroup):
     environment names. The object is frozen: settings are injected into the components
     that need them, never re-read, so a run's behaviour cannot change underneath it.
     """
+
+    arm: str | None = setting(
+        None,
+        f"{ENV_PREFIX}ARM",
+        description=(
+            "The experiment arm this process runs, read from <arm_dir>/<name>.yaml. "
+            "Unset means no overlay: field defaults plus whatever the environment says."
+        ),
+    )
+    arm_dir: Path = setting(
+        Path("configs/arms"),
+        f"{ENV_PREFIX}ARM_DIR",
+        description="Where arm files live. Baked into the image alongside the profiles.",
+    )
 
     pipeline: PipelineSettings = Field(default_factory=PipelineSettings)
     model: ModelSettings = Field(default_factory=ModelSettings)
@@ -83,6 +107,35 @@ class Settings(SettingsGroup):
             "free of the field names of environments it must not know about."
         ),
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Put the arm file below every source an operator can reach.
+
+        Args:
+            settings_cls: The class being built.
+            init_settings: Values passed to the constructor.
+            env_settings: The modern prefixed names.
+            dotenv_settings: A developer's ``.env``.
+            file_secret_settings: The secrets directory.
+
+        Returns:
+            The sources, highest precedence first.
+        """
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            file_secret_settings,
+            ArmYamlSource(settings_cls),
+        )
 
     @model_validator(mode="after")
     def _cross_group_invariants(self) -> "Settings":
@@ -136,10 +189,154 @@ class Settings(SettingsGroup):
             A JSON-safe mapping with every secret rendered as a mask.
         """
         return {
+            "arm_digest": self._arm_digest(),
             "settings": self.model_dump(mode="json"),
             "sampling_overrides": sorted(self.sampling_overrides()),
             "legacy_env_names": sorted(legacy_names_in_use()),
         }
+
+    def _arm_digest(self) -> str | None:
+        """Hash the arm file this configuration was resolved from.
+
+        Returns:
+            The file's SHA-256, or None when no arm is named or the file has since
+            become unreadable. Recorded as absent rather than raised: the digest is
+            provenance beside a name the dump already carries, and an incident must not
+            fail to start over a file the process has already read.
+        """
+        if not self.arm:
+            return None
+        try:
+            return arm_digest(self.arm, self.arm_dir)
+        except OSError:
+            return None
+
+
+class ArmYamlSource(PydanticBaseSettingsSource):
+    """The named arm's settings, pruned to what no higher-precedence source supplied.
+
+    Placing a source last is not enough on its own. Every settings group is an
+    independent ``BaseSettings`` that reads its own environment, so a nested mapping
+    handed down by the parent arrives as that group's init keyword arguments — and init
+    outranks the group's own environment source. An arm file would therefore beat
+    ``KIRA_MEMORY__ENABLED`` and ``MEMORY_ENABLED`` alike, which is the one thing a
+    deployment whose control surface is a ConfigMap cannot have, and the one thing a
+    campaign whose run scripts export flat names cannot have either.
+
+    So the overlay is pruned before it is returned. Each group the arm mentions is built
+    once with no arguments, which runs that group's own chain, and every field it
+    resolved for itself is dropped from the overlay. What is left is only the settings
+    nothing above the arm had an opinion about.
+    """
+
+    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
+        """Unused: the overlay is resolved as a whole, not field by field.
+
+        Args:
+            field: The field being resolved.
+            field_name: Its name.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        raise NotImplementedError
+
+    def __call__(self) -> dict[str, Any]:
+        """Read the arm named by the sources above this one.
+
+        Returns:
+            The pruned overlay, empty when no arm is named.
+
+        Raises:
+            FileNotFoundError: When the named arm does not exist.
+            ValueError: When the arm names a setting nothing reads.
+        """
+        state = _by_field_name(self.settings_cls, self.current_state)
+        name = state.get("arm")
+        if not name:
+            return {}
+        directory = state.get("arm_dir") or self.settings_cls.model_fields["arm_dir"].default
+        arm = load_arm(str(name), Path(str(directory)))
+        return _prune(self.settings_cls, arm.settings, state, set(state))
+
+
+def _by_field_name(model: type[BaseSettings], state: Mapping[str, Any]) -> dict[str, Any]:
+    """Re-key what the sources above produced, from environment names to field names.
+
+    A source reports an aliased field under whichever of its accepted names it matched,
+    so the raw state is a mixture of the two vocabularies and neither one alone answers
+    "did anything above set this?".
+
+    Args:
+        model: The settings class the state belongs to.
+        state: What the higher-precedence sources produced.
+
+    Returns:
+        Field name to value, for every field something above supplied.
+    """
+    lowered = {name.lower(): value for name, value in state.items()}
+    found: dict[str, Any] = {}
+    for name, info in model.model_fields.items():
+        for candidate in (name, *_alias_names(info)):
+            if candidate.lower() in lowered:
+                found[name] = lowered[candidate.lower()]
+                break
+    return found
+
+
+def _prune(
+    model: type[BaseSettings],
+    overlay: Mapping[str, Any],
+    supplied: Mapping[str, Any],
+    claimed: set[str],
+    path: str = "",
+) -> dict[str, Any]:
+    """Drop the overlay values something above the arm already decided.
+
+    Args:
+        model: The settings class this level of the overlay describes.
+        overlay: The arm's values for it.
+        supplied: What higher-precedence sources produced at this level.
+        claimed: Field names those sources set.
+        path: Dotted path accumulated from enclosing levels, for error messages.
+
+    Returns:
+        The surviving overlay.
+
+    Raises:
+        ValueError: When the arm names a field the model does not declare.
+    """
+    kept: dict[str, Any] = {}
+    for key, value in overlay.items():
+        info = model.model_fields.get(key)
+        if info is None:
+            raise ValueError(
+                f"arm sets {path}{key}, which is not a setting. An arm file is what a "
+                "published number is attributed to, so a key nothing reads is a claim "
+                "about a configuration that never ran."
+            )
+        annotation = info.annotation
+        if (
+            isinstance(annotation, type)
+            and issubclass(annotation, BaseSettings)
+            and isinstance(value, Mapping)
+        ):
+            below = supplied.get(key) or {}
+            # Building the group runs its own chain: the modern name, the legacy names
+            # it aliases, .env and the secrets directory. What it resolved for itself
+            # is precisely what the arm must not displace.
+            nested = _prune(
+                annotation,
+                value,
+                below,
+                set(annotation().model_fields_set) | set(below),
+                f"{path}{key}.",
+            )
+            if nested:
+                kept[key] = nested
+        elif key not in claimed:
+            kept[key] = value
+    return kept
 
 
 class AliasedField(NamedTuple):
@@ -254,6 +451,47 @@ def legacy_names_in_use(env: Mapping[str, str] | None = None) -> dict[str, str]:
     return found
 
 
+class ArmOverrides(NamedTuple):
+    """Arm values the resolved configuration displaced, split by whether that is legal."""
+
+    allowed: dict[str, tuple[Any, Any]]
+    """Paths the environment may override. Reported, never refused."""
+    broken: dict[str, tuple[Any, Any]]
+    """Paths the arm claims to hold constant, which makes that claim false."""
+
+
+def resolved_arm(settings: Settings) -> Arm | None:
+    """Load the arm a configuration was resolved under.
+
+    Args:
+        settings: The resolved configuration.
+
+    Returns:
+        The arm, or None when none is named.
+
+    Raises:
+        FileNotFoundError: When the named arm has since disappeared.
+    """
+    return load_arm(settings.arm, settings.arm_dir) if settings.arm else None
+
+
+def arm_overrides(settings: Settings) -> ArmOverrides:
+    """Find where the resolved configuration departs from the arm it names.
+
+    Args:
+        settings: The resolved configuration.
+
+    Returns:
+        The departures, empty on both counts when no arm is named.
+    """
+    arm = resolved_arm(settings)
+    if arm is None:
+        return ArmOverrides({}, {})
+    found = arm.contradicted_by(settings.model_dump(mode="json"))
+    broken = {path: pair for path, pair in found.items() if arm.is_held_constant(path)}
+    return ArmOverrides({p: v for p, v in found.items() if p not in broken}, broken)
+
+
 def load_settings() -> Settings:
     """Build settings from the environment, validating everything.
 
@@ -261,6 +499,8 @@ def load_settings() -> Settings:
         A frozen settings object.
 
     Raises:
+        ValueError: When a prefixed name is unrecognised, or when the environment
+            overrides something the named arm claims to hold constant.
         pydantic.ValidationError: When any value is missing, malformed, or
             inconsistent with another group.
     """
@@ -275,7 +515,54 @@ def load_settings() -> Settings:
             "A misspelled name is indistinguishable from an unset one, so this is a "
             "startup failure rather than a silent default."
         )
-    return Settings()
+    settings = Settings()
+    if broken := arm_overrides(settings).broken:
+        detail = "; ".join(
+            f"{path}: arm says {declared!r}, resolved to {actual!r}"
+            for path, (declared, actual) in sorted(broken.items())
+        )
+        raise ValueError(
+            f"the environment contradicts what arm {settings.arm!r} holds constant: "
+            f"{detail}. Held constant is what licenses reading a gap between two arms "
+            "as single-variable, so this is a startup failure rather than a run whose "
+            "comparison quietly means something else."
+        )
+    _warn_if_the_arm_disarms_the_gate(settings)
+    return settings
+
+
+def _warn_if_the_arm_disarms_the_gate(settings: Settings) -> None:
+    """Say out loud when a named arm is what turned the human approval gate off.
+
+    Every shipped arm sets the authority to auto, because a measured campaign cannot
+    park on a person. That was inert while arm files were read by nothing, and wiring
+    them up made one line in a research configuration disable the approval gate on a
+    process holding cluster write credentials. It is what the arm intends and documents,
+    and the environment still outranks it — but a safety default that changes because a
+    file was finally being read is exactly the kind of quiet flip this system is
+    supposed to be legible about.
+    """
+    arm = resolved_arm(settings)
+    if arm is None or settings.authority.mode != "auto":
+        return
+    declared = _at_path(arm.settings, "authority.mode")
+    if declared != "auto":
+        return
+    _log.warning(
+        "arm %r sets authority.mode=auto: cluster writes will not be reviewed by a "
+        "human in this process. Set KIRA_AUTHORITY__MODE to override it.",
+        settings.arm,
+    )
+
+
+def _at_path(mapping: Mapping[str, Any], path: str) -> Any:
+    """Read a dotted path out of a nested mapping, or None if it is not there."""
+    current: Any = mapping
+    for part in path.split("."):
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(part)
+    return current
 
 
 def _closest(name: str, known: set[str]) -> str | None:

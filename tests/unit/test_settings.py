@@ -1,14 +1,23 @@
 """The settings model: aliases, validation, redaction, and immutability."""
 
+import logging
+from pathlib import Path
 from types import UnionType
 from typing import Literal, Union, get_args, get_origin
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from kira.settings import Settings, VerifySettings, legacy_names_in_use, load_settings
+from kira.settings.arms import arm_digest
 from kira.settings.authority import AuthorityRule, AuthoritySettings
-from kira.settings.root import AliasedField, _iter_aliases, unknown_prefixed_names
+from kira.settings.root import (
+    AliasedField,
+    _iter_aliases,
+    reset_settings,
+    unknown_prefixed_names,
+)
 
 ALIASED = list(_iter_aliases(Settings))
 IDS = [f.modern for f in ALIASED]
@@ -65,6 +74,8 @@ _COMPANIONS: dict[str, dict[str, str]] = {
 # and a mapping. Explicit here rather than making the deriver understand pydantic types,
 # with the substring the value should be recognisable by once loaded.
 _EXPLICIT_PROBES: dict[str, tuple[str, str]] = {
+    # A real arm, because the name is resolved during the load rather than stored.
+    "KIRA_ARM": ("ma-v", "ma-v"),
     "KIRA_AUTHORITY__RULES": ('[{"name": "probe7", "mode": "deny"}]', "probe7"),
     "KIRA_AUTHORITY__WEBHOOK_URL": ("https://probe7.example.com/", "probe7.example.com"),
     "KIRA_MEMORY__LIFECYCLE_WEIGHTS": ('{"invalidated": 0.7}', "0.7"),
@@ -194,6 +205,80 @@ class TestValidation:
         monkeypatch.setenv("KIRA_REVISION", "9f3c1ab")
         assert unknown_prefixed_names() == []
         assert load_settings().server.port == 8080
+
+
+class TestArmFiles:
+    """An arm file is only a document until something resolves it into the settings."""
+
+    def test_a_named_arm_reaches_the_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Every key in configs/arms/ was inert: nothing read the files at runtime.
+
+        The result was a published configuration that could not be selected, while two
+        shipped artefacts told a reader it could.
+        """
+        monkeypatch.setenv("KIRA_ARM", "ma-s")
+        s = load_settings()
+        assert (s.arm, s.pipeline.mode, s.authority.mode) == ("ma-s", "multi", "auto")
+        assert (s.secondpass.enabled, s.secondpass.gate) == (True, "quality")
+        assert (s.memory.top_k, s.memory.role_retrieval) == (3, False)
+
+    def test_the_environment_outranks_the_arm_file(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A ConfigMap is the deployment control surface and an arm file is not.
+
+        Merging an arm as constructor arguments inverts this, because init outranks
+        every environment source. It also inverts it one level down, where each group
+        reads its own environment and a mapping from the parent arrives as that group's
+        own init arguments.
+        """
+        monkeypatch.setenv("KIRA_ARM", "ma-s")
+        monkeypatch.setenv("KIRA_MEMORY__TOP_K", "9")
+        s = load_settings()
+        assert s.memory.top_k == 9
+        assert s.secondpass.gate == "quality", "the rest of the arm still applies"
+
+    def test_a_legacy_name_outranks_the_arm_file(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Required, not incidental: the evaluation run scripts export the flat names.
+
+        An arm file that could silently override one would change what a campaign
+        measured while the operator read the value they exported.
+        """
+        monkeypatch.setenv("KIRA_ARM", "ma-s")
+        monkeypatch.setenv("MEMORY_SEARCH_TOP_K", "9")
+        assert load_settings().memory.top_k == 9
+
+    def test_an_override_of_a_held_constant_setting_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Held constant is what licenses reading a two-arm gap as single-variable."""
+        monkeypatch.setenv("KIRA_ARM", "ma")
+        monkeypatch.setenv("MAX_TURNS", "8")
+        with pytest.raises(ValueError, match="holds constant"):
+            load_settings()
+
+    def test_the_arm_reaches_the_run_record(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A frozen arm carries a published number, so a later edit has to be detectable."""
+        monkeypatch.setenv("KIRA_ARM", "ma-v")
+        snapshot = load_settings().snapshot()
+        assert snapshot["settings"]["arm"] == "ma-v"
+        assert snapshot["arm_digest"] == arm_digest("ma-v", Path("configs/arms"))
+
+    def test_a_misnamed_arm_is_a_startup_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Otherwise the run is attributed to an arm whose settings never applied."""
+        monkeypatch.setenv("KIRA_ARM", "ma-x")
+        with pytest.raises(FileNotFoundError, match="available"):
+            load_settings()
+
+    def test_an_arm_key_nothing_reads_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The root ignores extra keys, so a mistyped path would apply nothing, quietly."""
+        arm = yaml.safe_load(Path("configs/arms/ma.yaml").read_text())
+        arm["settings"]["memory"]["enabldd"] = False
+        (tmp_path / "ma.yaml").write_text(yaml.safe_dump(arm))
+        monkeypatch.setenv("KIRA_ARM", "ma")
+        monkeypatch.setenv("KIRA_ARM_DIR", str(tmp_path))
+        with pytest.raises(ValueError, match=r"memory\.enabldd, which is not a setting"):
+            load_settings()
 
 
 class TestLegacyVocabulary:
@@ -378,3 +463,24 @@ def test_a_group_can_be_built_in_code_by_field_name() -> None:
     assert built.mode == "auto"
     assert [r.name for r in built.rules] == ["r"]
     assert built.timeout_s == 60
+
+
+def test_an_arm_that_disarms_the_approval_gate_says_so(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Every shipped arm sets the authority to auto, because a measured campaign cannot
+    park on a person. That was inert while nothing read arm files, so wiring them up
+    made one line in a research configuration disable the approval gate on a process
+    holding cluster write credentials. The environment still outranks it; what must not
+    happen is that the flip is silent."""
+    monkeypatch.setenv("KIRA_ARM", "ma-s")
+    reset_settings()
+    with caplog.at_level(logging.WARNING, logger="kira.settings.root"):
+        settings = load_settings()
+
+    assert settings.authority.mode == "auto"
+    assert any("will not be reviewed by a human" in r.getMessage() for r in caplog.records)
+
+    monkeypatch.setenv("KIRA_AUTHORITY__MODE", "prompt")
+    reset_settings()
+    assert load_settings().authority.mode == "prompt"

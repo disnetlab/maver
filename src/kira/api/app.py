@@ -87,7 +87,8 @@ def build_deployment(settings: Settings) -> Deployment:
     # What this process is actually running, in one line an operator reads in the pod's
     # log. A campaign is only reconstructible if that is recorded beside its results.
     _log.info(
-        "serving profile %s under authority %s, workspace %s",
+        "serving arm %s, profile %s under authority %s, workspace %s",
+        settings.arm or "none",
         profile.name,
         settings.authority.mode,
         settings.server.workdir,

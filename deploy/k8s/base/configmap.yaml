@@ -1,7 +1,15 @@
 # What this deployment runs, in the fifteen-odd keys a deployment actually sets. The
-# mechanism configuration lives in an arm file and the whole sampling set in a model
-# profile, both baked into the image and both recorded by digest in every run's
-# configuration snapshot, so this file does not restate them.
+# whole sampling set lives in a model profile baked into the image, so this file names
+# the profile rather than restating it.
+#
+# It names no arm, and states the mechanism keys itself. An arm file is an experiment
+# configuration: it pins every mechanism at once and says `authority.mode: auto`, which
+# is right for an unattended benchmark and wrong for a service holding cluster write
+# permissions. A deployment reproducing a published arm sets `KIRA_ARM` instead and
+# drops the mechanism keys below — the arm's name and the digest of its file then land
+# in every run's configuration snapshot, and a name overridden key by key here is worse
+# provenance than no name at all. The environment still wins where the two disagree,
+# except on a setting the arm declares it holds constant, which refuses to start.
 #
 # Every name here is one the settings layer recognises. A KIRA_-prefixed name it does
 # not recognise is a startup failure and not a silent default, which is what makes a

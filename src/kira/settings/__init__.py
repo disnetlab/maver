@@ -6,7 +6,7 @@ dump. Every group's fields also answer to the flat names the research prototype 
 so existing evaluation run scripts keep working unchanged.
 """
 
-from kira.settings.arms import Arm, load_arm
+from kira.settings.arms import Arm, arm_digest, load_arm
 from kira.settings.authority import AuthorityRule, AuthoritySettings
 from kira.settings.base import ENV_PREFIX, SettingsGroup, group_config, setting
 from kira.settings.groups import (
@@ -26,16 +26,20 @@ from kira.settings.groups import (
 )
 from kira.settings.profiles import ModelProfile, SamplingSet, load_profile
 from kira.settings.root import (
+    ArmOverrides,
     Settings,
+    arm_overrides,
     get_settings,
     legacy_names_in_use,
     load_settings,
     reset_settings,
+    resolved_arm,
 )
 
 __all__ = [
     "ENV_PREFIX",
     "Arm",
+    "ArmOverrides",
     "AuthorityRule",
     "AuthoritySettings",
     "IntakeSettings",
@@ -55,6 +59,8 @@ __all__ = [
     "ToolSettings",
     "TransportSettings",
     "VerifySettings",
+    "arm_digest",
+    "arm_overrides",
     "get_settings",
     "group_config",
     "legacy_names_in_use",
@@ -62,5 +68,6 @@ __all__ = [
     "load_profile",
     "load_settings",
     "reset_settings",
+    "resolved_arm",
     "setting",
 ]

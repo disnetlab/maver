@@ -13,13 +13,21 @@ varies rather than trusting that it did.
 """
 
 from fnmatch import fnmatch
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-__all__ = ["Arm", "Registration", "compare_constants", "deep_merge", "load_arm"]
+__all__ = [
+    "Arm",
+    "Registration",
+    "arm_digest",
+    "compare_constants",
+    "deep_merge",
+    "load_arm",
+]
 
 
 class Registration(BaseModel):
@@ -88,6 +96,40 @@ class Arm(BaseModel):
         """
         return deep_merge(defaults, self.settings)
 
+    def is_held_constant(self, path: str) -> bool:
+        """Report whether a dotted setting path is one this arm claims not to vary.
+
+        Args:
+            path: A dotted setting path.
+
+        Returns:
+            True when any held-constant pattern matches.
+        """
+        return any(fnmatch(path, pattern) for pattern in self.holds_constant)
+
+    def contradicted_by(self, resolved: dict[str, Any]) -> dict[str, tuple[Any, Any]]:
+        """Find settings this arm declares that the resolved configuration does not carry.
+
+        The environment outranks an arm file by design, so a difference here is not by
+        itself a fault: an operator overriding one key without editing a frozen file is
+        the deployment contract working. It is a fault on a path the arm claims to hold
+        constant, because that claim is what licenses reading a two-arm gap as
+        single-variable, and nothing else checks it.
+
+        Args:
+            resolved: The settings tree the process actually resolved.
+
+        Returns:
+            Dotted path to the declared and resolved pair, empty when the file applied
+            as written.
+        """
+        actual = _flatten(resolved)
+        return {
+            path: (declared, actual[path])
+            for path, declared in _flatten(self.settings).items()
+            if path in actual and actual[path] != declared
+        }
+
     def constant_values(self, resolved: dict[str, Any]) -> dict[str, Any]:
         """Extract the settings this arm claims to hold constant.
 
@@ -99,11 +141,7 @@ class Arm(BaseModel):
         """
         flat = _flatten(resolved)
         flat["model_profile"] = self.model_profile
-        return {
-            path: value
-            for path, value in flat.items()
-            if any(fnmatch(path, pattern) for pattern in self.holds_constant)
-        }
+        return {path: value for path, value in flat.items() if self.is_held_constant(path)}
 
 
 def deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -197,3 +235,23 @@ def load_arm(name: str, directory: Path) -> Arm:
             "run record cites, so the two must agree"
         )
     return arm
+
+
+def arm_digest(name: str, directory: Path) -> str:
+    """Hash one arm file's bytes, so a frozen arm's drift is detectable after the fact.
+
+    An arm marked frozen has a published number measured on it. Recording the digest in
+    every run's configuration snapshot is what lets a later reader tell a rerun of that
+    configuration from a rerun of a file that has since been edited.
+
+    Args:
+        name: The arm's stem, matching its filename.
+        directory: Where arm files live.
+
+    Returns:
+        The file's SHA-256, hex encoded.
+
+    Raises:
+        OSError: When the file cannot be read.
+    """
+    return sha256((directory / f"{name}.yaml").read_bytes()).hexdigest()

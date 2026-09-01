@@ -29,7 +29,7 @@ from kira.memory.factory import build_storage
 from kira.memory.ports import ApprovalStatus, ApprovalStore
 from kira.roles.registry import RoleRegistryError, validate_roles
 from kira.settings.profiles import load_profile
-from kira.settings.root import Settings, legacy_names_in_use, load_settings
+from kira.settings.root import Settings, arm_overrides, legacy_names_in_use, load_settings
 
 app = typer.Typer(
     name="kira",
@@ -143,6 +143,8 @@ def config_show(as_json: JsonOption = False) -> None:
         return
     for name, value in sorted(_flatten(snapshot["settings"]).items()):
         typer.echo(f"{name} = {value}")
+    if snapshot["arm_digest"]:
+        typer.echo(f"arm digest: {snapshot['arm_digest']}")
     for legacy, modern in sorted(legacy_names_in_use().items()):
         typer.echo(f"legacy name in use: {legacy} -> {modern}")
 
@@ -153,11 +155,18 @@ def config_check() -> None:
 
     Exits non-zero with one line per problem, so a misconfigured deployment is caught by
     an operator running a command rather than by an incident arriving.
+
+    A setting the environment takes back from the named arm is printed rather than
+    refused: overriding one key without editing a frozen file is the deployment
+    contract working. Refusing is reserved for a path the arm claims to hold constant,
+    which ``load_settings`` does, because there the override makes the arm's own claim
+    false and the comparison it licenses stops being single-variable.
     """
     try:
         settings = load_settings()
         load_profile(settings.model.profile, settings.model.profile_dir)
         validate_roles()
+        overridden = arm_overrides(settings).allowed
     except ValidationError as exc:
         for error in exc.errors():
             typer.echo(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}", err=True)
@@ -165,6 +174,8 @@ def config_check() -> None:
     except (FileNotFoundError, RoleRegistryError, ValueError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2) from exc
+    for path, (declared, actual) in sorted(overridden.items()):
+        typer.echo(f"arm override: {path} = {actual} (arm {settings.arm} says {declared})")
     typer.echo("ok")
 
 
