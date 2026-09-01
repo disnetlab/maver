@@ -9,6 +9,7 @@ from kira.roles import (  # noqa: F401 - imported for their registrations
     execution,
     planning,
     rca,
+    single,
     verify,
 )
 from kira.roles.base import RoleContext, RoleOutcome, RoleSpec, StateDelta
