@@ -1,0 +1,17 @@
+{
+  "alertname": "HighErrorRate",
+  "namespace": "shop",
+  "service": "frontend",
+  "severity": "critical",
+  "description": "5xx rate on the frontend service is above threshold",
+  "observation_window_start": "2026-09-01T09:00:00Z",
+  "labels": {
+    "namespace": "shop",
+    "job": "frontend",
+    "alertname": "HighErrorRate"
+  },
+  "annotations": {
+    "summary": "frontend is returning 5xx to 12% of requests",
+    "runbook_url": "https://runbooks.example.com/high-error-rate"
+  }
+}
