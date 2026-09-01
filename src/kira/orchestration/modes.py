@@ -13,12 +13,12 @@ the comparison the task exists to make.
 
 import logging
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, cast
 
 from kira.contracts.state import IncidentState, TargetStage
 from kira.orchestration.engine import Engine, StageHook
-from kira.orchestration.nodes import IncidentDeps, make_node
+from kira.orchestration.nodes import IncidentDeps, NodeFn, make_node
 from kira.roles.registry import get_role
 from kira.settings.root import Settings
 
@@ -33,6 +33,13 @@ class ModeContext:
 
     deps: IncidentDeps
     engine: Engine
+    nodes: Mapping[str, NodeFn] = field(default_factory=dict)
+    """The composed roles, as the graph would run them.
+
+    Carried rather than rebuilt, because a mode that built its own would run a role
+    without whatever wraps it — a diagnosis-only task under an arm that second-guesses
+    its diagnosis would then be a different arm, silently.
+    """
     on_stage: StageHook | None = None
 
 
@@ -126,8 +133,14 @@ async def run_diagnose(state: IncidentState, ctx: ModeContext) -> IncidentState:
 async def _run_one(
     role: str, state: IncidentState, ctx: ModeContext, *, announce: str | None
 ) -> IncidentState:
-    """Run one role through the same wrapper the graph uses, and merge its delta."""
-    delta = await make_node(get_role(role), ctx.deps)(state)
+    """Run one role through the same wrapper the graph uses, and merge its delta.
+
+    Composed if the incident's own composition names it, and wrapped plainly otherwise:
+    a role outside the graph, like the single-agent configuration, has nothing composed
+    around it to look up.
+    """
+    node = ctx.nodes.get(role) or make_node(get_role(role), ctx.deps)
+    delta = await node(state)
     merged = cast(IncidentState, {**state, **delta})
     if announce is not None and ctx.on_stage is not None:
         await ctx.on_stage(announce, merged)

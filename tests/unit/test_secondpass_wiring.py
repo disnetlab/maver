@@ -167,3 +167,37 @@ async def test_the_helpers_run_on_the_auxiliary_sampling_set(
             assert sampling is not None and sampling.temperature == 0.0
             assert sampling.presence_penalty is None
     storage.close()
+
+
+async def test_a_diagnosis_only_task_still_gets_its_second_opinion(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A mode that built its own node would run the diagnosis without whatever the arm
+    wraps around it, so a diagnosis-only task under an arm that second-guesses its
+    diagnosis would silently be a different arm."""
+    settings = Settings(
+        server=ServerSettings(workdir=tmp_path),
+        memory=MemorySettings(enabled=True, learning_enabled=False, role_retrieval=False),
+        verify=VerifySettings(enabled=False),
+        secondpass=SecondPassSettings(enabled=True, gate="quality", delivery="context"),
+    )
+    storage = build_storage(settings)
+    model = FakeModel()
+    deploy = Deployment(
+        settings=settings,
+        storage=storage,
+        completion=model,
+        profile=PROFILE,
+        transport_for=lambda session_id: FakeTransport(),
+        sink=ListSink(),
+    )
+    session = storage.sessions.create_session(ALERT)
+
+    final = await run_incident(
+        ALERT, session.session_id, deploy, target_stage="diagnose", fire_post_hooks=False
+    )
+
+    assert model.callers.count("secondpass.gate") == 1
+    assert model.callers.count("rca") == 2
+    assert final["plan"] is None
+    storage.close()

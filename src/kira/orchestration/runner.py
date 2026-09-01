@@ -249,9 +249,13 @@ The prototype's row said `failed`, which made a deliberate stop indistinguishabl
 crash in every count taken downstream. See :mod:`kira.orchestration.outcomes`."""
 
 
-def _engine(deployment: Deployment, deps: IncidentDeps, resources: IncidentResources) -> Engine:
-    """Build the configured executor over the same nodes either one would run."""
-    nodes = _nodes(deployment, deps, resources)
+def _engine(deployment: Deployment, deps: IncidentDeps, nodes: Mapping[str, NodeFn]) -> Engine:
+    """Build the configured executor over the nodes it is given.
+
+    Given rather than built here, so the executor and every mode run the same objects.
+    Two compositions of one incident are equivalent today and one refactor away from
+    not being.
+    """
     if deployment.settings.pipeline.engine == "sequential":
         return SequentialEngine(nodes, deps.policy)
     return LangGraphEngine(build_graph(nodes, deps.policy))
@@ -548,12 +552,14 @@ async def _run_mode(
     incident_span: Any,
 ) -> IncidentState:
     """Run the chosen mode and record what it came to."""
+    nodes = _nodes(deployment, deps, resources)
     try:
         final_state = await MODES[mode](
             state,
             ModeContext(
                 deps=deps,
-                engine=_engine(deployment, deps, resources),
+                engine=_engine(deployment, deps, nodes),
+                nodes=nodes,
                 on_stage=on_stage,
             ),
         )
