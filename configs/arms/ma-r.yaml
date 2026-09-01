@@ -15,7 +15,18 @@ registered:
   hypothesis: "memory helps as a candidate nominator rather than as context"
 settings:
   pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2, auto_snapshot: true}
-  memory:     {enabled: true, role_retrieval: true, learning_enabled: true, playbook: true, top_k: 5}
+  memory:
+    enabled: true
+    role_retrieval: true
+    learning_enabled: true
+    playbook: true
+    top_k: 5
+    # Pinned, and not to the shipped value. Kira floors a hit at 0.5 of its lexical
+    # score per query token so retrieval can answer that nothing is comparable; the
+    # prototype shipped that floor off and no campaign ever set it, so the cells this
+    # arm reproduces admitted every text match. Inheriting the floor here would cut the
+    # precedent dose the arm's result is read against.
+    min_score_per_token: 0.0
   verify:     {enabled: false}
   secondpass:
     enabled: true

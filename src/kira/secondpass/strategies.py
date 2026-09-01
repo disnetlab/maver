@@ -91,7 +91,8 @@ def policy_for(settings: SecondPassSettings, memory: MemorySettings) -> SecondPa
 
     Args:
         settings: The second-pass group.
-        memory: The memory group, which supplies the per-query retrieval depth.
+        memory: The memory group, whose top_k is the ceiling the store can return
+            and therefore the ceiling on a query leg.
 
     Returns:
         The composition to run, or None when the mechanism is disabled.
@@ -114,9 +115,9 @@ def policy_for(settings: SecondPassSettings, memory: MemorySettings) -> SecondPa
 def _apply(
     base: SecondPassPolicy, settings: SecondPassSettings, memory: MemorySettings
 ) -> SecondPassPolicy:
-    """Overlay the four numbers an arm may legitimately vary.
+    """Overlay the five numbers an arm may legitimately vary.
 
-    Only four, because everything else about a composition is what gives it its name.
+    Only five, because everything else about a composition is what gives it its name.
     An arm that wants a different gate, briefer or selector is a different arm and says
     so in its own file.
     """
@@ -136,5 +137,18 @@ def _apply(
         )
     retriever = base.retriever
     if isinstance(retriever, StorePrecedents):
-        retriever = replace(retriever, k=memory.top_k, cap=settings.max_precedents)
-    return replace(base, gate=gate, briefer=briefer, retriever=retriever)
+        # The composition owns the per-leg depth. Three hits per leg against MA+R's
+        # five is part of what separates the two, so reading it off memory.top_k left
+        # MA+S unable to run the value its own module publishes. What memory.top_k
+        # still does here is impose a ceiling rather than assert a depth: the store's
+        # retriever is built at that k, so a shallower one cannot hand a leg more than
+        # it returns and a policy claiming otherwise would misreport the dose.
+        retriever = replace(
+            retriever, k=min(retriever.k, memory.top_k), cap=settings.max_precedents
+        )
+    selector = base.selector
+    if isinstance(selector, BlindSelector):
+        selector = BlindSelector(
+            max_tokens=settings.selector_max_tokens, timeout_s=settings.selector_timeout_s
+        )
+    return replace(base, gate=gate, briefer=briefer, retriever=retriever, selector=selector)

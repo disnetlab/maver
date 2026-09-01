@@ -86,6 +86,10 @@ def build_storage(settings: Settings) -> StorageStack:
         retriever=Retriever(
             text=store.records,
             k=settings.memory.top_k,
+            # Threaded rather than defaulted, because the floor decides how many
+            # precedents a run is served and a campaign that ran without one has no
+            # other way to say so.
+            min_score_per_token=settings.memory.min_score_per_token,
             # The session row, not the record's write-time snapshot, is the authority on
             # a record's standing, so the retriever re-reads it as it ranks.
             states=store.get_states,

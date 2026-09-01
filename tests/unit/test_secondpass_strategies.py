@@ -22,6 +22,7 @@ from kira.secondpass import (
     MAR,
     MAS,
     RESAMPLE,
+    BlindSelector,
     FamilyAssignmentBrief,
     GateVerdict,
     JournalEmitter,
@@ -309,7 +310,12 @@ def test_delivery_critique_is_rejected() -> None:
         SecondPassSettings(delivery=cast(Any, "critique"))
 
 
-def test_an_arm_may_vary_the_four_numbers_and_nothing_else() -> None:
+def test_an_arm_may_vary_the_five_numbers_and_nothing_else() -> None:
+    """The selector's two are here because they were the settings nothing applied.
+
+    A run record dumps the whole settings tree, so a bound computed once for sending
+    and again for recording is a record that says 400 about a call made at 1600.
+    """
     policy = policy_for(
         SecondPassSettings(
             enabled=True,
@@ -317,6 +323,8 @@ def test_an_arm_may_vary_the_four_numbers_and_nothing_else() -> None:
             delivery="context",
             gate_max_tokens=400,
             max_precedents=2,
+            selector_max_tokens=400,
+            selector_timeout_s=20,
         ),
         MemorySettings(top_k=3),
     )
@@ -326,9 +334,23 @@ def test_an_arm_may_vary_the_four_numbers_and_nothing_else() -> None:
     assert policy.gate.max_tokens == 400
     assert isinstance(policy.retriever, StorePrecedents)
     assert (policy.retriever.k, policy.retriever.cap) == (3, 2)
+    assert isinstance(policy.selector, BlindSelector)
+    assert (policy.selector.max_tokens, policy.selector.timeout_s) == (400, 20)
     # The shape is what gives the composition its name and never moves with an arm.
     assert type(policy.briefer) is type(MAS.briefer)
     assert type(policy.selector) is type(MAS.selector)
+
+
+def test_the_composition_owns_the_per_leg_depth() -> None:
+    """Three hits per leg, with 0.51 mean overlap, is the dose the published MA+S cells
+    were served. Resolving the depth from memory.top_k instead handed anyone running the
+    second pass without an arm file five, which is not the composition MA+S names."""
+    policy = policy_for(SecondPassSettings(enabled=True), MemorySettings())
+
+    assert policy is not None
+    assert isinstance(policy.retriever, StorePrecedents)
+    assert isinstance(MAS.retriever, StorePrecedents)
+    assert policy.retriever.k == MAS.retriever.k == 3
 
 
 def test_force_lifts_the_nominators_veto_and_nothing_else() -> None:

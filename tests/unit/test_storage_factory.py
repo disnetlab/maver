@@ -31,6 +31,17 @@ def test_the_embedded_database_lives_under_this_deployment_s_workspace(
         stack.close()
 
 
+def test_the_retrieval_floor_reaches_the_retriever(tmp_path: pathlib.Path) -> None:
+    """The floor decides how many precedents a run is served, and that dose is what an
+    arm's memory result is divided by. Left at the constructor default, a campaign that
+    ran without a floor had no way to say so and could not be reproduced."""
+    stack = build_storage(settings_for(tmp_path, min_score_per_token=0.0))
+    try:
+        assert stack.retriever.min_score_per_token == 0.0
+    finally:
+        stack.close()
+
+
 def test_an_unavailable_backend_fails_at_startup_and_says_what_to_install(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

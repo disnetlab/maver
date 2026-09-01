@@ -103,7 +103,9 @@ class Retriever:
     """Floor on a hit's score divided by the query's token count.
 
     Divided by token count so the threshold does not move with query length. Zero
-    disables the floor, which restores the behaviour of always returning k results.
+    disables the floor, which restores the behaviour of always returning k results —
+    what the prototype shipped, and what an arm reproducing one of its campaigns pins
+    through ``memory.min_score_per_token`` rather than inheriting the default here.
     """
     states: Callable[[Sequence[str]], Mapping[str, str]] | None = None
     """Reads the current lifecycle state of many candidates at once.

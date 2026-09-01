@@ -446,6 +446,18 @@ class MemorySettings(SettingsGroup):
         "MEMORY_SEARCH_TOP_K",
         description="Records returned by a retrieval.",
     )
+    min_score_per_token: float = setting(
+        0.5,
+        "KIRA_MEMORY__MIN_SCORE_PER_TOKEN",
+        "MEMORY_MIN_TEXT_RANK_PER_TOKEN",
+        description=(
+            "Relevance floor under a hit, as its lexical score over the query's token "
+            "count, which is what lets a retrieval answer that nothing is comparable. "
+            "Zero disables it and returns k records whatever they score. The prototype "
+            "shipped this off and no campaign set it, so an arm reproducing one pins "
+            "zero here rather than inheriting a floor that would cut its dose."
+        ),
+    )
     lifecycle_weights: dict[str, float] | None = setting(
         None,
         "KIRA_MEMORY__LIFECYCLE_WEIGHTS",

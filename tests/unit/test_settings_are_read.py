@@ -51,8 +51,6 @@ DECLARED_FOR_UNBUILT_WORK = {
     "observability.metric_interval_ms": "no metric exporter is installed",
     "observability.event_log_enabled": "the audit sink is chosen by the composition root",
     "observability.event_log_path": "the audit sink writes to the store, not a file",
-    "secondpass.selector_max_tokens": "the bound is applied from the call site's own cap",
-    "secondpass.selector_timeout_s": "the selector's deadline is its own constant",
     "tools.blind_namespaces": "no telemetry wrapper filters on it",
     "tools.kubectl_timeout_s": "the transport's own timeout bounds a cluster command",
 }

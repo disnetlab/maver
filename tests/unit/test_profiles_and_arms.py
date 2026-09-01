@@ -141,6 +141,15 @@ class TestShippedArms:
         what the diagnosing role is shown without its own file recording that it did."""
         assert "auto_snapshot" in load_arm(name, ARMS).settings.get("pipeline", {})
 
+    def test_the_arms_that_retrieve_pin_the_relevance_floor(self) -> None:
+        """Kira floors a hit at 0.5 of its lexical score per query token; the prototype
+        shipped that floor off and no campaign set it. An arm inheriting the default
+        would be served fewer precedents than the cells it reproduces, and the dose is
+        what its memory result is divided by."""
+        for name in ("ma-s", "ma-r"):
+            memory = load_arm(name, ARMS).settings["memory"]
+            assert memory["enabled"] and memory["min_score_per_token"] == 0.0
+
     def test_the_published_arms_are_frozen(self) -> None:
         """A change to a frozen arm changes what its published number means."""
         for name in ("ma", "ma-v", "ma-s", "ma-r", "single"):
