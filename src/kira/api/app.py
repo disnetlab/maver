@@ -12,7 +12,9 @@ process-scoped rather than application-scoped: telling scheduled jobs which depl
 they belong to, and letting go of the stores on the way out.
 """
 
+import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
@@ -104,6 +106,28 @@ def build_deployment(settings: Settings) -> Deployment:
     )
 
 
+async def _drain(service: Service, timeout_s: float) -> None:
+    """Let the incidents already in flight finish before the process goes.
+
+    An incident is minutes to hours of model calls against a cluster it may already
+    have changed, so killing one mid-remediation leaves the cluster half-modified with
+    nobody recording what was done. Bounded, because a shutdown that never completes is
+    its own failure: what is still running when the bound expires is named in the log
+    so a reader knows which incidents to look at rather than discovering the gap later.
+
+    Args:
+        service: The process's resources.
+        timeout_s: How long to wait. Zero exits immediately.
+    """
+    deadline = time.monotonic() + timeout_s
+    while service.runs.live() and time.monotonic() < deadline:
+        _log.info("draining %d incident(s) before shutdown", len(service.runs.live()))
+        await asyncio.sleep(1.0)
+    remaining = service.runs.live()
+    if remaining:
+        _log.warning("shut down with %d incident(s) unfinished: %s", len(remaining), remaining)
+
+
 def create_app(
     *,
     deployment: Deployment | None = None,
@@ -138,6 +162,7 @@ def create_app(
         try:
             yield
         finally:
+            await _drain(app.state.service, active.settings.server.drain_timeout_s)
             shutdown_scheduler()
             unbind_deployment()
             if owned:

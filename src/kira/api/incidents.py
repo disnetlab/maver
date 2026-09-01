@@ -11,6 +11,8 @@ calls, so the caller is given a session id and polls it.
 """
 
 import asyncio
+import hashlib
+import json
 import logging
 from collections.abc import Mapping
 from typing import Any, Literal
@@ -23,8 +25,9 @@ from kira.contracts.lifecycle import LifecycleState, RunStatus
 from kira.contracts.state import TargetStage
 from kira.middleware.authority import ApprovalPending
 from kira.orchestration.runner import Deployment, run_incident
+from kira.roles.prompting import visible_alert
 
-__all__ = ["IncidentRequest", "router", "run_incident_task", "start_incident"]
+__all__ = ["IncidentRequest", "fingerprint", "router", "run_incident_task", "start_incident"]
 
 _log = logging.getLogger(__name__)
 
@@ -67,6 +70,31 @@ async def create_incident(body: IncidentRequest, service: ServiceDep) -> dict[st
     if not service.deployment.settings.intake.http_enabled:
         raise HTTPException(
             status_code=503, detail="HTTP intake disabled (KIRA_INTAKE__HTTP_ENABLED=false)"
+        )
+
+    # A retrying alert source posting the same alert twice wants one incident, not two
+    # agents remediating the same fault against each other. Answered with the run that
+    # is already on it, in the same shape, so the caller needs no new branch.
+    existing = service.runs.find(fingerprint(body.alert))
+    if existing is not None:
+        record = service.deployment.storage.sessions.get_session(existing)
+        _log.info("alert already being handled by %s; not starting a second run", existing)
+        return {
+            "session_id": existing,
+            "status": "accepted",
+            "target_stage": body.target_stage,
+            "started_at": record.started_at if record is not None else "",
+        }
+
+    limit = service.deployment.settings.server.max_concurrent_incidents
+    if service.runs.at_capacity(limit):
+        # Refused rather than queued. The queue would be invisible to the caller and
+        # every run already in flight would slow down to make room for it; a refusal an
+        # alerting source can retry is the honest answer.
+        raise HTTPException(
+            status_code=429,
+            detail=f"already handling {limit} incidents",
+            headers={"Retry-After": "60"},
         )
     return start_incident(body.alert, target_stage=body.target_stage, service=service)
 
@@ -129,7 +157,7 @@ def start_incident(alert: dict[str, Any], *, target_stage: str, service: Service
 
     # Registered before the task, so a run that finishes inside one loop iteration
     # cannot be unregistered before it was ever registered.
-    service.runs.register(record.session_id)
+    service.runs.register(record.session_id, fingerprint=fingerprint(alert))
     task = asyncio.create_task(
         run_incident_task(
             session_id=record.session_id,
@@ -196,3 +224,20 @@ def _record_failure(deployment: Deployment, session_id: str, exc: BaseException)
         # The prototype swallowed this silently. A failure to record a failure is
         # exactly the case an operator needs told about.
         _log.exception("could not record the failure of session %s", session_id)
+
+
+def fingerprint(alert: Mapping[str, Any]) -> str:
+    """Identify an alert by what it says, not by when it arrived.
+
+    Over the visible payload only, so an evaluation harness's own bookkeeping keys
+    cannot make two posts of the same alert look different — which would defeat the
+    deduplication exactly where a harness reposts on a timeout.
+
+    Args:
+        alert: The payload.
+
+    Returns:
+        A short stable hash.
+    """
+    canonical = json.dumps(visible_alert(alert), sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode()).hexdigest()[:16]

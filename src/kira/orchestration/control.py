@@ -90,18 +90,23 @@ class RunRegistry:
     def __init__(self) -> None:
         """Start empty."""
         self._runs: dict[str, RunControl] = {}
+        self._by_alert: dict[str, str] = {}
 
-    def register(self, session_id: str) -> RunControl:
+    def register(self, session_id: str, *, fingerprint: str | None = None) -> RunControl:
         """Start tracking a run.
 
         Args:
             session_id: The incident.
+            fingerprint: What identifies the alert that raised it, when the caller
+                computed one. Used to recognise a repost of the same alert.
 
         Returns:
             Its control handle.
         """
         control = RunControl(session_id)
         self._runs[session_id] = control
+        if fingerprint is not None:
+            self._by_alert[fingerprint] = session_id
         return control
 
     def unregister(self, session_id: str) -> None:
@@ -111,6 +116,40 @@ class RunRegistry:
             session_id: The incident.
         """
         self._runs.pop(session_id, None)
+        for fingerprint, tracked in list(self._by_alert.items()):
+            if tracked == session_id:
+                del self._by_alert[fingerprint]
+
+    def find(self, fingerprint: str) -> str | None:
+        """Find a live run already working on this alert.
+
+        Deliberately only the live ones, and deliberately only in this process. An
+        alerting source retries on a timescale of seconds, which is what this covers.
+        A restart clears it, and a restart also loses the run it was tracking — so a
+        repost after one is a new incident, correctly.
+
+        Args:
+            fingerprint: What identifies the alert.
+
+        Returns:
+            The session already handling it, or None.
+        """
+        return self._by_alert.get(fingerprint)
+
+    def at_capacity(self, limit: int) -> bool:
+        """Whether this process is already carrying as many incidents as it should.
+
+        A private model endpoint serves a small number of concurrent sequences, and
+        oversubscribing one degrades every run in flight rather than queueing — so the
+        bound is on accepting work, not on dispatching it.
+
+        Args:
+            limit: The configured ceiling.
+
+        Returns:
+            True when a further incident should not be accepted.
+        """
+        return len(self._runs) >= limit
 
     def get(self, session_id: str) -> RunControl | None:
         """Look up a live run.

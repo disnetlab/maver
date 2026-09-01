@@ -16,7 +16,7 @@ import pytest
 
 from kira.api.app import create_app
 from kira.api.deps import Service
-from kira.api.incidents import run_incident_task
+from kira.api.incidents import fingerprint, run_incident_task
 from kira.audit.journal import ListSink
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
@@ -309,4 +309,54 @@ async def test_a_write_pauses_and_a_decision_over_http_continues_it(
     assert polled["run_status"] == "completed"
     assert polled["execution_result"] is not None
     assert polled["awaiting_request_id"] is None
+    deploy.storage.close()
+
+
+# --- intake bounds ------------------------------------------------------------------
+
+
+async def test_the_same_alert_twice_is_one_incident(tmp_path: pathlib.Path) -> None:
+    """An alerting source retries. Two agents remediating the same fault against each
+    other is a worse outcome than a repost being told what is already on it."""
+    deploy = deployment(tmp_path)
+    app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
+
+    async with client(app) as http:
+        first = await http.post("/api/v1/incidents", json={"alert": ALERT})
+        second = await http.post("/api/v1/incidents", json={"alert": ALERT})
+
+        assert first.status_code == second.status_code == 202
+        assert first.json()["session_id"] == second.json()["session_id"]
+        await settle(app.state.service)
+    deploy.storage.close()
+
+
+async def test_a_harness_key_cannot_make_one_alert_look_like_two(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The fingerprint is over what the model can see, so an evaluation harness's own
+    bookkeeping key does not defeat deduplication exactly where it reposts."""
+    assert fingerprint(ALERT) == fingerprint({**ALERT, "_problem_id": "leak-the-answer"})
+
+
+async def test_intake_refuses_rather_than_queues_when_it_is_full(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A queue would be invisible to the caller and would slow every run already in
+    flight to make room. A private model endpoint serves few concurrent sequences, so
+    the bound is on accepting work."""
+    deploy = deployment(tmp_path)
+    object.__setattr__(deploy.settings.server, "max_concurrent_incidents", 1)
+    app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
+
+    async with client(app) as http:
+        accepted = await http.post("/api/v1/incidents", json={"alert": ALERT})
+        refused = await http.post(
+            "/api/v1/incidents", json={"alert": {**ALERT, "alertname": "Another"}}
+        )
+
+        assert accepted.status_code == 202
+        assert refused.status_code == 429
+        assert refused.headers["Retry-After"] == "60"
+        await settle(app.state.service)
     deploy.storage.close()

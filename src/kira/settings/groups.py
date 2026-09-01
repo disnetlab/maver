@@ -874,6 +874,15 @@ class ServerSettings(SettingsGroup):
         "ENVIRONMENT",
         description="Selects log formatting and access-log filtering.",
     )
+    drain_timeout_s: float = setting(
+        30.0,
+        "KIRA_SERVER__DRAIN_TIMEOUT_S",
+        description=(
+            "How long a shutdown waits for incidents already in flight. An incident may "
+            "have changed the cluster already, so killing one mid-remediation leaves it "
+            "half-modified with nobody recording what was done."
+        ),
+    )
     max_concurrent_incidents: int = setting(
         4,
         "KIRA_SERVER__MAX_CONCURRENT_INCIDENTS",
