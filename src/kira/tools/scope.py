@@ -37,9 +37,14 @@ class IncidentScope:
     """The workload names this namespace can legitimately report traces under.
 
     Derived from one cluster read and cached for the run. Mutable, unlike everything
-    else here, because it is a cache rather than a fact about the incident; None means
-    it has not been looked up yet, and an empty set means the namespace genuinely has
-    no workloads.
+    else here, because it is a cache rather than a fact about the incident.
+
+    Only ever None or a non-empty set. A read that came back with nothing is treated as
+    a failed inventory rather than as an empty namespace, and nothing is cached: the two
+    are indistinguishable from the output, and the safe reading is the one that refuses
+    to widen. The alternative — caching the empty set and then refusing every service
+    against an empty allowed list — reports a scope violation where the truth is that
+    the inventory could not be established.
     """
 
     @classmethod
