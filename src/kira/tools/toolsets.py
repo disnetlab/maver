@@ -93,6 +93,13 @@ def build_toolset(
         # A submit tool is never dropped. The loop terminates only by calling it, so a
         # run without one cannot end — it burns its whole budget and reports a timeout.
         if spec.safety != "submit":
+            if name in ctx.settings.disabled:
+                # A kill switch, and the reason submissions are exempt from it is the
+                # same reason they are exempt from everything else: a run with no way
+                # to finish does not fail, it burns its whole budget and reports a
+                # timeout that reads as the model's fault.
+                dropped[name] = "withheld by configuration"
+                continue
             missing = sorted(spec.requires - served)
             if missing:
                 dropped[name] = f"transport lacks {', '.join(missing)}"
