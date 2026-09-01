@@ -1,0 +1,27 @@
+# An in-cluster deployment against a real telemetry stack.
+#
+#   kubectl apply -k deploy/k8s/overlays/production
+#
+# The image is pinned by digest rather than by tag, because a tag can be moved and two
+# pods under one manifest then run different code. The release fills the digest in:
+#
+#   docker buildx imagetools inspect ghcr.io/evenodderguy/kira:<version> \
+#     --format '{{.Manifest.Digest}}'
+#
+# The placeholder below is all zeros so that applying an unfilled overlay fails at the
+# pull with an unmistakable digest rather than quietly running whatever :latest is.
+#
+# rolebindings.example.yaml and rbac-secrets-write.yaml are not listed here on purpose.
+# The first names namespaces only this deployment knows; the second is a grant that has
+# to be a decision. See ../../README.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kira
+resources:
+  - ../../base
+images:
+  - name: ghcr.io/evenodderguy/kira
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+patches:
+  - path: configmap-patch.yaml
+  - path: deployment-patch.yaml

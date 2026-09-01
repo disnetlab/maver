@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kira
+  labels:
+    app.kubernetes.io/name: kira
+    # The pod runs unprivileged, as uid 1000, with a read-only root filesystem and no
+    # capabilities. Enforcing the restricted standard here means a future edit that
+    # loosens the pod's security context is rejected at admission rather than deployed.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

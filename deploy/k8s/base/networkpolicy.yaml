@@ -1,0 +1,76 @@
+# The approval surface has no authentication yet, and this pod holds cluster write
+# permissions. Until that lands, the containment is network-level: default-deny in both
+# directions, no Ingress object anywhere in this repository, and a short list of things
+# the pod may talk to.
+#
+# The egress rules name the same three namespaces the ConfigMap's endpoints point at, so
+# changing where the model or the telemetry stack lives means editing both files. An
+# overlay adds a rule for anything else — policies are additive, so a new destination is
+# a new NetworkPolicy rather than a rewrite of this one.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kira
+  namespace: kira
+  labels:
+    app.kubernetes.io/name: kira
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kira
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Operator traffic only, from namespaces a cluster administrator has labelled for
+    # it. `kubectl port-forward` keeps working regardless: it is proxied by the API
+    # server through the kubelet rather than crossing the pod network.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kira.dev/operator: "true"
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # The API server, which is what every kubectl call goes to. It is usually outside
+    # the pod network, so this is bounded by port rather than by destination; an overlay
+    # narrows it to the API server's own address where that address is stable.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 6443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: models
+      ports:
+        - protocol: TCP
+          port: 8000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - protocol: TCP
+          port: 9090
+        - protocol: TCP
+          port: 3100
+        - protocol: TCP
+          port: 16686
+        - protocol: TCP
+          port: 4317

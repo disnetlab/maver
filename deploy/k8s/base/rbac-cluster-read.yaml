@@ -1,0 +1,46 @@
+# The only role bound cluster-wide, and it can only read. Everything the agent can
+# change is namespaced and bound by an overlay, one managed namespace at a time.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kira-cluster-read
+  labels:
+    app.kubernetes.io/name: kira
+rules:
+  # Node and volume state, which no namespaced read can reach. A pending pod whose node
+  # is unschedulable and a pod stuck on an unbound volume both look like an application
+  # fault from inside the namespace, and these are the reads that tell them apart.
+  - apiGroups: [""]
+    resources: ["nodes", "persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+
+  # Needed only by the opt-in stale-alert annotation, which reads the one namespace a
+  # firing alert names to find out whether it still exists. Never list: the agent has no
+  # reason to enumerate namespaces it was not sent to.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
+
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "volumeattachments"]
+    verbs: ["get", "list", "watch"]
+
+  # `kubectl top nodes`.
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kira-cluster-read
+  labels:
+    app.kubernetes.io/name: kira
+subjects:
+  - kind: ServiceAccount
+    name: kira
+    namespace: kira
+roleRef:
+  kind: ClusterRole
+  name: kira-cluster-read
+  apiGroup: rbac.authorization.k8s.io

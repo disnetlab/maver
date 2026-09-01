@@ -1,0 +1,76 @@
+# Namespaced writes: what a remediation is allowed to change inside one workload
+# namespace. A ClusterRole for the same reason the read role is one, and bound the same
+# way, one namespace at a time. It is never bound cluster-wide, and a cluster-wide
+# binding of it would hand a language model write access to the whole cluster.
+#
+# Two things the kubectl tool will classify and the approval gate will offer are
+# deliberately not granted here, so the API server refuses them with a message the model
+# can read:
+#
+#   Node mutation — cordon, uncordon, drain and taint are cluster-scoped writes, and a
+#   fault injected as a cordon is one an agent must diagnose rather than undo. Granting
+#   node writes to fix a node fault also grants evicting every pod on every node.
+#
+#   Secrets — the widest grant available in a workload namespace, and no fault family
+#   this system reports needs it. It is an opt-in fragment in overlays/production/.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kira-namespace-write
+  labels:
+    app.kubernetes.io/name: kira
+rules:
+  # Workloads: patch a template, roll it out, scale it, replace it.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
+    verbs: ["get", "patch", "update"]
+
+  - apiGroups: [""]
+    resources:
+      - pods
+      - services
+      - endpoints
+      - configmaps
+      - persistentvolumeclaims
+      - serviceaccounts
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+
+  # Evict rather than hard-delete, so a PodDisruptionBudget still gets a say.
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+
+  # `kubectl exec`. A create verb, and it is here rather than in the read role because
+  # a command run inside a container cannot be proven read-only. The tool layer gives it
+  # its own authority class for the same reason: every measured run permitted it, the
+  # audit record says its authority was never provable, and an approval rule can hold or
+  # deny it without a code change. A namespace bound read-only therefore has no exec,
+  # and kubectl says so plainly when a role tries.
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+
+  - apiGroups: [""]
+    resources: ["pods/log", "pods/status", "events"]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+
+  # Adjusting an autoscaler's thresholds is preferred over imperative scaling, which the
+  # next reconcile would undo.
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+
+  - apiGroups: ["keda.sh"]
+    resources: ["scaledobjects", "scaledjobs", "triggerauthentications"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]

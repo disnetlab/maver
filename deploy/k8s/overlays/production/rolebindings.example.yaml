@@ -1,0 +1,41 @@
+# One managed workload namespace, bound. Copy this file per namespace, replace the
+# placeholder, and add the copies to kustomization.yaml's resources.
+#
+# The read binding is what makes a namespace diagnosable; the write binding is what
+# makes it remediable, and a namespace can have the first without the second. Do not
+# bind either in a platform, observability, or fault-injection namespace: the last of
+# those is where a benchmark keeps the answer.
+#
+# `kira scaffold rolebinding --namespace <ns> [--write]` generates these once the CLI
+# command lands; until then this file is the template.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kira-read
+  namespace: REPLACE_TARGET_NAMESPACE
+  labels:
+    app.kubernetes.io/name: kira
+subjects:
+  - kind: ServiceAccount
+    name: kira
+    namespace: kira
+roleRef:
+  kind: ClusterRole
+  name: kira-namespace-read
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kira-write
+  namespace: REPLACE_TARGET_NAMESPACE
+  labels:
+    app.kubernetes.io/name: kira
+subjects:
+  - kind: ServiceAccount
+    name: kira
+    namespace: kira
+roleRef:
+  kind: ClusterRole
+  name: kira-namespace-write
+  apiGroup: rbac.authorization.k8s.io

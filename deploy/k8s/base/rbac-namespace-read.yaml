@@ -1,0 +1,69 @@
+# Namespaced reads: what a diagnosis needs to see inside one workload namespace.
+#
+# Declared as a ClusterRole so the rule set stays in one place across managed
+# namespaces, and deliberately NOT bound cluster-wide. An overlay binds it with a
+# RoleBinding in each managed workload namespace. Do not bind it in platform,
+# observability, or fault-injection namespaces: the last of those hands the answer to
+# anyone who can read it.
+#
+# Secrets are absent on purpose. The namespace snapshot reads secret *names* to find a
+# workload referring to one that does not exist, so with this role that one line of the
+# snapshot reports "(unavailable)" while everything else is unaffected — and the pod's
+# own CreateContainerConfigError still names the missing secret. Reading secrets means
+# reading their values, including ServiceAccount tokens, which is an escalation out of
+# every other boundary here. An operator who wants it opts in through the fragment in
+# overlays/production/.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kira-namespace-read
+  labels:
+    app.kubernetes.io/name: kira
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - services
+      - endpoints
+      - configmaps
+      - persistentvolumeclaims
+      - events
+      - resourcequotas
+      - limitranges
+    verbs: ["get", "list", "watch"]
+
+  # Endpoints' replacement. A service-selector or target-port fault is diagnosed by
+  # seeing which pods a service actually resolves to, and on a cluster new enough to
+  # have stopped serving Endpoints this is the only place that answer lives.
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch"]
+
+  # `kubectl top pods`.
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+
+  # KEDA is namespaced, and a scaler that has stopped scaling is a fault the agent is
+  # expected to recognise. Harmless on a cluster without the CRDs: a rule naming an API
+  # group nothing serves grants nothing.
+  - apiGroups: ["keda.sh"]
+    resources: ["scaledobjects", "scaledjobs", "triggerauthentications"]
+    verbs: ["get", "list", "watch"]

@@ -1,0 +1,118 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kira
+  namespace: kira
+  labels:
+    app.kubernetes.io/name: kira
+spec:
+  # One replica, on purpose. Session state is in-process for the duration of a run and
+  # the embedded stores sit on a ReadWriteOnce claim. Recreate, RWO and replicas: 1 are
+  # load-bearing together: a rolling update would deadlock on the volume, and a second
+  # replica would corrupt SQLite. Scaling out needs the state externalised first.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kira
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kira
+    spec:
+      serviceAccountName: kira
+      # Granted to this pod rather than to the ServiceAccount, because this is the pod
+      # that needs it: the default transport runs kubectl, and in-cluster kubectl
+      # authenticates with the projected token. A deployment whose tools reach the
+      # cluster through an environment adapter's transport sets this to false.
+      automountServiceAccountToken: true
+      # An in-flight incident checkpoints and drains rather than being killed part way
+      # through a remediation.
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kira
+          image: ghcr.io/evenodderguy/kira:0.1.0
+          imagePullPolicy: IfNotPresent
+          # No command or args. The image's CMD is `kira serve`, and it has no
+          # entrypoint so that `docker run <image> <anything>` still works; Kubernetes
+          # maps `args` alone onto that empty entrypoint, so a manifest restating
+          # `args: ["serve"]` would exec "serve" and the container would never start.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: kira-config
+            # Optional, so a deployment against a model endpoint that needs no key does
+            # not have to create it. See secret.example.yaml for why these arrive as
+            # environment variables rather than as files.
+            - secretRef:
+                name: kira-secrets
+                optional: true
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+          # Cold start resolves the model profile, validates the roles and opens the
+          # stores before the port answers. A liveness probe racing that is what killed
+          # the prototype's pod mid-startup, so the startup probe owns the first five
+          # minutes and the other two do not run until it passes.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          # /readyz asks whether an incident accepted right now could be completed, so
+          # it reads the store and reports what startup resolved. A failure here takes
+          # the pod out of the Service and leaves it running.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          # /healthz asks only whether the process is alive, and performs no I/O. The
+          # two endpoints are not interchangeable: a liveness probe that reached the
+          # model endpoint or the database would turn an outage in either into a restart
+          # loop, and would break the evaluation driver's thirty-second preflight.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+              # Protects the pod from eviction under node disk pressure. The measured
+              # usage is around 170Mi, for logs and the per-incident scratch that has
+              # not been pruned yet.
+              ephemeral-storage: 500Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+              ephemeral-storage: 1Gi
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: kira-workspace
+        # The root filesystem is read-only, and Python still wants somewhere to put a
+        # temporary file.
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,19 @@
+# Only what a real cluster's own addresses and identity change. Every other key comes
+# from the base, and a patch is a merge: the keys not named here keep their base values
+# rather than being dropped, which is the difference between applying an overlay with
+# `-k` and applying this file with `-f`.
+#
+# The memory backend deliberately stays `embedded`. The settings layer accepts
+# `postgres` and the storage factory then refuses it at startup, naming the extra to
+# install, because that backend is not implemented yet. Setting it here would produce a
+# pod that cannot start.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kira-config
+  namespace: kira
+data:
+  # Names this deployment in traces and in every run's configuration snapshot, which is
+  # what lets two clusters' results be told apart afterwards.
+  KIRA_OBSERVABILITY__DEPLOYMENT_ID: "kira-production"
+  KIRA_OBSERVABILITY__LOG_LEVEL: "INFO"

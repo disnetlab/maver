@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from kira.settings import Settings, VerifySettings, legacy_names_in_use, load_settings
 from kira.settings.authority import AuthorityRule, AuthoritySettings
-from kira.settings.root import AliasedField, _iter_aliases
+from kira.settings.root import AliasedField, _iter_aliases, unknown_prefixed_names
 
 ALIASED = list(_iter_aliases(Settings))
 IDS = [f.modern for f in ALIASED]
@@ -183,6 +183,17 @@ class TestValidation:
         monkeypatch.setenv("KIRA_MEMORY__ENABLEDD", "false")
         with pytest.raises(ValueError, match="did you mean KIRA_MEMORY__ENABLED"):
             load_settings()
+
+    def test_the_built_revision_is_not_read_as_a_typo(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The image sets KIRA_REVISION for /healthz to report, and answers to no field.
+
+        Swept up as a misspelling, it stopped the container that set it from starting.
+        """
+        monkeypatch.setenv("KIRA_REVISION", "9f3c1ab")
+        assert unknown_prefixed_names() == []
+        assert load_settings().server.port == 8080
 
 
 class TestLegacyVocabulary:

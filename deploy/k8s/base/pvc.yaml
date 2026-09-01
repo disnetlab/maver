@@ -1,0 +1,21 @@
+# Durable state. Layout under /workspace:
+#
+#   /workspace/memory/memory.sqlite   session, approval and record store
+#   /workspace/incidents/<id>/        per-incident scratch; the tool sandbox root
+#   /workspace/events.jsonl           the ordered audit event log
+#
+# Lost when the claim is deleted, not when the pod restarts, which is the whole point:
+# an approval pending at the moment a node drains is still pending afterwards.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kira-workspace
+  namespace: kira
+  labels:
+    app.kubernetes.io/name: kira
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi

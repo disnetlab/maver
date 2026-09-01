@@ -1,0 +1,22 @@
+# Apply with `kubectl apply -k`, never with `-f`. See ../README.md.
+#
+# secret.example.yaml is not listed here on purpose: it holds placeholders, and applying
+# it would overwrite a real Secret with them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kira
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - rbac-cluster-read.yaml
+  - rbac-namespace-read.yaml
+  - rbac-namespace-write.yaml
+  - configmap.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml
+  - poddisruptionbudget.yaml
+images:
+  - name: ghcr.io/evenodderguy/kira
+    newTag: "0.1.0"

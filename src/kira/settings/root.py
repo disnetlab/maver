@@ -31,6 +31,15 @@ ADAPTER_ENV_NAME = f"{ENV_PREFIX}ADAPTERS"
 
 _ADAPTER_SLICE_PREFIX = f"{ADAPTER_ENV_NAME}__"
 
+_DIRECT_ENV_NAMES = frozenset({"REVISION"})
+"""Prefixed names read straight from the environment rather than through a field.
+
+The image writes the commit it was built from into ``KIRA_REVISION`` so that
+``/healthz`` can report it and a deploy can tell the container it just built from a
+stale one nobody recreated. It answers to no setting, so the sweep below would read it
+as a misspelling and refuse to start the very container that sets it.
+"""
+
 __all__ = [
     "ADAPTER_ENV_NAME",
     "AliasedField",
@@ -200,7 +209,10 @@ def unknown_prefixed_names(env: Mapping[str, str] | None = None) -> list[str]:
         # An adapter's own slice is checked by the adapter, at startup, against its own
         # model. Checking it here would mean the settings layer holding the field names
         # of every environment it exists not to know about.
-        if n.startswith(ENV_PREFIX) and n not in known and not n.startswith(_ADAPTER_SLICE_PREFIX)
+        if n.startswith(ENV_PREFIX)
+        and n not in known
+        and n.removeprefix(ENV_PREFIX) not in _DIRECT_ENV_NAMES
+        and not n.startswith(_ADAPTER_SLICE_PREFIX)
     )
 
 

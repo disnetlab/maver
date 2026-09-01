@@ -1,0 +1,21 @@
+# A null removes the key. Unsetting a telemetry endpoint withdraws the tools that would
+# have used it, before the run and with the reason recorded, which is what should happen
+# on a cluster that has no Prometheus rather than every metrics call returning an error
+# a role then tries to work around.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kira-config
+  namespace: kira
+data:
+  KIRA_TRANSPORT__PROMETHEUS_URL: null
+  KIRA_TRANSPORT__LOKI_URL: null
+  KIRA_TRANSPORT__JAEGER_URL: null
+  KIRA_OBSERVABILITY__OTLP_ENDPOINT: null
+  KIRA_OBSERVABILITY__LOG_LEVEL: "DEBUG"
+  # The image sets production, which hides the OpenAPI docs. Locally they are the
+  # cheapest way to see what the API actually accepts.
+  KIRA_SERVER__ENVIRONMENT: "local"
+  # Memory stays on, so the local path exercises the same retrieval the measurements
+  # ran on, but nothing distils in the background of a five-minute demonstration.
+  KIRA_MEMORY__LEARNING_ENABLED: "false"

@@ -36,3 +36,8 @@ update-vm.sh
 # Rebuild working state: deep-read notes, design specs in progress, workflow
 # scripts. Deleted once the rebuild is done; never part of the published artifact.
 refactor/
+
+# Compose runtime state: per host, and one of them holds credentials.
+# See deploy/docker/kira.env.example.
+deploy/docker/kira.env
+deploy/docker/kubeconfig

@@ -1,0 +1,59 @@
+# What this deployment runs, in the fifteen-odd keys a deployment actually sets. The
+# mechanism configuration lives in an arm file and the whole sampling set in a model
+# profile, both baked into the image and both recorded by digest in every run's
+# configuration snapshot, so this file does not restate them.
+#
+# Every name here is one the settings layer recognises. A KIRA_-prefixed name it does
+# not recognise is a startup failure and not a silent default, which is what makes a
+# typo in this file a pod that will not start rather than a pod running something else.
+# The flat prototype spellings still resolve, but a new manifest should not teach a
+# deprecated vocabulary.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kira-config
+  namespace: kira
+  labels:
+    app.kubernetes.io/name: kira
+data:
+  # Model. The profile carries the complete sampling set; only the address changes per
+  # deployment, and the key itself is a Secret.
+  KIRA_MODEL__PROFILE: "qwen3.6-35b-a3b"
+  KIRA_MODEL__ENDPOINT_OVERRIDE: "http://vllm.models.svc.cluster.local:8000/v1"
+
+  # Authority. `prompt` is the shipped default and this file states it, because the
+  # prototype's ConfigMap set `auto` on a service holding cluster write permissions.
+  # A request nobody answers within the timeout is denied; approving on expiry is
+  # available per policy rule and never globally.
+  KIRA_AUTHORITY__MODE: "prompt"
+  KIRA_AUTHORITY__TIMEOUT_S: "1800"
+
+  # Pipeline and mechanisms.
+  KIRA_PIPELINE__MAX_TURNS: "20"
+  KIRA_PIPELINE__REMEDIATION_RETRIES: "2"
+  KIRA_VERIFY__ENABLED: "false"
+  KIRA_SECONDPASS__ENABLED: "false"
+  KIRA_MEMORY__ENABLED: "true"
+  KIRA_MEMORY__LEARNING_ENABLED: "true"
+  KIRA_MEMORY__BACKEND: "embedded"
+
+  # Intake. The bound on concurrent incidents is about the model endpoint rather than
+  # this pod: a privately served model answers a small number of sequences at once, so
+  # unbounded intake degrades every run in flight instead of queueing.
+  KIRA_INTAKE__HTTP_ENABLED: "true"
+  KIRA_INTAKE__KAFKA__ENABLED: "false"
+  KIRA_SERVER__MAX_CONCURRENT_INCIDENTS: "4"
+
+  # Telemetry backends. An unset endpoint is a description of the deployment rather than
+  # an error: the tools that would have used it are withdrawn before the run, with the
+  # reason recorded, instead of failing the first time a role calls one. These three
+  # names and the model endpoint above are what the NetworkPolicy's egress rules allow,
+  # so the two files move together.
+  KIRA_TRANSPORT__PROMETHEUS_URL: "http://prometheus.observability.svc.cluster.local:9090"
+  KIRA_TRANSPORT__LOKI_URL: "http://loki.observability.svc.cluster.local:3100"
+  KIRA_TRANSPORT__JAEGER_URL: "http://jaeger-query.observability.svc.cluster.local:16686"
+
+  # Observability.
+  KIRA_OBSERVABILITY__OTLP_ENDPOINT: "alloy-collector.observability.svc.cluster.local:4317"
+  KIRA_OBSERVABILITY__OTLP_INSECURE: "true"
+  KIRA_OBSERVABILITY__LOG_LEVEL: "INFO"

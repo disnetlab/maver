@@ -1,0 +1,31 @@
+# Resolved against the build context, which is the repository root, not this
+# directory. The repository root carries a symlink to this file so that a plain
+# `docker build -f deploy/docker/Dockerfile .` reads it without depending on
+# BuildKit's per-Dockerfile ignore support. One file, so the two cannot drift.
+.git
+.github
+.venv
+.local-workspace
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+.coverage
+
+# Secrets and per-host runtime state, mounted at run time, never built in.
+.env
+.env.local
+agent.env
+kira.env
+kubeconfig
+workspace/
+
+# Rebuild working state and specifications; not part of the published artifact.
+refactor/
+
+# Documentation and tests are not needed to run the service. README.md and LICENSE
+# are exceptions: the build backend reads them (pyproject `readme`, `license-files`).
+docs/
+tests/

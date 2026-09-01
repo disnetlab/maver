@@ -1,0 +1,17 @@
+# The taint this tolerates is one cluster's fact rather than a property of the software,
+# which is why it lives in an overlay: the workspace volume is pinned to a node that
+# carries a role=telemetry NoSchedule taint, and without the toleration the pod is
+# unschedulable wherever its own data is.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kira
+  namespace: kira
+spec:
+  template:
+    spec:
+      tolerations:
+        - key: role
+          operator: Equal
+          value: telemetry
+          effect: NoSchedule

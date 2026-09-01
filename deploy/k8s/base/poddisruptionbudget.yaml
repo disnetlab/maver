@@ -1,0 +1,16 @@
+# minAvailable: 0 looks like a mistake and is not. With one replica, minAvailable: 1
+# blocks every node drain forever; zero lets the eviction proceed and leaves how the
+# in-flight incident ends to the drain handler and the 120 s grace period, which is
+# where that decision belongs.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kira
+  namespace: kira
+  labels:
+    app.kubernetes.io/name: kira
+spec:
+  minAvailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kira

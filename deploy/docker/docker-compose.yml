@@ -1,0 +1,50 @@
+# Kira on a host outside the cluster, reaching the API server over a private network.
+#
+#   docker compose -f deploy/docker/docker-compose.yml up -d --build
+#
+# The service has no authentication and can issue cluster writes. Keep it on a private
+# network behind a reverse proxy; never publish it.
+services:
+  kira:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        BASE_IMAGE: python:3.12-slim
+    image: kira:local
+    container_name: kira
+    restart: unless-stopped
+    # Loopback only. The prototype published 0.0.0.0:80 because the campus network
+    # filtered high ports; that is a reverse proxy's job, not the container's.
+    ports:
+      - "127.0.0.1:8080:8080"
+    env_file:
+      - kira.env
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      # Minted from the kira ServiceAccount, so this deployment authenticates as the
+      # ServiceAccount and inherits its RBAC unchanged. Read-only, and outside $HOME so
+      # the home directory can stay read-only too. Create the file before the first
+      # `up`: a bind mount of a path that does not exist becomes an empty directory,
+      # and kubectl then reports a directory where it wanted a kubeconfig.
+      - ./kubeconfig:/run/secrets/kubeconfig:ro
+      - kira-workspace:/workspace
+    environment:
+      # Named through the settings layer rather than as a bare KUBECONFIG, so the path
+      # this run used appears in its configuration snapshot. The tool sandbox does not
+      # inherit it either way: session_env() passes through PATH and the locale and
+      # nothing else, so a kubectl reached from bash_exec has no credentials.
+      KIRA_TRANSPORT__KUBECONFIG: /run/secrets/kubeconfig
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 45s
+      retries: 3
+
+volumes:
+  kira-workspace:

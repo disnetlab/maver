@@ -1,0 +1,58 @@
+# The evaluation container the SREGym harness grades, and the only compose file in this
+# repository that mentions a benchmark.
+#
+#   docker compose -f deploy/docker/docker-compose.eval.yml up -d --build --force-recreate
+#
+# Stand-alone rather than an override of docker-compose.yml: both publish 127.0.0.1:8080
+# and merging them would leave one service under two names. Three names below are part
+# of the harness's contract and none of them may drift — `k8s-agent:local` is what the
+# harness's own rebuild step tags, `k8s-agent-sregym` is the container it POSTs to, and
+# 127.0.0.1:8080 is where it looks for it. The tag says `k8s-agent` in a repository
+# called kira for that reason alone.
+#
+# A deploy that only restarts the service grades stale code, because compose never
+# recreates a container it did not just build: --force-recreate above is the rule, and
+# `curl -fsS 127.0.0.1:8080/healthz | jq -r .revision` is how it is checked.
+services:
+  kira-eval:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        BASE_IMAGE: python:3.12-slim
+        EXTRAS: sregym
+    image: k8s-agent:local
+    container_name: k8s-agent-sregym
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    env_file:
+      - kira.env
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    # The conductor and the MCP server are reached through port-forwards on the host.
+    # A container-isolated agent talks to the docker bridge rather than to loopback, and
+    # a forward bound only to 127.0.0.1 refuses its every call while the driver passes
+    # its own preflight, so the failure reads as an agent fault.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      KIRA_INTAKE__ADAPTERS: sregym
+      KIRA_ADAPTERS__SREGYM__CONDUCTOR_BASE_URL: http://host.docker.internal:8000
+      KIRA_ADAPTERS__SREGYM__MCP_BASE_URL: http://host.docker.internal:9954
+      # Unattended: nobody is waiting to approve a write during a sweep.
+      KIRA_AUTHORITY__MODE: auto
+    volumes:
+      - kira-eval-workspace:/workspace
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 45s
+      retries: 3
+
+volumes:
+  kira-eval-workspace:

@@ -1,0 +1,30 @@
+# A kind cluster on a laptop: the image is built locally, there is no telemetry stack to
+# read and no collector to export to, and the NetworkPolicy is removed so a port-forward
+# and a curl behave the way the quickstart says they do.
+#
+#   kind load docker-image kira:local
+#   kubectl apply -k deploy/k8s/overlays/local
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kira
+resources:
+  - ../../base
+images:
+  - name: ghcr.io/evenodderguy/kira
+    newName: kira
+    newTag: local
+patches:
+  - path: configmap-patch.yaml
+  - path: deployment-patch.yaml
+  # Removed rather than relaxed. kind ships no NetworkPolicy controller by default, so
+  # a policy here would be silently inert on one cluster and block the quickstart on
+  # another; a reader should not have to know which they have.
+  - target:
+      kind: NetworkPolicy
+      name: kira
+    patch: |
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: kira
+      $patch: delete
