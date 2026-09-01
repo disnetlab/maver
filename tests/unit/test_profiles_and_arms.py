@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from kira.llm.sampling import sampling_digest
 from kira.settings.arms import compare_constants, deep_merge, load_arm
 from kira.settings.profiles import ModelProfile, load_profile
 
@@ -192,3 +193,85 @@ def test_a_profile_without_an_auxiliary_set_gets_a_derived_one() -> None:
     # widely it may wander, so they are carried rather than cleared.
     assert aux.seed == profile.sampling.seed
     assert aux.thinking_token_budget == profile.sampling.thinking_token_budget
+
+
+SHIPPED_SAMPLING: dict[str, tuple[str, dict[str, object]]] = {
+    "qwen3.6-35b-a3b": (
+        "15b241cc5221",
+        {
+            "max_tokens": 8192,
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0.0,
+            "presence_penalty": 1.5,
+            "frequency_penalty": 0.0,
+            "repetition_penalty": 1.0,
+            "no_repeat_ngram_size": None,
+            "seed": 42,
+            "reasoning_effort": None,
+            "thinking_token_budget": None,
+        },
+    ),
+    "qwen3.8-27b": (
+        "00a5cc9a2360",
+        {
+            "max_tokens": 8192,
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0.0,
+            "presence_penalty": 0.0,
+            "frequency_penalty": 0.0,
+            "repetition_penalty": 1.0,
+            "no_repeat_ngram_size": None,
+            "seed": 42,
+            "reasoning_effort": None,
+            "thinking_token_budget": None,
+        },
+    ),
+    "claude-sonnet-4-6": (
+        "dd9b99700028",
+        {
+            "max_tokens": 8192,
+            "temperature": None,
+            "top_p": None,
+            "top_k": None,
+            "min_p": None,
+            "presence_penalty": None,
+            "frequency_penalty": None,
+            "repetition_penalty": None,
+            "no_repeat_ngram_size": None,
+            "seed": None,
+            "reasoning_effort": "medium",
+            "thinking_token_budget": None,
+        },
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(SHIPPED_SAMPLING))
+def test_a_shipped_profile_samples_exactly_as_it_was_measured(name: str) -> None:
+    """The value of every knob, not merely that every knob has one.
+
+    The existing checks assert the set is *complete*, which a one-character edit to any
+    value passes. That is the shape of the failure this project has already paid for: a
+    temperature moved from 0 to 1.0 and ran for twelve days before anyone noticed, and
+    the eras either side of it are not comparable.
+
+    A profile is a measured constant. Changing what a name samples at is not an edit to
+    this file — it is a new profile with a new name, and then this table gains a row
+    rather than losing one. The digest is pinned beside the values because it is what a
+    run record carries: two campaigns that differ in one knob must not share it.
+    """
+    expected_digest, expected = SHIPPED_SAMPLING[name]
+    values = load_profile(name, MODELS).sampling.model_dump()
+
+    assert values == expected
+    assert sampling_digest(values) == expected_digest
+
+
+def test_every_shipped_profile_is_pinned() -> None:
+    """A new profile file joins the table above, rather than shipping unpinned."""
+    shipped = {path.stem for path in MODELS.glob("*.yaml")}
+    assert shipped == set(SHIPPED_SAMPLING)

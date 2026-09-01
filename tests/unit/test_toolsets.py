@@ -1,3 +1,7 @@
+import ast
+import os
+from pathlib import Path
+
 import pytest
 
 from kira.audit.journal import Journal
@@ -89,3 +93,75 @@ def test_an_unknown_role_is_an_error_not_an_empty_toolset(tmp_path) -> None:
     """An empty toolset would produce a run that silently cannot act."""
     with pytest.raises(Exception, match="no toolset defined"):
         build_toolset("not_a_role", context(tmp_path))
+
+
+# --- the allowlists against the prototype that measured them -----------------------
+
+PROTOTYPE_REGISTRY = Path(
+    os.environ.get(
+        "PROTOTYPE_REGISTRY",
+        str(
+            Path(__file__).resolve().parents[2].parent
+            / "k8s-agentic-operator"
+            / "agent"
+            / "tools"
+            / "registry.py"
+        ),
+    )
+)
+
+DROPPED: dict[str, frozenset[str]] = {
+    "rca": frozenset({"memory_grep"}),
+    "planning": frozenset({"memory_grep"}),
+    "execution": frozenset(
+        {"restore_mongodb_access", "rollback_command", "get_previous_rollbackable_cmd"}
+    ),
+    "verify": frozenset({"probe_service"}),
+    "learning": frozenset(
+        {
+            "memory_grep",
+            "playbook_read",
+            "playbook_append",
+            "playbook_reconfirm",
+            "playbook_remove",
+        }
+    ),
+    "single": frozenset({"rollback_command", "get_previous_rollbackable_cmd"}),
+}
+"""What each role no longer offers, and why it is a drop rather than a regression.
+
+``memory_grep`` and the four ``playbook_*`` tools are mechanisms this rebuild does not
+ship. The rest are the benchmark's own tools, which now reach a role as adapter extras
+instead of sitting in a core allowlist — the same tools, contributed by whatever knows
+the environment rather than named in code that must not know it.
+"""
+
+
+def _prototype_toolsets() -> dict[str, tuple[str, ...]]:
+    """Read ``AGENT_TOOLSETS`` out of the prototype without importing it."""
+    tree = ast.parse(PROTOTYPE_REGISTRY.read_text(encoding="utf-8"))
+    for node in tree.body:
+        target = getattr(node, "target", None)
+        if isinstance(node, ast.AnnAssign) and getattr(target, "id", "") == "AGENT_TOOLSETS":
+            return dict(ast.literal_eval(node.value))
+    raise AssertionError("AGENT_TOOLSETS not found in the prototype registry")
+
+
+@pytest.mark.parity
+@pytest.mark.skipif(not PROTOTYPE_REGISTRY.exists(), reason="the prototype tree is not beside us")
+@pytest.mark.parametrize("role", sorted(ROLE_TOOLSETS))
+def test_a_role_offers_what_the_prototype_offered_in_the_order_it_offered_it(role: str) -> None:
+    """The existing check compares the resolved order against the table it came from.
+
+    That is a tautology, and it leaves the number that matters unpinned: which tools a
+    role was offered, and in what order, is an input to every published measurement, and
+    the allowlist module says plainly that the order was hand-tuned and that every
+    measurement used it. Adding or reordering one tool changes what the model saw with no
+    error and no visible symptom.
+
+    So the comparison is against the prototype that produced those numbers, with the
+    drops named explicitly. A tool that leaves an allowlist has to be added to
+    ``DROPPED`` deliberately, which is the point.
+    """
+    prototype = _prototype_toolsets()[role]
+    assert tuple(t for t in prototype if t not in DROPPED[role]) == tuple(ROLE_TOOLSETS[role])
