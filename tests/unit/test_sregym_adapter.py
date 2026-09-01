@@ -111,6 +111,33 @@ def test_the_grades_reach_the_distilling_pass_under_the_keys_it_reads(mode: str)
     assert packet == expected
 
 
+def test_a_judge_that_crashed_is_not_recorded_as_a_wrong_answer(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The harness writes `judgment=Error` beside `success=False` and `accuracy=0.0` when
+    its own judge fails to grade, which downstream is indistinguishable from a genuine
+    miss. Believed, it becomes an authoritative correction in the corpus — "the cause was
+    this and you were wrong" — which outlives the run that recorded it. The cluster oracle
+    graded independently and survives."""
+    results = {
+        "Diagnosis": {
+            "judgment": "Error",
+            "success": False,
+            "accuracy": 0.0,
+            "reasoning": "Error: 'answer'",
+            "error": "'answer'",
+        },
+        "Mitigation": {"success": True},
+        "ground_truth_root_cause": "targetPort points at nothing",
+    }
+    with caplog.at_level("ERROR"):
+        packet = reduce_feedback(results, details=True).to_packet()
+
+    assert packet["diagnosis"] == {"success": None, "score": None, "judge_error": "'answer'"}
+    assert packet["mitigation"] == {"success": True}
+    assert "failed to grade" in caplog.text
+
+
 class TestEvidenceFilter:
     """The harness can leak its own fault injection into the telemetry it serves, which
     turns a diagnosis into a lookup. That leak was measured, and in one problem an agent

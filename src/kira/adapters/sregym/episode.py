@@ -28,6 +28,9 @@ _TERMINAL_STAGES = frozenset({"tearing_down", "done"})
 
 _ERROR_BODY_CHARS = 200
 
+_JUDGE_ERROR = "Error"
+"""What the harness writes into ``Diagnosis.judgment`` when its own judge failed."""
+
 
 async def wait_for_stage(
     conductor: Conductor, target: str, *, timeout_s: float = 600.0, poll_s: float = 5.0
@@ -102,21 +105,50 @@ def reduce_feedback(results: Any, *, details: bool) -> ExternalFeedback | None:
             root cause.
 
     Returns:
-        The grades, or None when nothing gradable came back.
+        The grades, or None when nothing gradable came back. A diagnosis whose judge
+        failed to grade it carries an explicit unknown rather than the failure the
+        harness wrote in place of one.
     """
     if not isinstance(results, dict):
         return None
-    diagnosis = results.get("Diagnosis") or {}
     mitigation = results.get("Mitigation") or {}
+    return ExternalFeedback(
+        source=ORACLE_SOURCE,
+        diagnosis=_diagnosis_grade(results.get("Diagnosis") or {}, details=details),
+        mitigation={"success": mitigation.get("success")},
+        ground_truth_root_cause=results.get("ground_truth_root_cause") if details else None,
+    )
+
+
+def _diagnosis_grade(diagnosis: Any, *, details: bool) -> dict[str, Any]:
+    """Read the diagnosis verdict, or say plainly that there is not one.
+
+    A judge that crashed writes ``judgment=Error`` beside ``success=False`` and
+    ``accuracy=0.0``: a *grading* failure wearing the shape of a wrong answer, on about
+    one run in fifteen of the sweep where it was first noticed. Passed through, the
+    distilling pass takes it for ground truth and writes "the cause was this and you
+    were wrong" into the corpus on the strength of a crash — which is worse than a
+    mis-scored cell, because the corpus record outlives the run that wrote it.
+
+    So nothing the judge produced survives the error: its verdict, its score and its
+    reasoning are all the same crash. The reference root cause is the problem
+    definition's rather than the judge's, so it is left alone.
+    """
+    judgment = " ".join(str(diagnosis.get("judgment") or "").split())
+    if judgment.startswith(_JUDGE_ERROR):
+        detail = " ".join(str(diagnosis.get("error") or judgment).split())
+        # Loud, because the alternative to noticing this here is noticing it never: the
+        # episode submitted normally and every other field reads like a graded miss.
+        _log.error(
+            "the harness's diagnosis judge failed to grade this episode (%s); recording "
+            "no verdict rather than the failure it wrote in place of one",
+            detail,
+        )
+        return {"success": None, "score": None, "judge_error": detail}
     graded: dict[str, Any] = {
         "success": diagnosis.get("success"),
         "score": diagnosis.get("accuracy"),
     }
     if details:
         graded["reasoning"] = diagnosis.get("reasoning")
-    return ExternalFeedback(
-        source=ORACLE_SOURCE,
-        diagnosis=graded,
-        mitigation={"success": mitigation.get("success")},
-        ground_truth_root_cause=results.get("ground_truth_root_cause") if details else None,
-    )
+    return graded
