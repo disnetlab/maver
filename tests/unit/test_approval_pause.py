@@ -18,7 +18,7 @@ from kira.memory.ports import ApprovalRecord
 from kira.middleware.authority import ApprovalPending
 from kira.middleware.human_approval import HumanApproval, approval_granted, take_grant
 from kira.orchestration.resume import ApprovalCheckpoint, denial_result, load_checkpoint
-from kira.orchestration.runner import Deployment, run_incident
+from kira.orchestration.runner import Deployment, resume_after_decision, run_incident
 from kira.settings.authority import AuthoritySettings
 from kira.settings.groups import (
     MemorySettings,
@@ -255,3 +255,114 @@ def test_a_grant_covers_exactly_the_call_it_was_given_for() -> None:
         assert not grant.matches("ssh_exec", PATCH)
         # Taken rather than read: one grant is one dispatch.
         assert take_grant() is None
+
+
+# --- the continuation -----------------------------------------------------------------
+
+
+class ResumingModel(FakeModel):
+    """Writes once, then submits whatever the answer turned out to be."""
+
+    async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
+        if caller == "execution" and self.callers.count("execution") >= 1:
+            self.callers.append(caller)
+            arguments: dict[str, Any] = {
+                "succeeded": True,
+                "steps": [
+                    {
+                        "step_index": 0,
+                        "succeeded": True,
+                        "observation": "targetPort was 8081; patched; endpoints non-empty",
+                    }
+                ],
+                "final_state_summary": "svc/user has endpoints",
+                "confidence": 0.8,
+            }
+            return ModelResponse(
+                text=None,
+                tool_calls=(
+                    ToolCall(
+                        id="submit",
+                        name="submit_execution_result",
+                        arguments=arguments,
+                        raw_arguments=json.dumps(arguments),
+                    ),
+                ),
+                finish_reason="stop",
+                reasoning=None,
+                usage=Usage(),
+                duration_ms=1,
+                attempts=1,
+            )
+        return await super().complete(request, caller=caller)
+
+
+async def parked_with(tmp_path: pathlib.Path) -> tuple[Deployment, str, str]:
+    deploy, _ = deployment(tmp_path)
+    object.__setattr__(deploy, "completion", ResumingModel())
+    session = deploy.storage.sessions.create_session(ALERT)
+    with pytest.raises(ApprovalPending):
+        await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+    stored = deploy.storage.sessions.get_session(session.session_id)
+    assert stored is not None and stored.awaiting_request_id
+    return deploy, session.session_id, stored.awaiting_request_id
+
+
+async def test_an_approval_resumes_the_same_incident(tmp_path: pathlib.Path) -> None:
+    """The whole point of a durable pause: the decision continues the run it belongs to
+    rather than starting another one."""
+    deploy, session_id, request_id = await parked_with(tmp_path)
+    deploy.storage.approvals.decide(
+        request_id, status="approved", decided_by="an operator", reason="looks right"
+    )
+
+    status = await resume_after_decision(request_id, deploy)
+
+    assert status == "success"
+    stored = deploy.storage.sessions.get_session(session_id)
+    assert stored is not None
+    assert stored.run_status == "completed"
+    assert stored.execution_result is not None
+    assert stored.awaiting_request_id is None and stored.checkpoint is None
+    deploy.storage.close()
+
+
+async def test_a_denial_comes_back_as_a_tool_result_and_the_run_finishes(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A refused write is something the role reports, not a crash. The incident still
+    reaches an outcome."""
+    deploy, session_id, request_id = await parked_with(tmp_path)
+    deploy.storage.approvals.decide(
+        request_id, status="denied", decided_by="an operator", reason="wrong resource"
+    )
+
+    status = await resume_after_decision(request_id, deploy)
+
+    assert status in ("success", "failure")
+    stored = deploy.storage.sessions.get_session(session_id)
+    assert stored is not None and stored.run_status == "completed"
+    deploy.storage.close()
+
+
+async def test_a_second_resume_does_not_re_dispatch_the_write(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A duplicate job is a real possibility — a retried timeout, two pollers — and the
+    write it would replay has already been applied. Finishing the run clears the
+    checkpoint, and its absence is what makes the second attempt a no-op."""
+    deploy, session_id, request_id = await parked_with(tmp_path)
+    deploy.storage.approvals.decide(request_id, status="approved", decided_by="an operator")
+    await resume_after_decision(request_id, deploy)
+    runs = len(deploy.storage.runs.runs_for(session_id))
+
+    assert await resume_after_decision(request_id, deploy) == "missing_checkpoint"
+    assert len(deploy.storage.runs.runs_for(session_id)) == runs
+    deploy.storage.close()
+
+
+async def test_an_undecided_request_does_not_resume(tmp_path: pathlib.Path) -> None:
+    deploy, _, request_id = await parked_with(tmp_path)
+
+    assert await resume_after_decision(request_id, deploy) == "not_ready:pending"
+    deploy.storage.close()

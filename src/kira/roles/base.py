@@ -84,6 +84,13 @@ class RoleContext:
     session_id: str
     memory: Retriever | None = None
     """None when this configuration has no experience store."""
+    resume: list[Message] | None = None
+    """The transcript this role was paused in, with the decided call already answered.
+
+    A role builds its own opening turn on a first entry. On a continuation there is
+    already a conversation, and starting over would discard everything the role had
+    established before it asked for permission.
+    """
     packet: LearningPacket | None = None
     """The offline pass's input, assembled from stored records rather than live state.
 

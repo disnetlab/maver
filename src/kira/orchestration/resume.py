@@ -23,6 +23,14 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 
+from kira.contracts.artifacts import (
+    ExecutionResult,
+    Plan,
+    RootCause,
+    SingleDiagnosis,
+    SingleResult,
+    VerifyResult,
+)
 from kira.contracts.events import PolicyDecisionEvent, ToolCallEvent
 from kira.contracts.lifecycle import RunStatus
 from kira.contracts.state import IncidentState
@@ -188,6 +196,8 @@ def restored_state(checkpoint: ApprovalCheckpoint) -> IncidentState:
         The state, with the counters as they stood rather than reset.
     """
     state = dict(checkpoint.state)
+    for slot, models in _SLOTS.items():
+        state[slot] = _rehydrate(state.get(slot), models)
     state["remediation_retries"] = checkpoint.remediation_retries
     state["reassessment_count"] = checkpoint.reassessment_count
     state["verify_retries"] = checkpoint.verify_retries
@@ -229,6 +239,35 @@ def resume_events(
             result_chars=result_chars,
         ),
     ]
+
+
+_SLOTS: dict[str, tuple[type[BaseModel], ...]] = {
+    "root_cause": (RootCause, SingleDiagnosis),
+    "plan": (Plan,),
+    "execution_result": (ExecutionResult, SingleResult),
+    "verify_result": (VerifyResult,),
+}
+"""Which artifact each state slot can hold. Two entries where the single-agent
+configuration fills the same slot with its own unstructured artifact."""
+
+
+def _rehydrate(value: Any, models: tuple[type[BaseModel], ...]) -> Any:
+    """Turn a stored artifact back into the object a role expects.
+
+    A checkpoint is JSON, and a role reads its predecessor's artifact by attribute. The
+    first model that accepts the payload wins; the pipeline's shape is tried before the
+    single-agent one because the two are not ambiguous in practice — one has a fault
+    type, the other a sentence.
+    """
+    if not isinstance(value, dict):
+        return value
+    for model in models:
+        try:
+            return model.model_validate(value)
+        except Exception:
+            continue
+    _log.warning("could not restore a stored artifact; leaving it as it was stored")
+    return value
 
 
 def _serialisable(state: IncidentState) -> dict[str, Any]:

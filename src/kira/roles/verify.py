@@ -32,7 +32,7 @@ from kira.prompts.loader import compose_role_prompt, read_runtime, render
 from kira.roles.base import RoleContext, RoleOutcome, RoleSpec
 from kira.roles.health_gate import HealthGate, sweep_namespace_health
 from kira.roles.loop import SubmitGuard, run_until_submit
-from kira.roles.policy import LoopLimits, role_system_prompt
+from kira.roles.policy import LoopLimits, opening, role_system_prompt
 from kira.roles.prompting import alert_json, retrieval_enabled
 from kira.roles.registry import role
 
@@ -116,7 +116,7 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         tools=ctx.toolset.definitions,
         dispatch=ctx.toolset.dispatch,
         submit_tool=ctx.spec.submit_tool,
-        messages=initial,
+        messages=opening(ctx, initial),
         limits=LoopLimits.from_settings(
             ctx.settings.runtime, max_turns=ctx.settings.pipeline.max_turns
         ),

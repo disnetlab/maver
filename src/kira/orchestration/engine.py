@@ -66,13 +66,15 @@ class Engine(Protocol):
     """Runs the routing to completion."""
 
     async def run(
-        self, state: IncidentState, *, on_stage: StageHook | None = None
+        self, state: IncidentState, *, on_stage: StageHook | None = None, start: str = ENTRY
     ) -> IncidentState:
         """Run the incident from its seeded state to a terminal one.
 
         Args:
-            state: The seeded incident state.
+            state: The incident state to run from.
             on_stage: Notified after each role completes, with the accumulated state.
+            start: Which role to run first. Anything but the entry point continues an
+                incident that stopped part-way.
 
         Returns:
             The terminal state.
@@ -89,17 +91,28 @@ class LangGraphEngine:
     framework's types along with its imports."""
 
     async def run(
-        self, state: IncidentState, *, on_stage: StageHook | None = None
+        self, state: IncidentState, *, on_stage: StageHook | None = None, start: str = ENTRY
     ) -> IncidentState:
         """Run the graph, streaming only when someone is listening.
 
         Args:
-            state: The seeded incident state.
+            state: The incident state to run from.
             on_stage: Notified after each role completes.
+            start: Which role to run first. Only the entry point is supported.
 
         Returns:
             The terminal state.
+
+        Raises:
+            NotImplementedError: When asked to start part-way. Entering a compiled graph
+                at an arbitrary node is what a checkpointer is for, and keeping
+                persistence and resume in our own code is the reason there is not one.
+                A continuation runs on the sequential engine, over the same predicates.
         """
+        if start != ENTRY:
+            raise NotImplementedError(
+                "the graph executor cannot start part-way; resume on the sequential engine"
+            )
         if on_stage is None:
             return cast(IncidentState, await self.graph.ainvoke(state))
 
@@ -126,13 +139,15 @@ class SequentialEngine:
     policy: RoutingPolicy
 
     async def run(
-        self, state: IncidentState, *, on_stage: StageHook | None = None
+        self, state: IncidentState, *, on_stage: StageHook | None = None, start: str = ENTRY
     ) -> IncidentState:
         """Run each role and follow its predicate until one routes to the end.
 
         Args:
-            state: The seeded incident state.
+            state: The incident state to run from.
             on_stage: Notified after each role completes.
+            start: Which role to run first. A continuation names the role that was
+                interrupted; the routing from there is the routing every run takes.
 
         Returns:
             The terminal state.
@@ -141,7 +156,7 @@ class SequentialEngine:
             StepLimitExceeded: The incident took more role runs than the limit allows.
         """
         accumulated = state
-        current = ENTRY
+        current = start
         for _ in range(STEP_LIMIT):
             delta = await self.nodes[current](accumulated)
             accumulated = cast(IncidentState, {**accumulated, **delta})

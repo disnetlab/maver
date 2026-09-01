@@ -20,11 +20,14 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from kira.llm.types import Message, ToolCall
 from kira.prompts.loader import read_asset, render
 from kira.settings.groups import RuntimeSettings
+
+if TYPE_CHECKING:
+    from kira.roles.base import RoleContext
 
 __all__ = [
     "RATIONALE_ARG",
@@ -37,6 +40,7 @@ __all__ = [
     "finalizer_rescue_message",
     "mixed_submit_message",
     "no_tool_nudge_message",
+    "opening",
     "repair_submission",
     "repeat_breaker_message",
     "role_system_prompt",
@@ -545,3 +549,20 @@ def close_dangling_tool_calls(messages: list[Message]) -> list[Message]:
                 answered.add(call_id)
                 closed.append({"role": "tool", "tool_call_id": call_id, "content": note})
     return closed
+
+
+def opening(ctx: "RoleContext", built: list[Message]) -> list[Message]:
+    """The turn a role opens on.
+
+    Its own on a first entry, and the transcript it was paused in on a continuation.
+    Rebuilding the opening turn after an approval would discard everything the role had
+    established before it asked.
+
+    Args:
+        ctx: The role run's context.
+        built: The opening this role would build for itself.
+
+    Returns:
+        The messages to run from.
+    """
+    return list(ctx.resume) if ctx.resume is not None else built

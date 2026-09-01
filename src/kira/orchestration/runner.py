@@ -30,9 +30,10 @@ from kira.contracts.routing import HandBack
 from kira.contracts.state import IncidentState, TargetStage
 from kira.llm.types import Completion
 from kira.memory.factory import StorageStack
-from kira.memory.ports import AgentRunRecord, AgentRunStatus
+from kira.memory.ports import AgentRunRecord, AgentRunStatus, ApprovalRecord
 from kira.middleware.authority import ApprovalPending, Authority, AutoApprove
 from kira.middleware.base import AgentHook, MiddlewareStack
+from kira.middleware.human_approval import approval_granted
 from kira.middleware.write_gate import WriteGate
 from kira.orchestration.budget import RetryBudget
 from kira.orchestration.engine import Engine, LangGraphEngine, SequentialEngine, StageHook
@@ -41,7 +42,14 @@ from kira.orchestration.hooks import fire_hooks
 from kira.orchestration.modes import MODES, ModeContext, resolve_mode
 from kira.orchestration.nodes import ContextBuilder, IncidentDeps, make_node
 from kira.orchestration.outcomes import OutcomeRecord, persist_outcome, resolve_outcome
-from kira.orchestration.resume import save_checkpoint
+from kira.orchestration.resume import (
+    ApprovalCheckpoint,
+    denial_result,
+    load_checkpoint,
+    restored_state,
+    resume_events,
+    save_checkpoint,
+)
 from kira.orchestration.routing import RoutingPolicy
 from kira.orchestration.state import initial_state
 from kira.roles.base import RoleContext, RoleSpec, StateDelta
@@ -142,7 +150,6 @@ class _RunRecorder:
     def __init__(self, storage: StorageStack) -> None:
         """Bind to this deployment's stores."""
         self._storage = storage
-        self._counts: dict[str, int] = {}
 
     def start(self, *, session_id: str, role: str, after: str | None) -> str:
         """Open a run row.
@@ -155,14 +162,19 @@ class _RunRecorder:
         Returns:
             The new run's identifier.
         """
-        self._counts[role] = self._counts.get(role, 0) + 1
-        run_id = f"{session_id}:{role}:{self._counts[role]}"
+        # Counted from what is stored rather than from this object, because a
+        # continuation after an approval is a second recorder over the same incident and
+        # would otherwise reuse the identifiers the first one issued.
+        attempt = 1 + sum(
+            1 for run in self._storage.runs.runs_for(session_id) if run.agent_name == role
+        )
+        run_id = f"{session_id}:{role}:{attempt}"
         self._storage.runs.start_run(
             AgentRunRecord(
                 agent_run_id=run_id,
                 pipeline_id=session_id,
                 agent_name=role,
-                attempt=self._counts[role],
+                attempt=attempt,
                 status="running",
                 started_at="",
                 metadata={"after": after} if after else {},
@@ -221,8 +233,15 @@ def _context_builder(
     deployment: Deployment,
     resources: IncidentResources,
     on_stage: StageHook | None,
+    resume_for: dict[str, list[dict[str, Any]]] | None = None,
 ) -> ContextBuilder:
-    """Assemble a role's context from the incident's own resources."""
+    """Assemble a role's context from the incident's own resources.
+
+    ``resume_for`` carries the transcript a paused role should open on, keyed by that
+    role. It is consumed on the first entry: a role re-entered later in the same run is
+    starting a fresh cycle, not continuing the one that was interrupted.
+    """
+    pending_resume = dict(resume_for or {})
 
     def build(
         spec: RoleSpec, state: IncidentState, handback: HandBack | None, run_id: str
@@ -233,17 +252,8 @@ def _context_builder(
             stage=spec.name,
             run_id=run_id,
         )
-        tools = ToolContext(
-            transport=resources.transport,
-            workspace=resources.workspace,
-            role=spec.name,
-            session_id=state.get("session_id", ""),
-            journal=journal,
-            settings=deployment.settings.tools,
-            scope=resources.scope,
-            memory=deployment.storage.retriever if deployment.settings.memory.enabled else None,
-            sessions=deployment.storage.sessions,
-            runs=deployment.storage.runs,
+        tools = _tool_context(
+            deployment, resources, spec.name, state.get("session_id", ""), journal
         )
 
         async def milestone(stage: str, delta: StateDelta) -> None:
@@ -278,6 +288,7 @@ def _context_builder(
             session_id=state.get("session_id", ""),
             memory=tools.memory,
             milestone=milestone,
+            resume=pending_resume.pop(spec.name, None),
         )
 
     return build
@@ -356,6 +367,7 @@ async def run_incident(
             # Not an error. Park the incident where it stopped and let the caller unwind
             # cleanly; nothing is persisted as terminal and no hook fires, because the
             # run has not finished — it is waiting.
+            _park_run(deployment, pending)
             save_checkpoint(
                 deployment.storage.sessions, cast(IncidentState, pending.state), pending
             )
@@ -382,6 +394,163 @@ async def run_incident(
 
         _record_completion(journal, final_state, record, deps.policy)
         return final_state
+
+
+def _park_run(deployment: Deployment, pending: ApprovalPending) -> None:
+    """Close the paused role's row as waiting, rather than leaving it open.
+
+    A row left running is indistinguishable from a role that hung, and the continuation
+    opens its own row: what happened is one attempt that stopped for a decision and a
+    second that carried on.
+    """
+    if not pending.run_id:
+        return
+    deployment.storage.runs.finish_run(
+        pending.run_id,
+        status="awaiting_human",
+        error=f"awaiting approval request {pending.request_id}",
+    )
+
+
+async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
+    """Continue an incident once the human it was waiting on has answered.
+
+    The continuation lives here rather than in the role that raised. The prototype's
+    remediating role imported the graph, the outcome resolver and the post-incident
+    hooks so it could drive the pipeline itself, and that inversion is why the approval
+    path was the least exercised part of the system.
+
+    It runs on the sequential executor, starting at the role that was interrupted. The
+    graph executor cannot be entered part-way without a checkpointer, and keeping
+    persistence and resume in our own code is the point of not having one.
+
+    Args:
+        request_id: The request that was decided.
+        deployment: This process's resources.
+
+    Returns:
+        A short status for the job log: why it could not continue, ``awaiting_human``
+        when the continuation paused again, or the outcome the incident reached.
+    """
+    sessions = deployment.storage.sessions
+    loaded = load_checkpoint(sessions, deployment.storage.approvals, request_id)
+    if isinstance(loaded, str):
+        return loaded
+    checkpoint, record = loaded
+
+    session = sessions.get_session(checkpoint.session_id)
+    if session is None or session.run_status not in ("awaiting_human", "resuming"):
+        # Answered twice, or the session moved on. Continuing now would re-dispatch a
+        # write against a state nobody approved it for. Note the limitation honestly:
+        # this is a read followed by a write, not a compare-and-set, so two processes
+        # racing on one request are ordered by the request's own single decision rather
+        # than by this check.
+        return "already_resumed"
+    sessions.set_run_status(
+        checkpoint.session_id,
+        RunStatus.RESUMING,
+        current_stage=checkpoint.stage,
+        checkpoint=checkpoint.model_dump(mode="json"),
+        awaiting_request_id=request_id,
+    )
+
+    state = restored_state(checkpoint)
+    alert = dict(state.get("alert") or {})
+    async with incident_context(checkpoint.session_id, alert, deployment) as resources:
+        journal = Journal(deployment.sink, session_id=checkpoint.session_id, stage=checkpoint.stage)
+        tools = _tool_context(
+            deployment, resources, checkpoint.stage, checkpoint.session_id, journal
+        )
+        content = await _replay(checkpoint, record, tools, deployment)
+        for event in resume_events(checkpoint, record, result_chars=len(content)):
+            journal.record(event)
+
+        transcript = [
+            *checkpoint.messages,
+            {
+                "role": "tool",
+                "tool_call_id": checkpoint.tool_call_id,
+                "name": checkpoint.tool_name,
+                "content": content,
+            },
+        ]
+        deps = IncidentDeps(
+            policy=RoutingPolicy.from_settings(deployment.settings),
+            runs=_RunRecorder(deployment.storage),
+            journal=journal,
+            build_context=_context_builder(
+                deployment, resources, None, {checkpoint.stage: transcript}
+            ),
+        )
+        nodes = {name: make_node(get_role(name), deps) for name in GRAPH_ROLES}
+        try:
+            final_state = await SequentialEngine(nodes, deps.policy).run(
+                state, start=checkpoint.stage
+            )
+        except ApprovalPending as pending:
+            # A second decision is needed. Re-park and leave the hooks alone: the
+            # incident still has not finished.
+            save_checkpoint(sessions, cast(IncidentState, pending.state), pending)
+            return "awaiting_human"
+
+        outcome = resolve_outcome(final_state)
+        try:
+            persist_outcome(final_state, outcome, sessions)
+        except Exception:
+            _log.exception("persisting the resumed outcome failed; continuing from memory")
+        # Once, at the end. An interim result recorded mid-continuation would be read as
+        # terminal, and the run status would briefly flip terminal before it was.
+        await fire_hooks(
+            outcome.outcome,
+            checkpoint.session_id,
+            workdir=deployment.settings.server.workdir,
+        )
+        _record_completion(journal, final_state, outcome, deps.policy)
+        return outcome.outcome.value
+
+
+async def _replay(
+    checkpoint: ApprovalCheckpoint,
+    record: ApprovalRecord,
+    tools: ToolContext,
+    deployment: Deployment,
+) -> str:
+    """Produce the result of the call the incident was paused on."""
+    if record.status != "approved":
+        return denial_result(record)
+
+    toolset = build_toolset(checkpoint.stage, tools)
+    bound = toolset.dispatch.get(checkpoint.tool_name)
+    if bound is None:
+        # Approved, but the tool is not available in this configuration any more.
+        # Reported as a refusal rather than raised: the role can say so and move on.
+        return f"error: {checkpoint.tool_name} is not available in this configuration"
+    with approval_granted(
+        record.request_id, tool=checkpoint.tool_name, arguments=checkpoint.tool_arguments
+    ):
+        return str(await bound(**checkpoint.tool_arguments))
+
+
+def _tool_context(
+    deployment: Deployment,
+    resources: IncidentResources,
+    role: str,
+    session_id: str,
+    journal: Journal,
+) -> ToolContext:
+    """One role's view of the environment. Shared by the runner and the continuation."""
+    return ToolContext(
+        transport=resources.transport,
+        workspace=resources.workspace,
+        role=role,
+        session_id=session_id,
+        journal=journal,
+        settings=deployment.settings.tools,
+        scope=resources.scope,
+        memory=deployment.storage.retriever if deployment.settings.memory.enabled else None,
+        sessions=deployment.storage.sessions,
+        runs=deployment.storage.runs,
+    )
 
 
 def _record_completion(
