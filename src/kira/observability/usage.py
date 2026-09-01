@@ -14,9 +14,9 @@ from dataclasses import dataclass
 
 from kira.audit.journal import Journal
 from kira.contracts.events import ModelCallEvent
-from kira.llm.sampling import sampling_digest
+from kira.llm.sampling import SamplingResolution, applied_sampling
 from kira.llm.types import Completion, ModelRequest, ModelResponse
-from kira.settings.profiles import ModelProfile, SamplingSet
+from kira.settings.profiles import ModelProfile
 
 __all__ = ["RecordingCompletion"]
 
@@ -28,6 +28,13 @@ class RecordingCompletion:
     inner: Completion
     journal: Journal
     profile: ModelProfile
+    sampling: SamplingResolution
+    """The agent's set as resolved against settings, not as written in the profile.
+
+    Recording ``profile.sampling`` here meant an overridden run logged the file's value
+    and a digest identical to an unoverridden one. That is the drift this event exists
+    to make visible, reproduced inside the mechanism built to catch it.
+    """
 
     async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
         """Run one completion and record it.
@@ -45,7 +52,9 @@ class RecordingCompletion:
                 caller=caller,
                 model=self.profile.model,
                 profile=self.profile.name,
-                sampling=_record(request.sampling or self.profile.sampling),
+                sampling=applied_sampling(
+                    request.sampling, self.profile, self.sampling
+                ).as_record(),
                 prompt_tokens=response.usage.prompt_tokens,
                 completion_tokens=response.usage.completion_tokens,
                 reasoning_tokens=response.usage.reasoning_tokens,
@@ -59,14 +68,3 @@ class RecordingCompletion:
             )
         )
         return response
-
-
-def _record(sampling: SamplingSet) -> dict[str, object]:
-    """Render a sampling set for the audit event.
-
-    The complete set and its digest together. A partial record is indistinguishable
-    from a complete one after the fact, which is how a change to one knob went
-    unnoticed across weeks of runs whose results were no longer comparable.
-    """
-    values = sampling.model_dump(mode="json")
-    return {**values, "digest": sampling_digest(values)}

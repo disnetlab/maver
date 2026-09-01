@@ -30,6 +30,11 @@ from kira.contracts.events import StageEvent
 from kira.contracts.lifecycle import RunStatus
 from kira.contracts.routing import HandBack
 from kira.contracts.state import IncidentState, TargetStage
+from kira.llm.sampling import (
+    SamplingResolution,
+    assert_sampling_is_pinned,
+    resolve_sampling,
+)
 from kira.llm.types import Completion
 from kira.memory.factory import StorageStack
 from kira.memory.ports import AgentRunRecord, AgentRunStatus, ApprovalRecord
@@ -120,6 +125,18 @@ class Deployment:
     """One cluster writer per process. Held here rather than in a module global so two
     deployments in one process are genuinely independent, which is what makes the
     serialisation testable."""
+    sampling: SamplingResolution = field(init=False)
+    """The profile's set resolved against settings, once, for the whole process."""
+
+    def __post_init__(self) -> None:
+        """Resolve the sampling set once, and refuse a deployment that cannot send it."""
+        # Resolved and checked here because this is the composition root: every entry
+        # point builds a Deployment, so a set that cannot be sent fails at startup
+        # rather than at the first call, or — the case that actually happened — not at
+        # all, with the run completing on a configuration nobody could reconstruct.
+        resolution = resolve_sampling(self.profile, self.settings)
+        assert_sampling_is_pinned(self.profile, resolution)
+        object.__setattr__(self, "sampling", resolution)
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,7 +353,9 @@ def _second_pass_node(
                 session_id=state.get("session_id", ""),
                 alert=dict(state.get("alert") or {}),
                 state=state,
-                completion=RecordingCompletion(deployment.completion, journal, deployment.profile),
+                completion=RecordingCompletion(
+                    deployment.completion, journal, deployment.profile, deployment.sampling
+                ),
                 sampling=deployment.profile.aux_sampling or deployment.profile.sampling,
                 memory=deployment.storage.retriever if deployment.settings.memory.enabled else None,
                 snapshot=snapshot,
@@ -426,7 +445,9 @@ def _context_builder(
             state=state,
             handback=handback,
             settings=deployment.settings,
-            completion=RecordingCompletion(deployment.completion, journal, deployment.profile),
+            completion=RecordingCompletion(
+                deployment.completion, journal, deployment.profile, deployment.sampling
+            ),
             profile=deployment.profile,
             middleware=MiddlewareStack(
                 [

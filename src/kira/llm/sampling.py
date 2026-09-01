@@ -20,6 +20,7 @@ from kira.settings.root import Settings
 
 __all__ = [
     "SamplingResolution",
+    "applied_sampling",
     "assert_sampling_is_pinned",
     "is_token_limit_finish",
     "resolve_sampling",
@@ -174,6 +175,32 @@ def split_sampling(sampling: SamplingSet, profile: ModelProfile) -> SamplingReso
             continue
         (extra_body if name in extra_fields else top_level)[name] = value
     return SamplingResolution(profile.name, values, top_level, extra_body, {})
+
+
+def applied_sampling(
+    request_sampling: SamplingSet | None,
+    profile: ModelProfile,
+    resolved: SamplingResolution,
+) -> SamplingResolution:
+    """Which set this one call actually runs on.
+
+    One rule, imported by the client that sends the call and by the wrapper that records
+    it. Written out separately in each, they disagreed in both directions at once: the
+    client reported the agent's sampling for every auxiliary call, and the recorder
+    reported the profile file for every agent call, missing any override. Two logs, two
+    numbers, and neither of them the set that was sent.
+
+    Args:
+        request_sampling: The set this call carries, when it brought its own.
+        profile: The profile, for which fields the provider needs routed natively.
+        resolved: The agent's set, already resolved against settings.
+
+    Returns:
+        The resolution that applies to this call.
+    """
+    if request_sampling is None:
+        return resolved
+    return split_sampling(request_sampling, profile)
 
 
 def assert_sampling_is_pinned(profile: ModelProfile, resolution: SamplingResolution) -> None:

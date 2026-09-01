@@ -22,9 +22,9 @@ from kira.contracts.events import ModelCallEvent
 from kira.llm.errors import RETRYABLE, ErrorClass, ModelCallError, classify
 from kira.llm.sampling import (
     SamplingResolution,
+    applied_sampling,
     is_token_limit_finish,
     resolve_sampling,
-    split_sampling,
 )
 from kira.llm.types import Message, ModelRequest, ModelResponse, ToolCall, ToolSpec, Usage
 from kira.prompts.loader import read_asset
@@ -385,7 +385,7 @@ class LLMClient:
         # would silently run every gate on the agent's sampling, which is the failure it
         # exists to prevent: a gate at temperature 1.0 with a presence penalty answers
         # differently each time it is asked the same question.
-        applied = split_sampling(request.sampling, profile) if request.sampling else self.sampling
+        applied = applied_sampling(request.sampling, profile, self.sampling)
         top_level = dict(applied.top_level)
         extra_body = dict(applied.extra_body)
 
@@ -446,6 +446,11 @@ class LLMClient:
             ModelCallError: When the call failed and retrying did not help.
         """
         kwargs = self._build_kwargs(request)
+        # The same rule the kwargs were built from, so what is reported is what was
+        # sent. Reporting self.sampling here recorded the agent's set on every gate,
+        # nominator and selector call — the calls that carry their own set precisely
+        # because they must not run on the agent's.
+        applied = applied_sampling(request.sampling, self.profile, self.sampling)
         attempts = self.profile.limits["num_retries"] + 1
         last: ModelCallError | None = None
 
@@ -458,6 +463,7 @@ class LLMClient:
                 error_class = classify(exc)
                 self._emit(
                     caller=caller,
+                    sampling=applied,
                     usage=_extract_usage(getattr(exc, "usage", None)),
                     finish_reason=None,
                     duration_ms=duration_ms,
@@ -480,6 +486,7 @@ class LLMClient:
             response = self._normalise(raw, duration_ms=duration_ms, attempts=attempt)
             self._emit(
                 caller=caller,
+                sampling=applied,
                 usage=response.usage,
                 finish_reason=response.finish_reason,
                 duration_ms=duration_ms,
@@ -530,6 +537,7 @@ class LLMClient:
         self,
         *,
         caller: str,
+        sampling: SamplingResolution,
         usage: Usage,
         finish_reason: str | None,
         duration_ms: int,
@@ -543,7 +551,7 @@ class LLMClient:
                 caller=caller,
                 model=self.profile.model,
                 profile=self.profile.name,
-                sampling=self.sampling.as_record(),
+                sampling=sampling.as_record(),
                 prompt_tokens=usage.prompt_tokens,
                 completion_tokens=usage.completion_tokens,
                 reasoning_tokens=usage.reasoning_tokens,

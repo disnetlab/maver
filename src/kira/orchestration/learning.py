@@ -19,6 +19,7 @@ from kira.contracts.artifacts import LearningPacket, LearningResult, RoleTraceSu
 from kira.memory.distil import distil
 from kira.middleware.base import MiddlewareStack
 from kira.middleware.write_gate import WriteGate
+from kira.observability.usage import RecordingCompletion
 from kira.orchestration.jobs import bound_deployment
 from kira.orchestration.runner import Deployment, incident_context, tool_context_for
 from kira.roles.base import RoleContext
@@ -105,7 +106,13 @@ async def run_learning(
                 state={"session_id": session_id, "alert": dict(packet.alert)},
                 handback=None,
                 settings=deployment.settings,
-                completion=deployment.completion,
+                # Wrapped, like every other stage. Handed the raw client, the distilling
+                # pass ran off the books entirely: no model-call event, no tokens, no
+                # cost, in the arm whose whole claim is that its memory is worth what it
+                # costs to build. The rule is that a model call anywhere is counted.
+                completion=RecordingCompletion(
+                    deployment.completion, journal, deployment.profile, deployment.sampling
+                ),
                 profile=deployment.profile,
                 middleware=MiddlewareStack(
                     [

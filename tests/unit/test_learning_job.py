@@ -197,3 +197,23 @@ async def test_no_hook_is_registered_when_nothing_will_be_distilled(
     finally:
         clear_hooks()
         deploy.storage.close()
+
+
+async def test_the_distilling_call_is_counted_like_every_other(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The rule is that a model call anywhere is counted, and this stage was the
+    exception: it was handed the raw client rather than the recording wrapper, so it
+    spent tokens that appear in no event, in the arm whose claim is that its memory is
+    worth what it costs to build.
+    """
+    deploy, model = deployment(tmp_path)
+    session_id = closed_incident(deploy)
+
+    assert await run_learning(session_id, deploy) == "distilled"
+
+    calls = [e for e in deploy.sink.events if e.payload.kind == "model_call"]
+    assert len(calls) == model.calls == 1
+    assert calls[0].payload.caller == "learning"
+    assert calls[0].payload.sampling["digest"] == deploy.sampling.digest
+    deploy.storage.close()
