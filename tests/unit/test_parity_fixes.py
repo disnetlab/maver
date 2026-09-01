@@ -13,6 +13,7 @@ from kira.llm.client import serialise_assistant
 from kira.llm.types import ModelResponse, ToolCall, Usage
 from kira.roles.base import RoleContext
 from kira.roles.policy import repair_submission
+from kira.roles.trace_summary import build_trace_summary
 from kira.tools.context import NullEvidencePolicy, redact
 
 
@@ -106,3 +107,41 @@ def test_a_role_cannot_run_its_tools_ungated() -> None:
         if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING
     }
     assert {"middleware", "profile"} <= required
+
+
+def test_a_command_that_exited_non_zero_is_summarised_as_an_error() -> None:
+    """The trace summary is what the learning pass reads instead of the transcript.
+
+    A failure only carries the `error:` prefix under one of the two transports; under
+    the direct one it arrives as an exit code. Screened on the prefix alone, every
+    failed command on that transport was written into the record as `[OK]` and left out
+    of the errors, so the same incident produced two different accounts of itself
+    depending on where it ran.
+    """
+    summary = build_trace_summary(
+        "rca",
+        transcript=[
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "function": {
+                            "name": "bash_exec",
+                            "arguments": '{"cmd": "kubectl get pods"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "name": "bash_exec",
+                "content": "exit_code=1\nError from server (Forbidden): pods is forbidden",
+            },
+        ],
+    )
+
+    assert summary.tool_calls[0].startswith("[ERROR] bash_exec")
+    assert any("Forbidden" in item for item in summary.errors_or_uncertainties)

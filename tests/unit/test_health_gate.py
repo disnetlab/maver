@@ -177,3 +177,22 @@ async def test_a_python_dict_payload_still_parses(tmp_path: Path) -> None:
 
     assert gate.checked is True
     assert gate.blocks_recovered is True
+
+
+async def test_a_read_that_ran_and_failed_is_not_a_clean_sweep(tmp_path: Path) -> None:
+    """The direct transport reports a failed read as an exit code, not as `error:`.
+
+    Screened on the prefix alone it reached the parse, which returns no failures for a
+    body it cannot read — so a gate that had never seen the namespace came back
+    `checked=True, failures=()`, which is a positive assertion of health and the one
+    thing this gate exists to withhold.
+    """
+    gate = await sweep(
+        tmp_path,
+        'exit_code=1\nError from server (NotFound): namespaces "shop" not found',
+    )
+
+    assert gate.checked is False
+    assert gate.blocks_recovered is False
+    assert gate.error
+    assert gate.context_text() == ""

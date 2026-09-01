@@ -37,6 +37,7 @@ from typing import Any
 
 from kira.prompts.loader import read_runtime, render
 from kira.tools.context import ToolContext
+from kira.tools.errors import call_failed
 from kira.tools.kubernetes import read_kubectl
 
 __all__ = ["HealthGate", "sweep_namespace_health"]
@@ -303,8 +304,11 @@ async def sweep_namespace_health(ctx: ToolContext, namespace: str) -> HealthGate
     except Exception as exc:  # a gate that raised would take the verdict down with it
         _log.warning("health gate: pod sweep failed for ns=%s: %s", ns, exc, exc_info=exc)
         return HealthGate(checked=False, error=f"{type(exc).__name__}: {exc}"[:200], namespace=ns)
-    if raw.strip().startswith("error:"):
-        _log.warning("health gate: pod sweep refused for ns=%s: %s", ns, raw.strip()[:160])
+    # Both failure shapes, not just the prefix. A read that ran and exited non-zero says so
+    # with its exit code, and reading past that left the gate on the fail-open path with
+    # `checked=True`: an assertion of health about a namespace it had never seen.
+    if call_failed(raw.strip()):
+        _log.warning("health gate: pod sweep could not read ns=%s: %s", ns, raw.strip()[:160])
         return HealthGate(checked=False, error=raw.strip()[:200], namespace=ns)
 
     failures, notes = _pod_failures(raw)

@@ -14,6 +14,7 @@ from typing import Any
 
 from kira.contracts.artifacts import RoleTraceSummary
 from kira.llm.types import Message
+from kira.tools.errors import call_failed
 
 __all__ = ["build_trace_summary"]
 
@@ -188,7 +189,7 @@ def _summarise_tool_calls(messages: list[Message]) -> tuple[list[str], list[str]
             call_id = str(message.get("tool_call_id") or "")
             name = str(message.get("name") or names.get(call_id) or "?")
             content = str(message.get("content", ""))
-            status = "ERROR" if content.startswith("error:") else "OK"
+            status = "ERROR" if call_failed(content) else "OK"
             line = f"[{status}] {name}"
             if arguments.get(call_id):
                 line += f"({arguments[call_id]})"
