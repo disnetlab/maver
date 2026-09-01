@@ -100,7 +100,21 @@ src/kira/
   orchestration/ routing, the graph, the runner, outcomes, and the offline pass
   adapters/      the environment seam, and the SREGym adapter
   api/           incident intake, health, and approval decisions
+
+configs/         model profiles, experiment arms, adapter settings
+deploy/          the container image, and Kubernetes manifests with two overlays
+examples/        one alert payload and the shortest script that drives an incident
+scripts/         the two things an evaluation host runs outside this package
+tests/           unit, contract and integration suites
 ```
+
+The two scripts are worth naming because nothing in the package imports them.
+`sregym-driver.py` is the path the benchmark's own agent configuration invokes; it loads
+the driver from its file rather than by package name, because it runs in the harness's
+interpreter where this project is not installed. `sregym-mcp-port-forward.sh` holds open
+the port-forward that adapter's transport speaks through. Both are load-bearing and both
+fail on a remote host part-way through a run, so the contract between the entry point and
+the driver it loads is pinned by a test.
 
 `STYLE_GUIDE.md` carries the conventions a linter cannot express: the layer boundaries,
 the tool-allowlist rule, the write-gate invariant, the artifact-schema freeze, and the
