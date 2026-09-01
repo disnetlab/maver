@@ -31,7 +31,12 @@ test-parity:  ## Run only the checks that guard the published numbers
 # reports green, so the DSN is required rather than defaulted: refusing here is the
 # whole point of the target. --no-skips catches the rest, a missing driver above all,
 # which would otherwise skip these at import.
-POSTGRES_TESTS = tests/unit/test_postgres_backend.py tests/integration/test_incident_on_postgres.py
+# Named rather than globbed, so adding a file that needs a database is a deliberate
+# act. The cost is that forgetting one leaves it out of CI silently, so a new
+# database-backed test belongs on this line in the same change that adds it.
+POSTGRES_TESTS = tests/unit/test_postgres_backend.py \
+                 tests/integration/test_incident_on_postgres.py \
+                 tests/integration/test_approval_on_postgres.py
 
 test-postgres:  ## Run the suites needing a live PostgreSQL (set POSTGRES_TEST_DSN)
 	@test -n "$(POSTGRES_TEST_DSN)" || { \
