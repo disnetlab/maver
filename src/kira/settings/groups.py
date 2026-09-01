@@ -13,7 +13,7 @@ fail closed.
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 
 from kira.settings.base import NameSet, SettingsGroup, group_config, setting
 
@@ -29,6 +29,7 @@ __all__ = [
     "SecondPassSettings",
     "ServerSettings",
     "ToolSettings",
+    "TransportSettings",
     "VerifySettings",
 ]
 
@@ -683,6 +684,56 @@ class ToolSettings(SettingsGroup):
         "KIRA_TOOLS__HOST_RECOVERY_NODES",
         "HOST_RECOVERY_ALLOWED_NODES",
         description="Nodes reachable for host-level recovery. Empty disables it.",
+    )
+
+
+class TransportSettings(SettingsGroup):
+    """Where the default transport finds the cluster and its telemetry backends.
+
+    An unset endpoint is a description of the deployment, not an error. The transport
+    reports what it was given as its capabilities, and a tool whose backend is missing
+    is dropped before the run with the reason recorded, rather than failing the first
+    time a role calls it.
+    """
+
+    model_config = group_config("transport")
+
+    kubectl_binary: str = setting(
+        "kubectl",
+        "KIRA_TRANSPORT__KUBECTL_BINARY",
+        description="The kubectl executable, looked up on PATH unless given as a path.",
+    )
+    kubeconfig: Path | None = setting(
+        None,
+        "KIRA_TRANSPORT__KUBECONFIG",
+        description=(
+            "Credentials for the cluster. Unset leaves kubectl its own discovery, which "
+            "is the mounted service account when the agent runs inside the cluster."
+        ),
+    )
+    prometheus_url: AnyHttpUrl | None = setting(
+        None,
+        "KIRA_TRANSPORT__PROMETHEUS_URL",
+        description="Base URL of the metrics backend. Unset withdraws the metrics tools.",
+    )
+    loki_url: AnyHttpUrl | None = setting(
+        None,
+        "KIRA_TRANSPORT__LOKI_URL",
+        description="Base URL of the log backend. Unset withdraws the log tools.",
+    )
+    jaeger_url: AnyHttpUrl | None = setting(
+        None,
+        "KIRA_TRANSPORT__JAEGER_URL",
+        description="Base URL of the trace backend. Unset withdraws the trace tools.",
+    )
+    timeout_s: int = setting(
+        120,
+        "KIRA_TRANSPORT__TIMEOUT_S",
+        description=(
+            "How long one cluster or telemetry call may take. A blocking kubectl is "
+            "bounded ten seconds under this, so it reports its own timeout rather than "
+            "being killed with nothing to show for the wait."
+        ),
     )
 
 

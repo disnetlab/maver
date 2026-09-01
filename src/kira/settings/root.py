@@ -22,6 +22,7 @@ from kira.settings.groups import (
     SecondPassSettings,
     ServerSettings,
     ToolSettings,
+    TransportSettings,
     VerifySettings,
 )
 
@@ -54,6 +55,7 @@ class Settings(SettingsGroup):
     authority: AuthoritySettings = Field(default_factory=AuthoritySettings)
     intake: IntakeSettings = Field(default_factory=IntakeSettings)
     tools: ToolSettings = Field(default_factory=ToolSettings)
+    transport: TransportSettings = Field(default_factory=TransportSettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
 

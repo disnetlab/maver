@@ -21,6 +21,7 @@ from kira.settings.groups import (
     SecondPassSettings,
     ServerSettings,
     ToolSettings,
+    TransportSettings,
     VerifySettings,
 )
 from kira.settings.profiles import ModelProfile, SamplingSet, load_profile
@@ -52,6 +53,7 @@ __all__ = [
     "Settings",
     "SettingsGroup",
     "ToolSettings",
+    "TransportSettings",
     "VerifySettings",
     "get_settings",
     "group_config",

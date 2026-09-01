@@ -68,6 +68,9 @@ _EXPLICIT_PROBES: dict[str, tuple[str, str]] = {
     "KIRA_AUTHORITY__RULES": ('[{"name": "probe7", "mode": "deny"}]', "probe7"),
     "KIRA_AUTHORITY__WEBHOOK_URL": ("https://probe7.example.com/", "probe7.example.com"),
     "KIRA_MEMORY__LIFECYCLE_WEIGHTS": ('{"invalidated": 0.7}', "0.7"),
+    "KIRA_TRANSPORT__PROMETHEUS_URL": ("http://probe7.example.com:9090", "probe7.example.com"),
+    "KIRA_TRANSPORT__LOKI_URL": ("http://probe7.example.com:3100", "probe7.example.com"),
+    "KIRA_TRANSPORT__JAEGER_URL": ("http://probe7.example.com:16686", "probe7.example.com"),
 }
 
 
