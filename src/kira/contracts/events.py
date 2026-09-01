@@ -24,6 +24,7 @@ __all__ = [
     "InterventionEvent",
     "ModelCallEvent",
     "PolicyDecisionEvent",
+    "SecondPassEvent",
     "StageEvent",
     "SubmissionEvent",
     "ToolCallEvent",
@@ -143,13 +144,64 @@ class StageEvent(BaseModel):
     detail: str = ""
 
 
+class SecondPassEvent(BaseModel):
+    """One decision taken by the gated second pass.
+
+    Recorded for every incident where the mechanism is enabled, including the incidents
+    where the gate declines and no model call is made. A skip that leaves no record
+    makes the mechanism's dose unmeasurable, and the dose is what an arm gap has to be
+    divided by.
+    """
+
+    kind: Literal["second_pass"] = "second_pass"
+    policy: str = Field(description="The named composition, e.g. ma-s.")
+    step: Literal["gate", "search", "nomination", "brief", "selection", "skip"]
+    fired: bool | None = None
+    reason: str = ""
+    queries: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Per query: its name, its text, and the ids it returned. Enough to replay "
+            "the retrieval offline against a frozen corpus."
+        ),
+    )
+    precedent_ids: list[str] = Field(default_factory=list)
+    withheld_count: int = Field(
+        default=0,
+        description=(
+            "Size of the leave-one-out set applied. Zero on a generalisation arm means "
+            "the cell served its own precedent and is void."
+        ),
+    )
+    family: str | None = None
+    confidence: float | None = None
+    weakness: str = Field(
+        default="",
+        description=(
+            "The quality audit's own words for the single biggest weakness it found. "
+            "Kept because it is the only text the gate produces about why it fired."
+        ),
+    )
+    winner: str | None = None
+    label_to_source: dict[str, str] = Field(default_factory=dict)
+    selector_prompt: str | None = Field(
+        default=None,
+        description=(
+            "The exact blinded prompt, stored on the selection event only, so a "
+            "selection can be re-judged offline."
+        ),
+    )
+    selector_response: str | None = None
+
+
 EventPayload = Annotated[
     ModelCallEvent
     | ToolCallEvent
     | SubmissionEvent
     | InterventionEvent
     | PolicyDecisionEvent
-    | StageEvent,
+    | StageEvent
+    | SecondPassEvent,
     Field(discriminator="kind"),
 ]
 

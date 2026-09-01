@@ -79,6 +79,13 @@ def _prototype_source(relative: Path) -> Path:
             return PROTOTYPE / "runtime" / "roles" / filename
         case ("runtime", role, filename):
             return PROTOTYPE / "runtime" / "roles" / role / filename
+        case ("secondpass", filename):
+            # The blinded selector was borrowed from the counterfactual fork arm, which
+            # Kira drops. Its two prompts are live second-pass code, so they move here
+            # while the rest of that module dies with the arm.
+            if filename.startswith("selector_"):
+                return PROTOTYPE / "runtime" / "counterfactual" / filename
+            return PROTOTYPE / "runtime" / "second_opinion" / filename
         case _:
             pytest.fail(f"shipped prompt asset has no known prototype source: {relative}")
 

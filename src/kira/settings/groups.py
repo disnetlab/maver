@@ -355,7 +355,26 @@ class MemorySettings(SettingsGroup):
         True,
         "KIRA_MEMORY__ENABLED",
         "MEMORY_ENABLED",
-        description="Whether roles may retrieve past incidents.",
+        description="Whether the experience store is readable at all.",
+    )
+    role_retrieval: bool = setting(
+        True,
+        "KIRA_MEMORY__ROLE_RETRIEVAL",
+        description=(
+            "Whether a role may call a retrieval tool. Off with the store enabled is a "
+            "real configuration: the second pass reads precedents in the harness while "
+            "every agent run stays retrieval-free."
+        ),
+    )
+    exclude_record_ids: NameSet = setting(
+        frozenset(),
+        "KIRA_MEMORY__EXCLUDE_RECORD_IDS",
+        "MEMORY_EXCLUDE_SESSION_IDS",
+        description=(
+            "Records withheld from every retrieval, as a process-wide floor. This is "
+            "what keeps a generalisation arm honest, so an evaluation adapter unions "
+            "its own per-incident leave-one-out set on top rather than replacing it."
+        ),
     )
     learning_enabled: bool = setting(
         True,
@@ -513,19 +532,28 @@ class SecondPassSettings(SettingsGroup):
         "MEMORY_SECOND_OPINION_MODE",
         description=(
             "What the second run receives: precedent text, a fault-family assignment "
-            "with no text, nothing at all (the resampling control), or a critique."
+            "with no text, or nothing at all, which is the resampling control."
         ),
     )
     force: bool = setting(
         False,
         "KIRA_SECONDPASS__FORCE",
         "MEMORY_SECOND_OPINION_FORCE",
-        description="Run the second pass regardless of the gate. For dose measurement.",
+        description=(
+            "Deliver an assignment even when the nominator finds no differing family, "
+            "turning the second run into a blind verification pass. Lifts the "
+            "nominator's veto only; it does not override the quality gate."
+        ),
     )
     max_precedents: int = setting(
-        3,
+        6,
         "KIRA_SECONDPASS__MAX_PRECEDENTS",
-        description="Precedents retrieved for the second run.",
+        description=(
+            "Ceiling on the merged union of the two observation-keyed queries. Six "
+            "reproduces the measured configuration: the campaign ran three hits per "
+            "query with 0.51 mean overlap, for a merged mean of 5.49, so a cap of "
+            "three would deliver roughly half the dose the published cells received."
+        ),
     )
     gate_max_tokens: int = setting(
         600,
@@ -538,6 +566,22 @@ class SecondPassSettings(SettingsGroup):
         "KIRA_SECONDPASS__NOMINATOR_MAX_TOKENS",
         "MEMORY_SECOND_OPINION_NOMINATOR_MAX_TOKENS",
         description="Generation cap for the nominator call.",
+    )
+    selector_max_tokens: int = setting(
+        1600,
+        "KIRA_SECONDPASS__SELECTOR_MAX_TOKENS",
+        "MEMORY_COUNTERFACTUAL_SELECTOR_MAX_TOKENS",
+        description=(
+            "Generation cap for the selector call. Deliberately well under the "
+            "run-wide cap: an unbounded reasoning budget under a frequency penalty "
+            "degenerates rather than deciding better."
+        ),
+    )
+    selector_timeout_s: int = setting(
+        180,
+        "KIRA_SECONDPASS__SELECTOR_TIMEOUT_S",
+        "MEMORY_COUNTERFACTUAL_SELECTOR_TIMEOUT",
+        description=("Wall-clock bound on the selector; a timeout falls back to the first answer."),
     )
 
     @model_validator(mode="before")

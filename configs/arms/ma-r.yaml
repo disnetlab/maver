@@ -15,14 +15,17 @@ registered:
   hypothesis: "memory helps as a candidate nominator rather than as context"
 settings:
   pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2}
-  memory:     {enabled: true, learning_enabled: true, playbook: true, top_k: 5}
+  memory:     {enabled: true, role_retrieval: true, learning_enabled: true, playbook: true, top_k: 5}
   verify:     {enabled: false}
   secondpass:
     enabled: true
     gate: nominator
     delivery: assignment
     force: false
+    max_precedents: 6
     nominator_max_tokens: 900
+    selector_max_tokens: 1600
+    selector_timeout_s: 180
   # Stated rather than inherited. The shipped default is `prompt`, because a
   # service holding cluster write permissions should not write unattended just
   # because nobody set a variable. An evaluation arm runs unattended by

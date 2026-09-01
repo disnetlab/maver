@@ -547,7 +547,16 @@ def _tool_context(
         journal=journal,
         settings=deployment.settings.tools,
         scope=resources.scope,
-        memory=deployment.storage.retriever if deployment.settings.memory.enabled else None,
+        # Two conditions, not one. A configuration with the store enabled and roles kept
+        # retrieval-free is real: the gated second pass reads precedents in the harness
+        # while both of its diagnosis runs hold no retrieval tool and receive no memory
+        # prompt block. Withholding the store here is what makes the toolset drop those
+        # tools, which in turn is what selects the memory-off prompt.
+        memory=(
+            deployment.storage.retriever
+            if deployment.settings.memory.enabled and deployment.settings.memory.role_retrieval
+            else None
+        ),
         sessions=deployment.storage.sessions,
         runs=deployment.storage.runs,
     )

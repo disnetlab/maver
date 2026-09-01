@@ -17,7 +17,12 @@ settings:
   pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2}
   memory:     {enabled: false, learning_enabled: false, playbook: false}
   verify:     {enabled: false}
-  secondpass: {enabled: true, gate: always, delivery: none}
+  secondpass:
+    enabled: true
+    gate: always
+    delivery: none
+    selector_max_tokens: 1600
+    selector_timeout_s: 180
   # Stated rather than inherited. The shipped default is `prompt`, because a
   # service holding cluster write permissions should not write unattended just
   # because nobody set a variable. An evaluation arm runs unattended by

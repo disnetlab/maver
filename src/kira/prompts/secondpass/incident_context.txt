@@ -1,0 +1,2 @@
+Incident context:
+{{ALERT_JSON}}

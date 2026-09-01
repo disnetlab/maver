@@ -11,7 +11,17 @@ in, it was hand-tuned (namespace snapshot first for RCA, submit last everywhere)
 every published measurement was taken with it.
 """
 
-__all__ = ["ROLE_TOOLSETS"]
+__all__ = ["RETRIEVAL_TOOLS", "ROLE_TOOLSETS"]
+
+RETRIEVAL_TOOLS = frozenset({"memory_search", "open_memory", "session_trace_summary"})
+"""The tools that read the experience store.
+
+Named here rather than inside toolset resolution because two independent places need
+the answer to "which tools are the retrieval tools": the resolver, which withholds them
+from a configuration that has no store or that keeps roles retrieval-free, and the
+second pass's selector, which must never see a precedent in the live evidence it judges
+two candidates on.
+"""
 
 ROLE_TOOLSETS: dict[str, tuple[str, ...]] = {
     "rca": (

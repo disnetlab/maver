@@ -19,7 +19,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from kira.llm.types import ToolSpec as ModelToolSpec
-from kira.tools.allowlists import ROLE_TOOLSETS
+from kira.tools.allowlists import RETRIEVAL_TOOLS, ROLE_TOOLSETS
 from kira.tools.context import ToolContext
 from kira.tools.registry import (
     BoundTool,
@@ -31,8 +31,6 @@ from kira.tools.registry import (
 )
 
 __all__ = ["ResolvedToolset", "build_toolset"]
-
-_MEMORY_TOOLS = frozenset({"memory_search", "open_memory", "session_trace_summary"})
 
 
 @dataclass(frozen=True)
@@ -89,7 +87,7 @@ def build_toolset(
             if missing:
                 dropped[name] = f"transport lacks {', '.join(missing)}"
                 continue
-            if name in _MEMORY_TOOLS and ctx.memory is None:
+            if name in RETRIEVAL_TOOLS and ctx.memory is None:
                 dropped[name] = "no experience store in this configuration"
                 continue
 
