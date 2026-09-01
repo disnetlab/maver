@@ -17,6 +17,7 @@ Run them with a kubeconfig pointing at a cluster you are willing to have read:
 
 import json
 import pathlib
+import subprocess
 
 import pytest
 
@@ -30,9 +31,43 @@ from kira.tools.snapshot import namespace_snapshot
 from kira.tools.transport.direct import direct_transport
 from kira.tools.workspace import SessionWorkspace
 
-pytestmark = pytest.mark.integration
-
 ABSENT = "kira-definitely-not-a-namespace"
+
+_PROBE_TIMEOUT_S = 5
+
+
+def _cluster_is_reachable() -> bool:
+    """Ask the API server one bounded question before the suite commits to it.
+
+    Without this the suite does not fail when there is no cluster, it *waits*: the
+    transport's own bound is two minutes per call, so an unreachable API server turns a
+    read-only smoke test into a twenty-minute hang, and `make test-all` never returns.
+    A dependency that is absent should say so in seconds, the way the database-backed
+    suites do. The skip is loud under `--no-skips`, which is what keeps it from
+    quietly reporting green in CI.
+    """
+    try:
+        probe = subprocess.run(
+            ["kubectl", "version", "-o", "json", f"--request-timeout={_PROBE_TIMEOUT_S}s"],
+            capture_output=True,
+            timeout=_PROBE_TIMEOUT_S * 2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return probe.returncode == 0
+
+
+# Marked rather than skipped at module level: a module-level skip is raised during
+# collection, so it never becomes a test report and `--no-skips` cannot see it. The
+# probe runs once at import either way.
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not _cluster_is_reachable(),
+        reason="no reachable cluster: point a kubeconfig at one you are willing to have read",
+    ),
+]
 
 
 @pytest.fixture
