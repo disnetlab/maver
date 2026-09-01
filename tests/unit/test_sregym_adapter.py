@@ -167,6 +167,53 @@ class TestEvidenceFilter:
         body = "NAME   READY   STATUS\nuser   1/1     Running\n"
         assert EvidenceFilter().filter_result(body) == body
 
+    def test_a_body_whose_shape_it_does_not_know_still_loses_the_injector(self) -> None:
+        """Every rule but one read a Kubernetes shape, and being valid JSON is what chose
+        this filter over the line-based one — so an unrecognised shape got the filter that
+        did nothing instead of the filter that would have worked.
+
+        A Prometheus result is the case that matters: the series carries the injector's
+        experiment name and the service it was aimed at, which is the diagnosis.
+        """
+        body = json.dumps(
+            {
+                "status": "success",
+                "data": {
+                    "result": [
+                        {"metric": {"__name__": "up", "namespace": "shop", "pod": "user-1"}},
+                        {
+                            "metric": {
+                                "__name__": "chaos_mesh_experiments",
+                                "namespace": "chaos-mesh",
+                                "experiment": "pod-failure-user-svc",
+                            }
+                        },
+                    ]
+                },
+            }
+        )
+        filtered = EvidenceFilter().filter_result(body)
+
+        assert "chaos" not in filtered
+        assert "pod-failure-user-svc" not in filtered
+        # The real series survives: this is a filter, not a refusal.
+        assert json.loads(filtered)["data"]["result"] == [
+            {"metric": {"__name__": "up", "namespace": "shop", "pod": "user-1"}}
+        ]
+
+    def test_a_trace_naming_the_load_generator_is_dropped(self) -> None:
+        body = json.dumps(
+            {
+                "data": [
+                    {"traceID": "a1", "spans": [{"operationName": "GET /cart"}]},
+                    {"traceID": "b2", "spans": [{"process": {"serviceName": "load-generator"}}]},
+                ]
+            }
+        )
+        assert [t["traceID"] for t in json.loads(EvidenceFilter().filter_result(body))["data"]] == [
+            "a1"
+        ]
+
 
 class _Session:
     """One MCP session, counting how many times its transport was opened."""

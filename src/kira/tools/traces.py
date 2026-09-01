@@ -17,7 +17,7 @@ import ast
 import json
 from typing import Any
 
-from kira.tools.context import ToolContext
+from kira.tools.context import ToolContext, deliver
 from kira.tools.errors import OUTPUT_LIMIT
 from kira.tools.kubernetes import read_kubectl
 from kira.tools.policy import read_only
@@ -249,7 +249,7 @@ async def get_services(ctx: ToolContext) -> str:
         return scope_error
     raw = await ctx.transport.query_traces("services")
     if namespace is None or candidates is None:
-        return ctx.workspace.save_tool_output(raw, "jaeger_services", OUTPUT_LIMIT)
+        return deliver(ctx, raw, "jaeger_services", OUTPUT_LIMIT)
     services = [] if raw.strip() == "None" else _parse_structured(raw)
     if not isinstance(services, list) or not all(isinstance(s, str) for s in services):
         return _unparseable_scope_error("an unparseable service catalogue", raw)
@@ -263,7 +263,7 @@ async def get_services(ctx: ToolContext) -> str:
             "silent. A service that stopped serving stops reporting, so treat silence as "
             "a symptom to investigate, not as absence."
         )
-    return ctx.workspace.save_tool_output(body, "jaeger_services", OUTPUT_LIMIT)
+    return deliver(ctx, body, "jaeger_services", OUTPUT_LIMIT)
 
 
 @tool(
@@ -288,7 +288,7 @@ async def get_operations(ctx: ToolContext, service: str) -> str:
     if namespace is not None and candidates is not None and service not in candidates:
         return _outside_scope_error(service, namespace, candidates)
     raw = await ctx.transport.query_traces("operations", service=service)
-    return ctx.workspace.save_tool_output(raw, "jaeger_operations", OUTPUT_LIMIT)
+    return deliver(ctx, raw, "jaeger_operations", OUTPUT_LIMIT)
 
 
 @tool(name="get_traces", safety="read_only", requires={"traces"}, parameters=_TRACES_PARAMETERS)
@@ -318,7 +318,7 @@ async def get_traces(ctx: ToolContext, service: str, last_n_minutes: int) -> str
         if filtered is None:
             return _unparseable_scope_error("unparseable traces", raw)
         raw = filtered
-    return ctx.workspace.save_tool_output(raw, "jaeger_traces", OUTPUT_LIMIT)
+    return deliver(ctx, raw, "jaeger_traces", OUTPUT_LIMIT)
 
 
 @tool(
@@ -359,7 +359,7 @@ async def get_dependency_graph(ctx: ToolContext, last_n_minutes: int = 30) -> st
             and edge.get("child") in candidates
         ]
         raw = str(graph)
-    return ctx.workspace.save_tool_output(raw, "jaeger_deps", OUTPUT_LIMIT)
+    return deliver(ctx, raw, "jaeger_deps", OUTPUT_LIMIT)
 
 
 read_only("get_services")

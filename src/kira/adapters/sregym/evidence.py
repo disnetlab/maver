@@ -33,6 +33,9 @@ cannot catch an event in an application namespace whose subject is a hidden cont
 _AUTH_ERROR_RE = re.compile(r"Error from server \((Forbidden|NotFound)\)")
 _AUTH_ERROR_LIMIT = 512
 
+_WALK_DEPTH = 12
+"""How deep the schema-free search goes. A trace is nested; nothing useful is deeper."""
+
 _EXIT_PREFIX_RE = re.compile(r"^(exit_code=[^\n]*\n)(.*)\Z", re.DOTALL)
 
 
@@ -105,18 +108,34 @@ def _filter_json_text(text: str) -> str | None:
 
 
 def _filter_objects(data: Any) -> Any:
-    """Drop every hidden object from a Kubernetes API response."""
+    """Drop every hidden object from a structured response.
+
+    Every rule below except the last reads a Kubernetes shape — ``items``, ``rows``,
+    ``metadata.namespace``, a label, an event's subject. That was the whole of it, and it
+    meant a body this could not recognise was re-serialised unchanged: a Prometheus
+    result is a list under ``data.result`` whose namespace lives in ``metric``, and a
+    Jaeger response is traces and spans, so neither lost anything. Worse, being valid
+    JSON is what selected this filter over the line-based one, so an unrecognised shape
+    got the filter that did nothing instead of the filter that would have worked.
+
+    So the last rule is shape-free: an element of any list that names the harness's own
+    machinery anywhere inside it is dropped. What is hidden is a set of names — the
+    injector, the load generator — not a set of schemas, and a filter that has to know
+    the schema fails silently on the first one nobody thought of.
+    """
     if isinstance(data, list):
         return [_filter_objects(item) for item in data if not _is_hidden(item)]
     if not isinstance(data, dict):
         return data
 
-    out = dict(data)
-    if isinstance(out.get("items"), list):
-        out["items"] = [_filter_objects(item) for item in out["items"] if not _is_hidden(item)]
+    # Every value, not two named keys. Descending only into `items` and `rows` is what
+    # confined this to Kubernetes responses: a Prometheus result hangs under `data`, and
+    # nothing walked far enough to find it.
+    out = {key: _filter_objects(value) for key, value in data.items()}
     if isinstance(out.get("rows"), list):
+        # A table row wraps its object rather than being one.
         out["rows"] = [
-            _filter_objects(row)
+            row
             for row in out["rows"]
             if not _is_hidden(row.get("object") if isinstance(row, dict) else None)
         ]
@@ -136,7 +155,29 @@ def _is_hidden(obj: Any) -> bool:
         or _sensitive(obj.get("kind"))
         or _sensitive(obj.get("apiVersion"))
         or _hidden_subject(obj)
+        or _names_hidden_machinery(obj)
     )
+
+
+def _names_hidden_machinery(value: Any, depth: int = 0) -> bool:
+    """Report whether a value names the harness's machinery anywhere inside it.
+
+    The schema-free rule, and the reason it is bounded: a response is arbitrary JSON from
+    a service this code does not control, so the walk is depth-limited rather than
+    trusted to terminate on shape.
+    """
+    if depth > _WALK_DEPTH:
+        return False
+    if isinstance(value, str):
+        return bool(_SENSITIVE_TEXT_RE.search(value))
+    if isinstance(value, dict):
+        return any(
+            _names_hidden_machinery(key, depth + 1) or _names_hidden_machinery(item, depth + 1)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_names_hidden_machinery(item, depth + 1) for item in value)
+    return False
 
 
 def _has_hidden_label(metadata: dict[str, Any]) -> bool:

@@ -16,7 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from kira.tools.context import ToolContext, redact
+from kira.tools.context import ToolContext, deliver, redact
 from kira.tools.errors import tool_error
 from kira.tools.policy import ActionClass, ToolPolicy, register_policy
 from kira.tools.registry import Authority, tool
@@ -380,10 +380,10 @@ async def exec_kubectl_cmd_safely(ctx: ToolContext, cmd: str, save_as: str | Non
         return refusal
 
     argv = _append_delete_wait_false(_bound_blocking_wait(argv, ctx.transport.timeout_seconds))
-    filtered = redact(ctx.evidence, await ctx.transport.kubectl(argv))
+    raw = await ctx.transport.kubectl(argv)
     if save_as:
-        return ctx.workspace.save_named_output(filtered, save_as)
-    return ctx.workspace.save_tool_output(filtered, "kubectl", OUTPUT_LIMIT)
+        return ctx.workspace.save_named_output(redact(ctx.evidence, raw), save_as)
+    return deliver(ctx, raw, "kubectl", OUTPUT_LIMIT)
 
 
 async def read_kubectl(ctx: ToolContext, cmd: str) -> str:

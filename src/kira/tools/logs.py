@@ -12,7 +12,7 @@ exists from the shape of the answer.
 
 from typing import Any
 
-from kira.tools.context import ToolContext, redact_query
+from kira.tools.context import ToolContext, deliver, redact_query
 from kira.tools.errors import OUTPUT_LIMIT, tool_error
 from kira.tools.policy import read_only
 from kira.tools.registry import tool
@@ -67,7 +67,7 @@ async def get_logs(ctx: ToolContext, query: str, last_n_minutes: int = 15) -> st
     except Exception as exc:
         return tool_error(f"the query could not be scoped: {type(exc).__name__}")
     raw = await ctx.transport.query_logs(scoped, last_n_minutes=last_n_minutes)
-    return ctx.workspace.save_tool_output(raw, "loki_logs", OUTPUT_LIMIT)
+    return deliver(ctx, raw, "loki_logs", OUTPUT_LIMIT)
 
 
 @tool(name="get_labels", safety="read_only", requires={"logs"}, parameters=_LABELS_PARAMETERS)
@@ -81,7 +81,7 @@ async def get_labels(ctx: ToolContext) -> str:
         The label names, saved to the session workspace when they exceed the limit.
     """
     raw = await ctx.transport.log_labels()
-    return ctx.workspace.save_tool_output(raw, "loki_labels", OUTPUT_LIMIT)
+    return deliver(ctx, raw, "loki_labels", OUTPUT_LIMIT)
 
 
 @tool(
@@ -101,7 +101,7 @@ async def get_label_values(ctx: ToolContext, label: str) -> str:
         The values, saved to the session workspace when they exceed the limit.
     """
     raw = await ctx.transport.log_label_values(label)
-    return ctx.workspace.save_tool_output(raw, "loki_label_values", OUTPUT_LIMIT)
+    return deliver(ctx, raw, "loki_label_values", OUTPUT_LIMIT)
 
 
 read_only("get_logs")

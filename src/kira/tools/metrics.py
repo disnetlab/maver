@@ -20,7 +20,7 @@ import ast
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from kira.tools.context import ToolContext
+from kira.tools.context import ToolContext, deliver
 from kira.tools.errors import OUTPUT_LIMIT
 from kira.tools.kubernetes import read_kubectl
 from kira.tools.policy import read_only
@@ -61,7 +61,7 @@ async def get_metrics(ctx: ToolContext, query: str) -> str:
         The result, saved to the session workspace when it exceeds the output limit.
     """
     raw = await ctx.transport.query_metrics(query)
-    return ctx.workspace.save_tool_output(raw, "prometheus_metrics", OUTPUT_LIMIT)
+    return deliver(ctx, raw, "prometheus_metrics", OUTPUT_LIMIT)
 
 
 @tool(
@@ -83,7 +83,7 @@ async def get_alerts(ctx: ToolContext) -> str:
     if ctx.settings.annotate_stale_namespaces:
         raw = await _annotate_stale_namespaces(ctx, raw)
     raw = partition_incident_alerts(ctx.scope.namespace, raw)
-    return ctx.workspace.save_tool_output(raw, "prometheus_alerts", OUTPUT_LIMIT)
+    return deliver(ctx, raw, "prometheus_alerts", OUTPUT_LIMIT)
 
 
 def _parse_alerts(raw: str) -> list[dict[str, Any]] | None:

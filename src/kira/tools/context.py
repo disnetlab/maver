@@ -21,7 +21,14 @@ from kira.tools.scope import IncidentScope
 from kira.tools.transport.base import ToolTransport
 from kira.tools.workspace import SessionWorkspace
 
-__all__ = ["EvidencePolicy", "NullEvidencePolicy", "ToolContext", "redact", "redact_query"]
+__all__ = [
+    "EvidencePolicy",
+    "NullEvidencePolicy",
+    "ToolContext",
+    "deliver",
+    "redact",
+    "redact_query",
+]
 
 _log = logging.getLogger(__name__)
 
@@ -110,6 +117,33 @@ def redact(policy: EvidencePolicy, content: str) -> str:
     except Exception as exc:  # a redaction bug must not destroy the observation
         _log.warning("evidence policy failed and the result was passed through: %s", exc)
         return content
+
+
+def deliver(ctx: "ToolContext", content: str, label: str, limit: int) -> str:
+    """Hand a tool result to the model: filtered, then bounded.
+
+    One function, because the alternative was thirteen call sites each remembering to
+    apply the policy and ten of them not doing it. Every telemetry tool — metrics,
+    alerts, logs, labels, services, operations, traces, the dependency graph — saved its
+    result straight to the workspace, so the adapter's hide list reached kubectl and
+    nothing else. The policy's own description names a chaos injector's labels in the
+    metrics an agent queries as the thing it exists to remove, and that was the one place
+    it was never applied.
+
+    Under the benchmark transport the harness proxy filters these paths as well, so what
+    this changes there is a second line of defence. Under the direct transport there is
+    no proxy, and this was the only one.
+
+    Args:
+        ctx: The run's tool context.
+        content: The raw result.
+        label: The workspace name to save an oversized result under.
+        limit: The size above which the result is saved rather than returned.
+
+    Returns:
+        The filtered result, or a pointer to where the whole of it was saved.
+    """
+    return ctx.workspace.save_tool_output(redact(ctx.evidence, content), label, limit)
 
 
 def redact_query(policy: EvidencePolicy, query: str) -> str:

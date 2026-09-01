@@ -23,7 +23,7 @@ import tempfile
 import textwrap
 from pathlib import Path
 
-from kira.tools.context import ToolContext, redact
+from kira.tools.context import ToolContext, deliver
 from kira.tools.errors import format_exit_result, tool_error
 from kira.tools.policy import read_only
 from kira.tools.registry import tool
@@ -96,8 +96,8 @@ async def _run(ctx: ToolContext, command: list[str], *, timeout: float, label: s
     output = stdout.decode(errors="replace")
     if process.returncode == 126 and output.startswith(SANDBOX_ERROR_PREFIX):
         return tool_error(output.strip())
-    rendered = redact(ctx.evidence, format_exit_result(process.returncode or 0, output))
-    return ctx.workspace.save_tool_output(rendered, label, OUTPUT_LIMIT)
+    rendered = format_exit_result(process.returncode or 0, output)
+    return deliver(ctx, rendered, label, OUTPUT_LIMIT)
 
 
 @tool(
