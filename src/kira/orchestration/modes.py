@@ -41,6 +41,11 @@ class ModeContext:
     its diagnosis would then be a different arm, silently.
     """
     on_stage: StageHook | None = None
+    start: str | None = None
+    """Where a continuation re-enters, or None for a run that starts at the beginning.
+
+    Only the graph has a part-way entry to name. A mode that runs one role re-enters
+    that role, which is the only place it could resume."""
 
 
 ModeFn = Callable[[IncidentState, ModeContext], Awaitable[IncidentState]]
@@ -94,7 +99,9 @@ async def run_multi(state: IncidentState, ctx: ModeContext) -> IncidentState:
     Returns:
         The terminal state.
     """
-    return await ctx.engine.run(state, on_stage=ctx.on_stage)
+    if ctx.start is None:
+        return await ctx.engine.run(state, on_stage=ctx.on_stage)
+    return await ctx.engine.run(state, on_stage=ctx.on_stage, start=ctx.start)
 
 
 @mode("single")

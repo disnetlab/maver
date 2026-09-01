@@ -7,11 +7,13 @@ measured run. These are the tests that make it a mechanism rather than a claim.
 
 import json
 import pathlib
+from dataclasses import replace
 from typing import Any
 
 import pytest
 
 from kira.audit.journal import ListSink
+from kira.contracts.lifecycle import RunStatus
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
 from kira.memory.ports import ApprovalRecord
@@ -54,12 +56,18 @@ PLAN: dict[str, Any] = {
 PATCH = {"cmd": "kubectl patch svc user -p '{}'"}
 
 
+COMMANDS: list[list[str]] = []
+"""Every argv the fake cluster was actually asked to run, so a test can assert that a
+refused write did not reach it."""
+
+
 class FakeTransport:
     name = "fake"
     capabilities = frozenset({"kubernetes", "kubernetes.write", "metrics", "logs", "traces"})
     timeout_seconds = 30
 
     async def kubectl(self, argv: list[str]) -> str:
+        COMMANDS.append(list(argv))
         return "service/user patched"
 
 
@@ -365,4 +373,237 @@ async def test_an_undecided_request_does_not_resume(tmp_path: pathlib.Path) -> N
     deploy, _, request_id = await parked_with(tmp_path)
 
     assert await resume_after_decision(request_id, deploy) == "not_ready:pending"
+    deploy.storage.close()
+
+
+async def test_the_approved_write_is_dispatched_through_the_gate(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The one call an operator personally approved was the one that skipped the gate.
+
+    The continuation called the bound tool directly, so the grant had nothing to
+    present itself to and the gate recorded no decision for the write that actually
+    ran. A reader of the audit log saw a request approved and never saw it executed.
+    """
+    deploy, session_id, _ = await park(tmp_path)
+    stored = deploy.storage.sessions.get_session(session_id)
+    assert stored is not None and stored.awaiting_request_id
+    request_id = stored.awaiting_request_id
+    deploy.storage.approvals.decide(
+        request_id, status="approved", decided_by="an operator", reason="ok"
+    )
+
+    before = len(deploy.sink.events)
+    await resume_after_decision(request_id, deploy)
+
+    replayed = [
+        e.payload
+        for e in deploy.sink.events[before:]
+        if e.payload.kind == "policy_decision" and e.payload.tool == "exec_kubectl_cmd_safely"
+    ]
+    assert any(
+        d.decision == "approved"
+        and d.reason == "replaying an approved request"
+        and d.request_id == request_id
+        for d in replayed
+    )
+    deploy.storage.close()
+
+
+async def test_a_checkpoint_edited_after_approval_is_refused(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The gate's tamper check was unreachable in production, which made it decoration.
+
+    An approval is for a specific call. If the arguments can change between the
+    decision and the dispatch, the operator approved a description of something else.
+    """
+    deploy, session_id, _ = await park(tmp_path)
+    sessions = deploy.storage.sessions
+    stored = sessions.get_session(session_id)
+    assert stored is not None and stored.awaiting_request_id and stored.checkpoint
+    request_id = stored.awaiting_request_id
+    deploy.storage.approvals.decide(
+        request_id, status="approved", decided_by="an operator", reason="ok"
+    )
+
+    COMMANDS.clear()
+    tampered = dict(stored.checkpoint)
+    tampered["tool_arguments"] = {"cmd": "kubectl delete svc user"}
+    sessions.set_run_status(
+        session_id,
+        RunStatus.AWAITING_HUMAN,
+        current_stage=stored.current_stage,
+        checkpoint=tampered,
+        awaiting_request_id=request_id,
+    )
+
+    await resume_after_decision(request_id, deploy)
+
+    denials = [
+        e.payload
+        for e in deploy.sink.events
+        if e.payload.kind == "policy_decision" and e.payload.decision == "denied"
+    ]
+    assert any("does not match the recorded request" in d.reason for d in denials)
+    assert COMMANDS == []
+    deploy.storage.close()
+
+
+class SingleModeModel:
+    """Diagnoses, then tries to write during the mitigation phase."""
+
+    def __init__(self) -> None:
+        self.callers: list[str] = []
+
+    async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
+        self.callers.append(caller)
+        if caller == "single.diagnosis":
+            name: str = "submit_diagnosis"
+            arguments: dict[str, Any] = {"solution": "svc/user targets a port nothing listens on"}
+        elif len([c for c in self.callers if c == "single.mitigation"]) == 1:
+            name, arguments = "exec_kubectl_cmd_safely", PATCH
+        else:
+            name, arguments = "submit_mitigation", {"succeeded": True, "summary": "patched"}
+        return ModelResponse(
+            text=None,
+            tool_calls=(
+                ToolCall(
+                    id=f"c{len(self.callers)}",
+                    name=name,
+                    arguments=arguments,
+                    raw_arguments=json.dumps(arguments),
+                ),
+            ),
+            finish_reason="stop",
+            reasoning=None,
+            usage=Usage(),
+            duration_ms=1,
+            attempts=1,
+        )
+
+
+async def test_a_single_agent_run_parks_and_resumes(tmp_path: pathlib.Path) -> None:
+    """A phase label is not a role, and every map on the resume path is keyed by role.
+
+    The single-agent configuration labels its phases `single.diagnosis` and
+    `single.mitigation`, because that is what the write policy names and what the gate
+    keys on. Resuming looked those labels up in the toolset registry and the node map,
+    found nothing, and raised — leaving the session in `resuming` with the checkpoint
+    intact and the approved write never dispatched. A retried job re-entered and raised
+    again, so the session never left that state.
+    """
+    settings = Settings(
+        server=ServerSettings(workdir=tmp_path),
+        pipeline=PipelineSettings(mode="single"),
+        memory=MemorySettings(enabled=False, learning_enabled=False),
+        verify=VerifySettings(enabled=False),
+        authority=AuthoritySettings(mode="prompt", timeout_s=1800),
+    )
+    storage = build_storage(settings)
+    deploy = Deployment(
+        settings=settings,
+        storage=storage,
+        completion=SingleModeModel(),
+        profile=PROFILE,
+        transport_for=lambda session_id: FakeTransport(),
+        authority=HumanApproval(
+            store=storage.approvals,
+            settings=settings.authority,
+            arm_timeout=lambda request_id, expires_at: None,
+        ),
+        sink=ListSink(),
+    )
+    session = storage.sessions.create_session(ALERT)
+    with pytest.raises(ApprovalPending):
+        await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+
+    parked = storage.sessions.get_session(session.session_id)
+    assert parked is not None and parked.awaiting_request_id
+    assert parked.current_stage == "single.mitigation"
+    request_id = parked.awaiting_request_id
+    storage.approvals.decide(request_id, status="approved", decided_by="an operator", reason="ok")
+
+    COMMANDS.clear()
+    status = await resume_after_decision(request_id, deploy)
+
+    assert status != "resuming"
+    assert COMMANDS == [["patch", "svc", "user", "-p", "{}"]]
+    finished = storage.sessions.get_session(session.session_id)
+    assert finished is not None and finished.run_status != "resuming"
+    storage.close()
+
+
+EXECUTION_RESULT: dict[str, Any] = {
+    "succeeded": True,
+    "steps": [{"step_index": 0, "succeeded": True, "observation": "patched targetPort to 8080"}],
+    "final_state_summary": "svc/user has endpoints",
+    "confidence": 0.8,
+}
+
+
+class FinishingModel(FakeModel):
+    """Writes once, then submits — so the continuation reaches an outcome."""
+
+    async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
+        if caller == "execution" and self.callers.count("execution") >= 1:
+            self.callers.append(caller)
+            arguments: dict[str, Any] = EXECUTION_RESULT
+            return ModelResponse(
+                text=None,
+                tool_calls=(
+                    ToolCall(
+                        id=f"c{len(self.callers)}",
+                        name="submit_execution_result",
+                        arguments=arguments,
+                        raw_arguments=json.dumps(arguments),
+                    ),
+                ),
+                finish_reason="stop",
+                reasoning=None,
+                usage=Usage(),
+                duration_ms=1,
+                attempts=1,
+            )
+        return await super().complete(request, caller=caller)
+
+
+async def test_a_resume_does_not_close_a_run_its_driver_owns(tmp_path: pathlib.Path) -> None:
+    """An evaluation driver submits, collects the grade and releases the environment.
+
+    It parks the run with `finalize_run_status=False` for exactly that reason. The
+    continuation ignored the flag and finalised the status itself, so the driver's
+    poller read the episode as finished before its answer had been submitted — and the
+    driver, which never learned the run resumed, released an environment it still owned.
+    """
+    deploy, _ = deployment(tmp_path)
+    deploy = replace(deploy, completion=FinishingModel())
+    session = deploy.storage.sessions.create_session(ALERT)
+    with pytest.raises(ApprovalPending):
+        await run_incident(
+            ALERT,
+            session.session_id,
+            deploy,
+            fire_post_hooks=False,
+            finalize_run_status=False,
+        )
+    parked = deploy.storage.sessions.get_session(session.session_id)
+    assert parked is not None and parked.awaiting_request_id
+    request_id = parked.awaiting_request_id
+    deploy.storage.approvals.decide(
+        request_id, status="approved", decided_by="an operator", reason="ok"
+    )
+
+    stored = deploy.storage.sessions.get_session(session.session_id)
+    assert stored is not None and stored.checkpoint is not None
+    assert stored.checkpoint["finalize_run_status"] is False
+    assert stored.checkpoint["fire_post_hooks"] is False
+
+    status = await resume_after_decision(request_id, deploy)
+
+    # It ran to an outcome; what it must not do is announce one.
+    assert status == "success"
+    finished = deploy.storage.sessions.get_session(session.session_id)
+    assert finished is not None
+    assert finished.run_status not in ("completed", "failed")
     deploy.storage.close()

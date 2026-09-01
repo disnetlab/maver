@@ -35,11 +35,11 @@ from kira.llm.sampling import (
     assert_sampling_is_pinned,
     resolve_sampling,
 )
-from kira.llm.types import Completion
+from kira.llm.types import Completion, ToolResult
 from kira.memory.factory import StorageStack
 from kira.memory.ports import AgentRunRecord, AgentRunStatus, ApprovalRecord
 from kira.middleware.authority import ApprovalPending, Authority, AutoApprove
-from kira.middleware.base import AgentHook, MiddlewareStack
+from kira.middleware.base import AgentHook, MiddlewareStack, ToolRequest
 from kira.middleware.human_approval import approval_granted
 from kira.middleware.write_gate import WriteGate
 from kira.observability.tracing import span
@@ -61,7 +61,7 @@ from kira.orchestration.resume import (
 )
 from kira.orchestration.routing import RoutingPolicy
 from kira.orchestration.state import initial_state
-from kira.roles.base import RoleContext, RoleSpec, StateDelta
+from kira.roles.base import RoleContext, RoleSpec, StateDelta, stage_role
 from kira.roles.registry import get_role, registered_roles
 from kira.secondpass.audit import JournalEmitter
 from kira.secondpass.runner import SecondPass
@@ -595,7 +595,15 @@ async def _run_mode(
         # cleanly; nothing is persisted as terminal and no hook fires, because the
         # run has not finished — it is waiting.
         _park_run(deployment, pending)
-        save_checkpoint(deployment.storage.sessions, cast(IncidentState, pending.state), pending)
+        save_checkpoint(
+            deployment.storage.sessions,
+            cast(IncidentState, pending.state),
+            pending,
+            mode=mode,
+            target_stage=target_stage,
+            fire_post_hooks=fire_post_hooks,
+            finalize_run_status=finalize_run_status,
+        )
         raise
 
     record = resolve_outcome(final_state)
@@ -681,12 +689,13 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
 
     state = restored_state(checkpoint)
     alert = dict(state.get("alert") or {})
+    # The stage label may name a phase of a role; everything keyed by role needs the
+    # role. The gate keeps the full label, which is what its write policy is written in.
+    role = stage_role(checkpoint.stage)
     async with incident_context(checkpoint.session_id, alert, deployment) as resources:
         journal = Journal(deployment.sink, session_id=checkpoint.session_id, stage=checkpoint.stage)
-        tools = tool_context_for(
-            deployment, resources, checkpoint.stage, checkpoint.session_id, journal
-        )
-        content = await _replay(checkpoint, record, tools, deployment)
+        tools = tool_context_for(deployment, resources, role, checkpoint.session_id, journal)
+        content = await _replay(checkpoint, record, tools, deployment, journal)
         for event in resume_events(checkpoint, record, result_chars=len(content)):
             journal.record(event)
 
@@ -703,36 +712,58 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
             policy=RoutingPolicy.from_settings(deployment.settings),
             runs=_RunRecorder(deployment.storage),
             journal=journal,
-            build_context=_context_builder(
-                deployment, resources, None, {checkpoint.stage: transcript}
-            ),
+            build_context=_context_builder(deployment, resources, None, {role: transcript}),
         )
         # The same composition the first pass ran under. Building the roles a second
         # way here would let a continuation re-enter a diagnosis without the second
         # opinion the arm is defined by, and the run would silently be two arms.
         nodes = _nodes(deployment, deps, resources)
         try:
-            final_state = await SequentialEngine(nodes, deps.policy).run(
-                state, start=checkpoint.stage
+            # The shape the incident was running, not the graph by assumption. Always on
+            # the sequential executor: the graph executor cannot be entered part-way
+            # without a checkpointer, and not having one is the point.
+            final_state = await MODES[checkpoint.mode](
+                state,
+                ModeContext(
+                    deps=deps,
+                    engine=SequentialEngine(nodes, deps.policy),
+                    nodes=nodes,
+                    start=role,
+                ),
             )
         except ApprovalPending as pending:
             # A second decision is needed. Re-park and leave the hooks alone: the
             # incident still has not finished.
-            save_checkpoint(sessions, cast(IncidentState, pending.state), pending)
+            save_checkpoint(
+                sessions,
+                cast(IncidentState, pending.state),
+                pending,
+                mode=checkpoint.mode,
+                target_stage=checkpoint.target_stage,
+                fire_post_hooks=checkpoint.fire_post_hooks,
+                finalize_run_status=checkpoint.finalize_run_status,
+            )
             return "awaiting_human"
 
         outcome = resolve_outcome(final_state)
         try:
-            persist_outcome(final_state, outcome, sessions)
+            persist_outcome(
+                final_state,
+                outcome,
+                sessions,
+                finalize_run_status=checkpoint.finalize_run_status,
+            )
         except Exception:
             _log.exception("persisting the resumed outcome failed; continuing from memory")
-        # Once, at the end. An interim result recorded mid-continuation would be read as
-        # terminal, and the run status would briefly flip terminal before it was.
-        await fire_hooks(
-            outcome.outcome,
-            checkpoint.session_id,
-            workdir=deployment.settings.server.workdir,
-        )
+        # Once, at the end, and only if the caller that parked wanted them. An interim
+        # result recorded mid-continuation would be read as terminal, and a driver that
+        # owns the run's ending must not have it closed from underneath.
+        if checkpoint.fire_post_hooks and checkpoint.target_stage == "full":
+            await fire_hooks(
+                outcome.outcome,
+                checkpoint.session_id,
+                workdir=deployment.settings.server.workdir,
+            )
         _record_completion(journal, final_state, outcome, deps.policy)
         return outcome.outcome.value
 
@@ -742,21 +773,67 @@ async def _replay(
     record: ApprovalRecord,
     tools: ToolContext,
     deployment: Deployment,
+    journal: Journal,
 ) -> str:
-    """Produce the result of the call the incident was paused on."""
+    """Produce the result of the call the incident was paused on.
+
+    Through the same middleware the live path dispatches through, because this is the
+    one tool call in the system that an operator has personally approved and therefore
+    the one that least deserves a shortcut around the gate. Calling the bound tool
+    directly left the grant with nothing to present itself to: the gate's check that the
+    arguments approved are the arguments executed could not run, so an edited checkpoint
+    would have replayed whatever it now said, under a transcript showing an approval.
+    """
     if record.status != "approved":
         return denial_result(record)
 
-    toolset = build_toolset(checkpoint.stage, tools, extras=deployment.tool_extras)
+    toolset = build_toolset(stage_role(checkpoint.stage), tools, extras=deployment.tool_extras)
     bound = toolset.dispatch.get(checkpoint.tool_name)
     if bound is None:
         # Approved, but the tool is not available in this configuration any more.
         # Reported as a refusal rather than raised: the role can say so and move on.
         return f"error: {checkpoint.tool_name} is not available in this configuration"
+
+    async def dispatch(request: ToolRequest) -> ToolResult:
+        return ToolResult(
+            tool_call_id=request.call_id,
+            name=request.name,
+            content=str(await bound(**request.arguments)),
+        )
+
+    stack = MiddlewareStack(
+        [
+            WriteGate(
+                authority=deployment.authority,
+                settings=deployment.settings.authority,
+                journal=journal,
+            ),
+            *deployment.hooks,
+        ]
+    )
+    # The grant is what the operator approved, read from the request they were shown;
+    # the call is what the checkpoint says to run. Sourcing both from the checkpoint
+    # made them agree by construction, so the gate's comparison could not fail and the
+    # check meant nothing.
     with approval_granted(
-        record.request_id, tool=checkpoint.tool_name, arguments=checkpoint.tool_arguments
+        record.request_id,
+        tool=str(record.tool_name or checkpoint.tool_name),
+        arguments=dict(record.payload.get("arguments") or {}),
     ):
-        return str(await bound(**checkpoint.tool_arguments))
+        result = await stack.run_tool(
+            ToolRequest(
+                call_id=checkpoint.tool_call_id,
+                name=checkpoint.tool_name,
+                arguments=dict(checkpoint.tool_arguments),
+                # The label, not the role: the write policy names the phase that may
+                # write, and resolving it here would offer the gate a stage it does not
+                # recognise.
+                role=checkpoint.stage,
+                session_id=checkpoint.session_id,
+            ),
+            dispatch,
+        )
+    return result.content
 
 
 def tool_context_for(

@@ -29,10 +29,36 @@ from kira.settings.root import Settings
 from kira.tools.context import ToolContext
 from kira.tools.toolsets import ResolvedToolset
 
-__all__ = ["MilestoneFn", "RoleContext", "RoleFn", "RoleOutcome", "RoleSpec", "StateDelta"]
+__all__ = [
+    "MilestoneFn",
+    "RoleContext",
+    "RoleFn",
+    "RoleOutcome",
+    "RoleSpec",
+    "StateDelta",
+    "stage_role",
+]
 
 StateDelta = Mapping[str, Any]
 """A partial :class:`IncidentState`, merged onto the accumulated state by the graph."""
+
+
+def stage_role(stage: str) -> str:
+    """The role that runs a stage label.
+
+    A role announcing more than one graded question labels each phase ``role.phase``,
+    and that label is what the write policy is declared under and what a checkpoint
+    records. Everything keyed by role — the toolset, the node, the tool context —
+    needs the role back. Resolving it by convention in one place is what stops a
+    resume from looking up ``single.mitigation`` in a map keyed by ``single``.
+
+    Args:
+        stage: The stage label, either a role name or ``role.phase``.
+
+    Returns:
+        The role name.
+    """
+    return stage.split(".", 1)[0]
 
 
 @dataclass(frozen=True, slots=True)

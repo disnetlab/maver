@@ -81,9 +81,30 @@ class ApprovalCheckpoint(BaseModel):
     verify_retries: int
     """Carried, not reset. An approval must not buy a fresh budget."""
 
+    mode: str = "multi"
+    """The pipeline shape this incident was running, so the continuation runs it too.
+
+    Resuming always drove the graph from the interrupted stage. A single-agent run
+    resumed as a graph run, and a diagnosis-only task resumed at diagnosis and then
+    carried on into planning and remediation — mutating an environment whose read-only
+    answer was the only thing being graded."""
+    target_stage: str = "full"
+    fire_post_hooks: bool = True
+    finalize_run_status: bool = True
+    """Held from the call that parked. An evaluation driver owns the run's ending: it
+    submits, collects the grade and releases the environment. A continuation that
+    finalised the run itself would close the episode from the wrong side."""
+
 
 def save_checkpoint(
-    store: SessionStore, state: IncidentState, pending: ApprovalPending
+    store: SessionStore,
+    state: IncidentState,
+    pending: ApprovalPending,
+    *,
+    mode: str = "multi",
+    target_stage: str = "full",
+    fire_post_hooks: bool = True,
+    finalize_run_status: bool = True,
 ) -> ApprovalCheckpoint:
     """Park the incident on the request that was just raised.
 
@@ -96,6 +117,10 @@ def save_checkpoint(
         store: Where the session lives.
         state: The incident state as the paused role was entered with it.
         pending: The raised pause, with the role's transcript attached.
+        mode: The pipeline shape the incident was running.
+        target_stage: How far the caller asked the pipeline to go.
+        fire_post_hooks: Whether this caller wants the post-incident hooks fired.
+        finalize_run_status: Whether this caller wants the run marked terminal.
 
     Returns:
         The checkpoint that was written.
@@ -114,6 +139,10 @@ def save_checkpoint(
         remediation_retries=state.get("remediation_retries", 0),
         reassessment_count=state.get("reassessment_count", 0),
         verify_retries=state.get("verify_retries", 0),
+        mode=mode,
+        target_stage=target_stage,
+        fire_post_hooks=fire_post_hooks,
+        finalize_run_status=finalize_run_status,
     )
     store.set_run_status(
         pending.session_id,
