@@ -15,16 +15,19 @@ to be reconstructible it is a liability rather than a feature.
 """
 
 import json
+import re
 from typing import Annotated, Any
 
-from pydantic import AliasChoices, BeforeValidator, Field
+from pydantic import AliasChoices, BeforeValidator, Field, SecretStr
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 __all__ = [
     "ENV_PREFIX",
+    "Credential",
     "NameSet",
     "SettingsGroup",
     "alias",
+    "clean_credential",
     "group_config",
     "setting",
 ]
@@ -63,6 +66,51 @@ def _split_names(value: object) -> object:
 
 NameSet = Annotated[frozenset[str], NoDecode, BeforeValidator(_split_names)]
 """A set of names accepting either a comma-separated string or a JSON array."""
+
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def clean_credential(value: object) -> object:
+    """Take a secret as the environment carries it, not as a shell would have quoted it.
+
+    A ``.env`` line written ``KEY="sk-..."`` and a secret file created with a trailing
+    newline both reach the provider or ``psycopg.connect`` with the punctuation intact,
+    where they fail as an authentication error minutes into a run and read as the model
+    failing. Nothing wraps itself in its own quotes and nothing sends a control
+    character, so one pair comes off here and what cannot be sent is refused while the
+    process is still starting.
+
+    Blank becomes unset rather than an error, which is what an operator who left the line
+    empty meant, and which lets the group's own rule name the setting that is missing
+    instead of handing a connection library an empty string.
+
+    Args:
+        value: A raw environment value.
+
+    Returns:
+        The cleaned secret, None when nothing is left of it, or the value unchanged when
+        it is not a string.
+
+    Raises:
+        ValueError: When what survives holds a control character.
+    """
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    if not text:
+        return None
+    if _CONTROL_CHARS.search(text):
+        raise ValueError(
+            "a credential holds a control character, which is a value no header and no "
+            "connection string can carry. Check for an embedded newline."
+        )
+    return text
+
+
+Credential = Annotated[SecretStr | None, BeforeValidator(clean_credential)]
+"""A secret read from the environment. Blank is unset; quotes belong to the shell."""
 
 ENV_PREFIX = "KIRA_"
 """Namespace for every modern setting name. Legacy flat names have no prefix."""

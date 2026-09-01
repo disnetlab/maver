@@ -7,7 +7,7 @@ from typing import Literal, Union, get_args, get_origin
 
 import pytest
 import yaml
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from kira.settings import Settings, VerifySettings, legacy_names_in_use, load_settings
 from kira.settings.arms import arm_digest
@@ -21,6 +21,8 @@ from kira.settings.root import (
 
 ALIASED = list(_iter_aliases(Settings))
 IDS = [f.modern for f in ALIASED]
+SECRETS = [f for f in ALIASED if SecretStr in get_args(f.info.annotation)]
+SECRET_IDS = [f.modern for f in SECRETS]
 
 
 def test_defaults_load() -> None:
@@ -146,6 +148,27 @@ class TestValidation:
         """The prototype raised this at first use, which is one incident too late."""
         monkeypatch.setenv("MEMORY_MODE", "postgres")
         with pytest.raises(ValidationError, match="postgres_dsn"):
+            load_settings()
+
+    def test_a_blank_credential_is_unset_rather_than_an_empty_connection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An env file that declares the name and leaves the value off passed this rule,
+        because a set-but-empty variable is not None. What it produced was an empty
+        connection string handed to the driver, which fails at the first incident naming
+        nothing an operator can act on."""
+        monkeypatch.setenv("MEMORY_MODE", "postgres")
+        monkeypatch.setenv("MEMORY_POSTGRES_DSN", "")
+        with pytest.raises(ValidationError, match="postgres_dsn"):
+            load_settings()
+
+    def test_a_credential_that_cannot_be_sent_is_refused_at_startup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A key pasted with a newline in it reaches the provider verbatim and comes
+        back as a 401 minutes into a run, where it reads as the model failing."""
+        monkeypatch.setenv("KIRA_MODEL__API_KEY", "sk-first-half\nsk-second-half")
+        with pytest.raises(ValidationError, match="control character"):
             load_settings()
 
     def test_repeat_limits_must_ascend(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -313,6 +336,23 @@ class TestSecretsAndImmutability:
         snapshot = load_settings().snapshot()
         assert "hunter2" not in repr(snapshot)
 
+    @pytest.mark.parametrize("field", SECRETS, ids=SECRET_IDS)
+    def test_a_quoted_secret_is_read_without_its_quotes(
+        self, field: AliasedField, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A `.env` line written KEY="value" is carried into the process with the quotes
+        in the value, and both of these are then used as written: one authenticates
+        against the provider, the other is handed to the database driver. Cleaning at the
+        declaration rather than at the two call sites is what covers the next secret."""
+        _apply_companions(field, monkeypatch)
+        monkeypatch.setenv(field.modern, '"probe7"')
+
+        node: object = load_settings()
+        for attr in field.path:
+            node = getattr(node, attr)
+
+        assert node is not None and node.get_secret_value() == "probe7"
+
     def test_settings_are_frozen(self) -> None:
         """Injected, never re-read: a run's behaviour cannot change underneath it."""
         s = load_settings()
@@ -463,6 +503,32 @@ def test_a_group_can_be_built_in_code_by_field_name() -> None:
     assert built.mode == "auto"
     assert [r.name for r in built.rules] == ["r"]
     assert built.timeout_s == 60
+
+
+def test_a_deployment_that_can_reach_no_node_says_so(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The allowlist is empty by default, the host tool is offered to the remediating
+    role regardless, and every call it makes is refused. Nothing said so, and a whole
+    campaign was measured with node-level faults unfixable and graded as the agent
+    failing to fix them."""
+    with caplog.at_level(logging.WARNING, logger="kira.settings.root"):
+        settings = load_settings()
+
+    assert settings.tools.host_recovery_nodes == frozenset()
+    assert any("KIRA_TOOLS__HOST_RECOVERY_NODES" in r.getMessage() for r in caplog.records)
+    assert settings.snapshot()["settings"]["tools"]["host_recovery_nodes"] == []
+
+
+def test_a_configured_node_leaves_the_warning_unsaid(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A warning on every start is one an operator learns to scroll past."""
+    monkeypatch.setenv("HOST_RECOVERY_ALLOWED_NODES", "worker-1")
+    with caplog.at_level(logging.WARNING, logger="kira.settings.root"):
+        load_settings()
+
+    assert not any("HOST_RECOVERY" in r.getMessage() for r in caplog.records)
 
 
 def test_an_arm_that_disarms_the_approval_gate_says_so(

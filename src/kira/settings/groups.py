@@ -13,9 +13,9 @@ fail closed.
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
+from pydantic import AnyHttpUrl, Field, field_validator, model_validator
 
-from kira.settings.base import NameSet, SettingsGroup, group_config, setting
+from kira.settings.base import Credential, NameSet, SettingsGroup, group_config, setting
 
 __all__ = [
     "IntakeSettings",
@@ -218,7 +218,7 @@ class ModelSettings(SettingsGroup):
         "OPENAI_API_BASE",
         description="Replaces the profile's base URL. For pointing a run at another server.",
     )
-    api_key: SecretStr | None = setting(
+    api_key: Credential = setting(
         None,
         "KIRA_MODEL__API_KEY",
         description="Overrides the key named by the profile's api_key_env.",
@@ -419,7 +419,7 @@ class MemorySettings(SettingsGroup):
         "MEMORY_MODE",
         description="Embedded SQLite, or a PostgreSQL server.",
     )
-    postgres_dsn: SecretStr | None = setting(
+    postgres_dsn: Credential = setting(
         None,
         "KIRA_MEMORY__POSTGRES_DSN",
         "MEMORY_POSTGRES_DSN",

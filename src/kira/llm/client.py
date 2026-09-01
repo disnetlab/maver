@@ -28,6 +28,7 @@ from kira.llm.sampling import (
 )
 from kira.llm.types import Message, ModelRequest, ModelResponse, ToolCall, ToolSpec, Usage
 from kira.prompts.loader import read_asset
+from kira.settings.base import clean_credential
 from kira.settings.profiles import ModelProfile
 from kira.settings.root import Settings
 
@@ -335,6 +336,11 @@ class LLMClient:
         self.sampling: SamplingResolution = resolve_sampling(profile, settings)
         self._sink = sink
         self._completion = completion
+        # Resolved here rather than per call, because here is startup. A credential the
+        # environment mangled is then refused while the process is coming up, instead of
+        # on the first model call, minutes into a run, where a provider's 401 reads as
+        # the model failing.
+        self._api_key = self._resolve_api_key()
 
     async def _call_provider(self, **kwargs: Any) -> Any:
         if self._completion is None:
@@ -343,24 +349,32 @@ class LLMClient:
             self._completion = litellm.acompletion
         return await self._completion(**kwargs)
 
-    def _api_key(self) -> str | None:
-        """Resolve the credential for this call.
+    def _resolve_api_key(self) -> str | None:
+        """Resolve the credential this client authenticates with.
 
         In precedence order: an explicit override, then the environment variable the
         profile names, then its placeholder for a keyless server. None means send
         nothing and let the provider library look for its own, which is what a hosted
         route configured entirely through the environment expects.
 
+        The variable the profile names is cleaned exactly as a settings secret is. It is
+        the one credential the settings model never sees — the profile decides which
+        variable it is — so without this the quoted key that a settings override would
+        have survived reaches the provider verbatim.
+
         Returns:
             The key, or None when the profile names no way to find one.
+
+        Raises:
+            ValueError: When the named variable holds something no request can carry.
         """
         override = self.settings.model.api_key
         if override is not None:
             return override.get_secret_value()
         named = self.profile.endpoint.api_key_env
         if named:
-            from_env = os.environ.get(named)
-            if from_env:
+            from_env = clean_credential(os.environ.get(named))
+            if isinstance(from_env, str):
                 return from_env
         return self.profile.endpoint.api_key_literal
 
@@ -413,7 +427,7 @@ class LLMClient:
         base_url = self.settings.model.endpoint_override or profile.endpoint.base_url
         if base_url:
             kwargs["api_base"] = base_url
-        api_key = self._api_key()
+        api_key = self._api_key
         if api_key is not None:
             kwargs["api_key"] = api_key
         if extra_body:

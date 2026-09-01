@@ -507,6 +507,22 @@ def test_the_profile_determines_where_the_call_goes_and_as_whom(
     assert kwargs["api_key"] == "EMPTY"
 
 
+def test_a_quoted_key_in_the_environment_is_not_sent_with_its_quotes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one credential the settings model never sees: the profile names the variable,
+    so a quoted or newline-terminated key read straight from the environment reached the
+    provider verbatim and came back as a 401 minutes into a run."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", '"sk-ant-quoted-by-an-env-file"\n')
+    client = LLMClient(load_profile("claude-sonnet-4-6", MODELS), load_settings())
+
+    kwargs = client._build_kwargs(
+        ModelRequest(system="s", messages=[{"role": "user", "content": "hi"}], tools=())
+    )
+
+    assert kwargs["api_key"] == "sk-ant-quoted-by-an-env-file"
+
+
 def test_an_override_displaces_the_profile(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pointing a run at another server is what the override is for, and a key given
     explicitly outranks one the profile names."""
