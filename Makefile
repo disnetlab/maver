@@ -1,5 +1,5 @@
 .PHONY: help install lint format typecheck test test-parity test-postgres test-all check \
-        lock image image-eval compose-up compose-eval-up clean
+        lock requirements image image-eval compose-up compose-eval-up clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -52,6 +52,9 @@ test-all:  ## Run everything, including tests needing a cluster or database
 	uv run pytest
 
 check: lint typecheck test  ## What CI runs
+
+requirements:  ## Re-export requirements.txt from the lock, for reviewers without uv
+	uv export --format requirements-txt --frozen --no-dev -o requirements.txt
 
 lock:  ## Refresh uv.lock and the exported requirements.txt
 	uv lock

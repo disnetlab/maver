@@ -21,6 +21,14 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
+      # The file a reviewer without uv installs from. It is generated, so it drifts
+      # silently, and the drift is only visible to the person whose environment no
+      # longer matches the one this job tested.
+      - name: requirements.txt matches the lock
+        run: |
+          uv export --format requirements-txt --frozen --no-dev -o /tmp/requirements.txt
+          diff <(grep -v '^#' requirements.txt) <(grep -v '^#' /tmp/requirements.txt) \
+            || { echo "requirements.txt is stale: run make requirements"; exit 1; }
       # Deselects everything needing a live service. What needs a database is the
       # postgres job below; what needs a cluster runs nowhere, and says so.
       - run: uv run pytest -m "not integration" --cov --cov-report=term-missing
