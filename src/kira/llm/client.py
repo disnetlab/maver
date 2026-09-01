@@ -12,6 +12,7 @@ deleted by someone who does not believe it.
 import asyncio
 import json
 import logging
+import os
 import random
 import time
 from collections.abc import Awaitable, Callable
@@ -342,6 +343,27 @@ class LLMClient:
             self._completion = litellm.acompletion
         return await self._completion(**kwargs)
 
+    def _api_key(self) -> str | None:
+        """Resolve the credential for this call.
+
+        In precedence order: an explicit override, then the environment variable the
+        profile names, then its placeholder for a keyless server. None means send
+        nothing and let the provider library look for its own, which is what a hosted
+        route configured entirely through the environment expects.
+
+        Returns:
+            The key, or None when the profile names no way to find one.
+        """
+        override = self.settings.model.api_key
+        if override is not None:
+            return override.get_secret_value()
+        named = self.profile.endpoint.api_key_env
+        if named:
+            from_env = os.environ.get(named)
+            if from_env:
+                return from_env
+        return self.profile.endpoint.api_key_literal
+
     def _build_kwargs(self, request: ModelRequest) -> dict[str, Any]:
         """Assemble the provider request.
 
@@ -383,8 +405,17 @@ class LLMClient:
             "timeout": profile.limits["request_timeout_s"],
             **top_level,
         }
-        if profile.endpoint.base_url:
-            kwargs["api_base"] = profile.endpoint.base_url
+        # The profile says how this model is called, and until now the two fields that
+        # say *where* and *as whom* were declared, validated and never sent. A keyless
+        # local server then worked only where the operator happened to export the
+        # provider library's own environment variables, which is the profile not
+        # determining the call at all.
+        base_url = self.settings.model.endpoint_override or profile.endpoint.base_url
+        if base_url:
+            kwargs["api_base"] = base_url
+        api_key = self._api_key()
+        if api_key is not None:
+            kwargs["api_key"] = api_key
         if extra_body:
             kwargs["extra_body"] = extra_body
         if profile.quirks.drop_unsupported_params:

@@ -488,3 +488,35 @@ def test_a_model_failure_survives_being_re_raised() -> None:
     error.__traceback__ = None
 
     assert "connection refused" in str(error)
+
+
+def test_the_profile_determines_where_the_call_goes_and_as_whom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both fields were declared, validated and never sent, so a keyless local server
+    worked only where the operator happened to export the provider library's own
+    environment variables — which is the profile not determining the call at all."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    client = LLMClient(load_profile("qwen3.6-35b-a3b", MODELS), load_settings())
+
+    kwargs = client._build_kwargs(
+        ModelRequest(system="s", messages=[{"role": "user", "content": "hi"}], tools=())
+    )
+
+    assert kwargs["api_base"] == "http://vllm.internal:8000/v1"
+    assert kwargs["api_key"] == "EMPTY"
+
+
+def test_an_override_displaces_the_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pointing a run at another server is what the override is for, and a key given
+    explicitly outranks one the profile names."""
+    monkeypatch.setenv("KIRA_MODEL__ENDPOINT_OVERRIDE", "http://localhost:9/v1")
+    monkeypatch.setenv("KIRA_MODEL__API_KEY", "sk-from-the-operator")
+    client = LLMClient(load_profile("qwen3.6-35b-a3b", MODELS), load_settings())
+
+    kwargs = client._build_kwargs(
+        ModelRequest(system="s", messages=[{"role": "user", "content": "hi"}], tools=())
+    )
+
+    assert kwargs["api_base"] == "http://localhost:9/v1"
+    assert kwargs["api_key"] == "sk-from-the-operator"
