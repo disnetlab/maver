@@ -18,6 +18,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from kira.audit.journal import Journal
+from kira.contracts.artifacts import LearningPacket
 from kira.contracts.routing import HandBack
 from kira.contracts.state import IncidentState
 from kira.llm.types import Completion, Message
@@ -83,6 +84,13 @@ class RoleContext:
     session_id: str
     memory: Retriever | None = None
     """None when this configuration has no experience store."""
+    packet: LearningPacket | None = None
+    """The offline pass's input, assembled from stored records rather than live state.
+
+    Learning runs minutes after the incident closed, from a scheduler job on a fresh
+    task, so there is no live state to read: what it gets is what was written down. The
+    other roles leave this None.
+    """
     milestone: "MilestoneFn | None" = None
     """Announce a graded result mid-run, for a role that produces more than one.
 

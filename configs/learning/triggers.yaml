@@ -1,0 +1,15 @@
+# What can start an offline learning pass, and how long it may run.
+#
+# One trigger ships. The prototype also had `domain` and `human`: operator
+# knowledge-authoring surfaces whose only storage path was a mutable playbook that
+# this system does not have, and which no published claim rests on. The file keeps its
+# shape so adding one back is a YAML entry plus a prompt asset, not a code change.
+#
+# Each key must name a prompt asset at prompts/runtime/learning/<key>.txt.
+
+schema_version: 1
+
+triggers:
+  post_incident:
+    enabled: true
+    max_turns: 30

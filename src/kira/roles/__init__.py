@@ -7,6 +7,7 @@ node rather than an error, which is why the imports are here rather than left to
 
 from kira.roles import (  # noqa: F401 - imported for their registrations
     execution,
+    learning,
     planning,
     rca,
     single,

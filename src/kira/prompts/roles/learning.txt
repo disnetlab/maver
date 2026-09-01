@@ -99,7 +99,7 @@ shell or Python; use the dedicated tool for each step:
   applicable" for incident-only fields. Non-incident triggers are not written
   to episodic memory.
 
-{{KUBECTL_MODE_PROMPT}}
+{{KUBECTL_GUIDANCE}}
 - Every investigation tool takes a required `rationale` argument (see Progress
   Trace).
 

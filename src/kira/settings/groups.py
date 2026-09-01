@@ -359,6 +359,21 @@ class MemorySettings(SettingsGroup):
         "LEARNING_DELAY_SECONDS",
         description="Wait before distilling, so a late outcome is visible.",
     )
+    learning_verify: bool = setting(
+        False,
+        "KIRA_MEMORY__LEARNING_VERIFY",
+        "LEARNING_VERIFY_ENABLED",
+        description=(
+            "Let the distilling pass re-check the incident's real symptoms instead of "
+            "trusting the remediation's own report. Only useful while the environment "
+            "is still up, and suppressed anyway when an external evaluation is present."
+        ),
+    )
+    learning_config_dir: Path = setting(
+        Path("configs/learning"),
+        "KIRA_MEMORY__LEARNING_CONFIG_DIR",
+        description="Where the learning trigger configuration is read from.",
+    )
     backend: Literal["embedded", "postgres"] = setting(
         "embedded",
         "KIRA_MEMORY__BACKEND",

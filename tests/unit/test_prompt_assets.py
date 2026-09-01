@@ -57,6 +57,10 @@ def _prototype_source(relative: Path) -> Path:
     """Map a shipped asset back to the prototype file it was copied from."""
     parts = relative.parts
     match parts:
+        case ("roles", "learning.txt"):
+            # The learning role's system prompt is the prototype's shared learning base.
+            # Its trigger-specific half is appended at runtime, exactly as there.
+            return PROTOTYPE / "learning" / "base.txt"
         case ("roles", filename):
             role = filename.removesuffix(".txt")
             if role in MINIMAL_VARIANT_ROLES:
