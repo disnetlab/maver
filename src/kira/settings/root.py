@@ -499,6 +499,15 @@ def arm_overrides(settings: Settings) -> ArmOverrides:
         return ArmOverrides({}, {})
     found = arm.contradicted_by(settings.model_dump(mode="json"))
     broken = {path: pair for path, pair in found.items() if arm.is_held_constant(path)}
+
+    # A sampling override displaces the profile without touching any path the arm
+    # declares, so the comparison above cannot see it: an arm holding the model profile
+    # constant would run at a different temperature and report no contradiction. That is
+    # the exact shape of a knob that moved once here and went unnoticed for twelve days,
+    # leaving the campaigns either side of it not comparable.
+    if arm.is_held_constant("model_profile"):
+        for knob, value in sorted(settings.sampling_overrides().items()):
+            broken[f"model.overrides.{knob}"] = (f"the {arm.name} profile", value)
     return ArmOverrides({p: v for p, v in found.items() if p not in broken}, broken)
 
 

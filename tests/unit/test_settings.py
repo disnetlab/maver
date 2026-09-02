@@ -1,6 +1,7 @@
 """The settings model: aliases, validation, redaction, and immutability."""
 
 import logging
+import re
 from pathlib import Path
 from types import UnionType
 from typing import Literal, Union, get_args, get_origin
@@ -581,3 +582,34 @@ def test_a_queue_intake_that_consumes_nothing_is_refused(monkeypatch: pytest.Mon
 def test_the_default_deployment_can_still_receive_an_incident() -> None:
     """The control: refusing the queue must not refuse the configuration everything uses."""
     assert Settings().intake.http_enabled is True
+
+
+class TestAFrozenArmAndTheSamplingKnobs:
+    """A sampling override displaces the profile without touching any path an arm
+    declares, so the contradiction check could not see it: an arm holding the model
+    profile constant would run at a different temperature and report nothing wrong.
+
+    That is the exact shape of a knob that moved once in this project's history and went
+    unnoticed for twelve days, leaving the campaigns either side of it not comparable —
+    and the arm mechanism exists to make exactly that impossible.
+    """
+
+    def test_an_override_on_a_frozen_arm_is_a_startup_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("KIRA_ARM", "ma-s")
+        monkeypatch.setenv("LLM_TEMPERATURE", "0")
+        reset_settings()
+
+        with pytest.raises(ValueError, match=re.escape("model.overrides.temperature")):
+            load_settings()
+
+    def test_the_same_override_without_an_arm_is_allowed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The control. Overrides exist so a run script exporting a flat name keeps
+        working; what an arm adds is that it may not do so silently."""
+        monkeypatch.setenv("LLM_TEMPERATURE", "0")
+        reset_settings()
+
+        assert load_settings().sampling_overrides() == {"temperature": 0.0}
