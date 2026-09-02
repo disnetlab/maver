@@ -5,9 +5,16 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from kira.audit.journal import Journal, ListSink
 from kira.llm.sampling import sampling_digest
+from kira.memory.factory import build_storage
 from kira.settings.arms import compare_constants, deep_merge, load_arm
 from kira.settings.profiles import ModelProfile, load_profile
+from kira.settings.root import load_settings, reset_settings
+from kira.tools.allowlists import RETRIEVAL_TOOLS
+from kira.tools.context import ToolContext
+from kira.tools.toolsets import build_toolset
+from kira.tools.workspace import SessionWorkspace
 
 MODELS = Path("configs/models")
 ARMS = Path("configs/arms")
@@ -306,3 +313,52 @@ def test_the_auxiliary_set_turns_thinking_off(name: str) -> None:
     assert aux.thinking_token_budget is None
     # The seed survives: it says which behaviour is being used, not how far it may wander.
     assert aux.seed == SHIPPED_SAMPLING[name][1]["seed"]
+
+
+class _AnyTransport:
+    """Every capability, so a tool that is dropped is dropped for the arm's reason."""
+
+    name = "any"
+    capabilities = frozenset({"kubernetes", "kubernetes.write", "metrics", "logs", "traces"})
+    timeout_seconds = 30
+
+
+def test_the_gated_arm_gives_no_role_a_retrieval_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MA+S's defining property, checked where it is actually decided.
+
+    The arm reads the store in the harness and keeps every agent run retrieval-free. That
+    rests on two settings agreeing — the store enabled, role retrieval off — and on the
+    toolset builder withholding the tools when the context carries no retriever. Each half
+    was tested; the combination that makes the arm what it is was not, and it is the claim
+    the arm's whole result is read against.
+    """
+    monkeypatch.setenv("KIRA_ARM", "ma-s")
+    monkeypatch.setenv("KIRA_SERVER__WORKDIR", str(tmp_path))
+    reset_settings()
+    settings = load_settings()
+
+    assert settings.memory.enabled is True
+    assert settings.memory.role_retrieval is False
+
+    storage = build_storage(settings)
+    try:
+        for role in ("rca", "planning", "execution", "verify"):
+            ctx = ToolContext(
+                transport=_AnyTransport(),
+                workspace=SessionWorkspace(tmp_path),
+                role=role,
+                session_id="s1",
+                journal=Journal(ListSink(), session_id="s1", stage=role),
+                settings=settings.tools,
+                # The runner's own rule: the store is withheld from a role unless both
+                # settings allow it. Withholding it here is what drops the tools.
+                memory=None,
+                sessions=storage.sessions,
+                runs=storage.runs,
+            )
+            offered = {d.name for d in build_toolset(role, ctx).definitions}
+            assert not offered & RETRIEVAL_TOOLS, f"{role} was offered {offered & RETRIEVAL_TOOLS}"
+    finally:
+        storage.close()
