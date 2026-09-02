@@ -6,6 +6,7 @@ role's context can be built from a deployment's resources and that what the pipe
 concluded reaches the record a later incident reads.
 """
 
+import contextlib
 import json
 import pathlib
 from typing import Any
@@ -233,4 +234,39 @@ async def test_both_engines_run_the_same_incident(tmp_path: pathlib.Path) -> Non
 
     assert model.callers == ["rca", "planning", "execution", "execution"]
     assert final["execution_result"] is not None
+    deploy.storage.close()
+
+
+async def test_the_incident_span_records_how_the_incident_ended(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The span is opened by the runner and handed down so it can be annotated — each
+    role annotates its own with what it submitted — and the incident's carried only how
+    it started.
+
+    A trace therefore showed every incident alike, and the one question a trace is opened
+    to answer had to be taken from the database instead.
+    """
+    recorded: dict[str, object] = {}
+
+    class _Span:
+        def set_attribute(self, key: str, value: object) -> None:
+            recorded[key] = value
+
+    @contextlib.contextmanager
+    def fake_span(name: str, attributes: dict[str, object] | None = None):
+        yield _Span() if name == "kira.incident" else _Noop()
+
+    class _Noop:
+        def set_attribute(self, key: str, value: object) -> None:
+            return None
+
+    monkeypatch.setattr("kira.orchestration.runner.span", fake_span)
+    deploy, _, _ = deployment(tmp_path)
+    session = deploy.storage.sessions.create_session(ALERT)
+
+    await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+
+    assert recorded["kira.outcome"] == "success"
+    assert recorded["kira.lifecycle"] == "tentative_success"
     deploy.storage.close()

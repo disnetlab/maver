@@ -607,6 +607,13 @@ async def _run_mode(
         raise
 
     record = resolve_outcome(final_state)
+    # The span is opened by the caller and handed down for this. Each role annotates its
+    # own with what it submitted; the incident's carried how it started and nothing about
+    # how it ended, so a trace showed every incident alike and the one question a trace is
+    # opened to answer had to be taken from the database instead.
+    incident_span.set_attribute("kira.outcome", record.outcome.value)
+    if record.lifecycle is not None:
+        incident_span.set_attribute("kira.lifecycle", record.lifecycle.value)
     try:
         persist_outcome(
             final_state,
