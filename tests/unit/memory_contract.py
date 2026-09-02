@@ -20,7 +20,10 @@ ranking that only the retriever is allowed to have.
 
 from typing import Any, Protocol
 
+import pytest
+
 from kira.contracts.lifecycle import LifecycleState, RunStatus
+from kira.memory.lifecycle import IllegalTransition
 from kira.memory.ports import (
     AgentRunEventDraft,
     AgentRunRecord,
@@ -179,6 +182,34 @@ class MemoryStoreContract:
             other.session_id: LifecycleState.PENDING.value,
         }
         assert store.get_states([]) == {}
+
+    def test_a_verdict_the_lifecycle_graph_forbids_is_refused_and_not_written(
+        self, store: OperationalStore
+    ) -> None:
+        """A record's standing is a research claim, so no backend may write whatever
+        standing a caller passed it."""
+        session = store.create_session({})
+
+        # Nothing is distilled from a session still running, so there is nothing yet for
+        # an operator to have verified.
+        with pytest.raises(IllegalTransition):
+            store.set_state(session.session_id, LifecycleState.HUMAN_VERIFIED)
+        assert store.get_states([session.session_id]) == {
+            session.session_id: LifecycleState.PENDING.value
+        }
+
+        store.set_state(session.session_id, LifecycleState.TENTATIVE_SUCCESS)
+        # Writing the state a record already holds is a no-op rather than a refusal, so
+        # a job retried after a crash is safe to run again.
+        store.set_state(session.session_id, LifecycleState.TENTATIVE_SUCCESS)
+        with pytest.raises(IllegalTransition):
+            store.set_state(session.session_id, LifecycleState.HALTED)
+        assert store.get_states([session.session_id]) == {
+            session.session_id: LifecycleState.TENTATIVE_SUCCESS.value
+        }
+
+        # A session that is not there is not an error, as it is not anywhere else here.
+        store.set_state("no-such-session", LifecycleState.INVALIDATED)
 
     def test_the_run_status_and_its_checkpoint_move_together(self, store: OperationalStore) -> None:
         """No reader may see `awaiting_human` without the checkpoint that goes with it,
@@ -401,6 +432,40 @@ class MemoryStoreContract:
         assert finished.metadata == {"arm": "ma-r"}
         assert finished.attempt == 1
         assert store.get_run("no-such-run") is None
+
+    def test_finishing_a_run_merges_its_metadata_into_what_starting_it_wrote(
+        self, store: OperationalStore
+    ) -> None:
+        """The edge a run was reached by is written before the role exists to describe
+        itself, and has to survive the role doing so."""
+        session = store.create_session({})
+        store.start_run(a_run("run-1", session.session_id, metadata={"after": "rca"}))
+
+        store.finish_run(
+            "run-1",
+            status="succeeded",
+            metadata={"health_gate": {"ran": True, "fell_open": False}},
+        )
+        finished = store.get_run("run-1")
+        assert finished is not None
+        assert finished.metadata == {
+            "after": "rca",
+            "health_gate": {"ran": True, "fell_open": False},
+        }
+
+        # Key by key, never into the objects: a nested value is replaced whole. This is
+        # the one point where each backend's natural merge would have said otherwise.
+        store.finish_run("run-1", status="succeeded", metadata={"health_gate": {"ran": False}})
+        replaced = store.get_run("run-1")
+        assert replaced is not None
+        assert replaced.metadata == {"after": "rca", "health_gate": {"ran": False}}
+
+        # Alone among these arguments, an omitted metadata leaves what is there.
+        store.finish_run("run-1", status="failed", error="boom")
+        kept = store.get_run("run-1")
+        assert kept is not None
+        assert kept.metadata == {"after": "rca", "health_gate": {"ran": False}}
+        assert kept.output is None
 
     # TextSearch -----------------------------------------------------------------
 

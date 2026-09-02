@@ -24,14 +24,12 @@ import textwrap
 from pathlib import Path
 
 from kira.tools.context import ToolContext, deliver
-from kira.tools.errors import format_exit_result, tool_error
+from kira.tools.errors import EXEC_OUTPUT_LIMIT, format_exit_result, tool_error
 from kira.tools.policy import read_only
 from kira.tools.registry import tool
 from kira.tools.sandbox import SANDBOX_ERROR_PREFIX, sandboxed_command
 
 __all__ = ["bash_exec", "code_exec"]
-
-OUTPUT_LIMIT = 8192
 
 # `kubectl` at command position only: at the start, or after a separator or pipe. So
 # `foo && kubectl get pods` is caught and `grep kubectl notes.txt` is not.
@@ -97,7 +95,7 @@ async def _run(ctx: ToolContext, command: list[str], *, timeout: float, label: s
     if process.returncode == 126 and output.startswith(SANDBOX_ERROR_PREFIX):
         return tool_error(output.strip())
     rendered = format_exit_result(process.returncode or 0, output)
-    return deliver(ctx, rendered, label, OUTPUT_LIMIT)
+    return deliver(ctx, rendered, label, EXEC_OUTPUT_LIMIT)
 
 
 @tool(

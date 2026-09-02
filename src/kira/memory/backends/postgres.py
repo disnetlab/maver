@@ -61,6 +61,7 @@ from psycopg.types.json import Jsonb
 from kira.contracts.lifecycle import LifecycleState, RunStatus
 from kira.memory.backends.sanitise import scrub, scrub_mapping, scrub_optional, scrub_text
 from kira.memory.bm25 import tokenize
+from kira.memory.lifecycle import check_transition
 from kira.memory.ports import (
     AgentRunEventDraft,
     AgentRunEventRecord,
@@ -610,11 +611,30 @@ class PostgresStore:
     def set_state(self, session_id: str, state: LifecycleState) -> None:
         """Record how far a session's claim has been confirmed.
 
+        The row is read ``FOR UPDATE`` so that the standing checked is the standing
+        written against: under READ COMMITTED a plain read is a snapshot two writers can
+        both act on.
+
+        It locks where the sequence allocation deliberately does not, because the
+        pressure is the opposite one. A run takes hundreds of events from whatever thread
+        is running it; a session takes one verdict, at the end of the one pipeline that
+        owns it. There is nothing here for a collide-and-retry to buy, and a refusal has
+        to be able to say what the record's standing actually is.
+
         Args:
             session_id: Which session.
             state: The new lifecycle state.
+
+        Raises:
+            IllegalTransition: When the record's current state cannot become this one.
         """
         with self._db.write() as conn:
+            row = conn.execute(
+                "SELECT state FROM sessions WHERE corpus_id = %s AND session_id = %s FOR UPDATE",
+                (self.corpus_id, session_id),
+            ).fetchone()
+            if row is None or not check_transition(LifecycleState(row["state"]), state):
+                return
             conn.execute(
                 "UPDATE sessions SET state = %s WHERE corpus_id = %s AND session_id = %s",
                 (state.value, self.corpus_id, session_id),
@@ -859,11 +879,18 @@ class PostgresStore:
         output: dict[str, Any] | None = None,
         trace_summary: dict[str, Any] | None = None,
         error: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Record that a role finished.
 
         Terminal, and written whole: the arguments describe the run's final state, so a
-        None here is "produced nothing" rather than "leave what was there".
+        None here is "produced nothing" rather than "leave what was there". ``metadata``
+        is the exception and merges, because the row already carries the edge the run was
+        reached by and a role describing itself is not overruling that.
+
+        ``||`` merges it in the same statement, which is shallow — a key the role names
+        replaces that key alone. The embedded backend does the merge in Python to reach
+        the same answer, since ``json_patch`` would descend into nested objects.
 
         Args:
             agent_run_id: Which run.
@@ -871,17 +898,20 @@ class PostgresStore:
             output: What it produced.
             trace_summary: A condensed account of what it did.
             error: Why it failed, when it did.
+            metadata: What the role recorded about its own run.
         """
         with self._db.write() as conn:
             conn.execute(
                 "UPDATE agent_runs SET status = %s, ended_at = %s, output = %s, "
-                "trace_summary = %s, error = %s WHERE corpus_id = %s AND agent_run_id = %s",
+                "trace_summary = %s, error = %s, metadata = metadata || %s "
+                "WHERE corpus_id = %s AND agent_run_id = %s",
                 (
                     status,
                     _now(),
                     _json(output),
                     _json(trace_summary),
                     scrub_optional(error),
+                    _json(metadata or {}),
                     self.corpus_id,
                     agent_run_id,
                 ),

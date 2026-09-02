@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 from kira.contracts.lifecycle import LifecycleState, RunStatus
 from kira.memory.backends.sanitise import scrub, scrub_mapping, scrub_optional, scrub_text
 from kira.memory.bm25 import tokenize
+from kira.memory.lifecycle import check_transition
 from kira.memory.ports import (
     AgentRunEventDraft,
     AgentRunEventRecord,
@@ -350,11 +351,24 @@ class SqliteStore:
     def set_state(self, session_id: str, state: LifecycleState) -> None:
         """Record how far a session's claim has been confirmed.
 
+        The read of the standing a record holds and the write that depends on it are one
+        ``BEGIN IMMEDIATE`` transaction, as the sequence allocation is, so no second
+        writer can land a verdict between them and have this one checked against a state
+        that is already gone.
+
         Args:
             session_id: Which session.
             state: The new lifecycle state.
+
+        Raises:
+            IllegalTransition: When the record's current state cannot become this one.
         """
         with self._db.write() as conn:
+            row = conn.execute(
+                "SELECT state FROM sessions WHERE session_id = ?", (session_id,)
+            ).fetchone()
+            if row is None or not check_transition(LifecycleState(row["state"]), state):
+                return
             conn.execute(
                 "UPDATE sessions SET state = ? WHERE session_id = ?", (state.value, session_id)
             )
@@ -609,11 +623,19 @@ class SqliteStore:
         output: dict[str, Any] | None = None,
         trace_summary: dict[str, Any] | None = None,
         error: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Record that a role finished.
 
         Terminal, and written whole: the arguments describe the run's final state, so a
-        None here is "produced nothing" rather than "leave what was there".
+        None here is "produced nothing" rather than "leave what was there". ``metadata``
+        is the exception and merges, because the row already carries the edge the run was
+        reached by and a role describing itself is not overruling that.
+
+        Merged in Python rather than with ``json_patch``, which would be one statement
+        but merges nested objects where the server backend's ``||`` replaces them; the
+        two backends have to agree on this. The read and the write are the same
+        ``BEGIN IMMEDIATE`` transaction, as they are in the sequence allocation.
 
         Args:
             agent_run_id: Which run.
@@ -621,17 +643,24 @@ class SqliteStore:
             output: What it produced.
             trace_summary: A condensed account of what it did.
             error: Why it failed, when it did.
+            metadata: What the role recorded about its own run.
         """
         with self._db.write() as conn:
+            stored = conn.execute(
+                "SELECT metadata_json FROM agent_runs WHERE agent_run_id = ?", (agent_run_id,)
+            ).fetchone()
+            merged = _loads_or_empty(stored["metadata_json"]) if stored else {}
+            merged.update(metadata or {})
             conn.execute(
                 "UPDATE agent_runs SET status = ?, ended_at = ?, output_json = ?, "
-                "trace_summary_json = ?, error = ? WHERE agent_run_id = ?",
+                "trace_summary_json = ?, error = ?, metadata_json = ? WHERE agent_run_id = ?",
                 (
                     status,
                     _now(),
                     _dumps_optional(output),
                     _dumps_optional(trace_summary),
                     scrub_optional(error),
+                    _dumps(merged),
                     agent_run_id,
                 ),
             )

@@ -282,9 +282,21 @@ class SessionStore(Protocol):
     def set_state(self, session_id: str, state: LifecycleState) -> None:
         """Record how far a session's claim has been confirmed.
 
+        Checked against :func:`kira.memory.lifecycle.check_transition` rather than
+        written unconditionally, and checked here rather than in any one caller, because
+        which verdict may follow which is a property of the stored record: an operator
+        route overturning a verdict has to obey it as much as the pipeline does, and
+        neither should have to remember to. Writing the state a session already holds is
+        a no-op, so a job retried after a crash is safe to run again.
+
         Args:
             session_id: Which session.
             state: The new lifecycle state.
+
+        Raises:
+            IllegalTransition: When the record's current state cannot become this one.
+                Nothing is written. A session that does not exist is not an error, for
+                the same reason it is not one anywhere else here.
         """
         ...
 
@@ -433,6 +445,7 @@ class RunStore(Protocol):
         output: dict[str, Any] | None = None,
         trace_summary: dict[str, Any] | None = None,
         error: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Record that a role finished.
 
@@ -442,6 +455,13 @@ class RunStore(Protocol):
             output: What it produced.
             trace_summary: A condensed account of what it did.
             error: Why it failed, when it did.
+            metadata: What the role recorded about its own run. Merged key by key into
+                what :meth:`start_run` wrote, alone among these arguments, because the
+                two writes describe different things and the earlier one — the edge this
+                run was reached by — is not the later one's to discard. Most of what a
+                role can say about itself is only knowable at the end anyway: a run id
+                has to exist before the role's context does, so nothing about what the
+                model was actually offered can be recorded at the start.
         """
         ...
 

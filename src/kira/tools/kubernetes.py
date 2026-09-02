@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from kira.tools.context import ToolContext, deliver, redact
-from kira.tools.errors import tool_error
+from kira.tools.errors import OUTPUT_LIMIT, tool_error
 from kira.tools.policy import ActionClass, ToolPolicy, register_policy
 from kira.tools.registry import Authority, tool
 
@@ -28,8 +28,6 @@ __all__ = [
     "read_kubectl",
     "tokenize",
 ]
-
-OUTPUT_LIMIT = 16384
 
 _WRITE_VERBS = {
     "apply", "create", "patch", "edit", "replace", "scale", "rollout",

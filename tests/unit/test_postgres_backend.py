@@ -144,9 +144,9 @@ def test_a_call_blocked_on_a_lock_gives_up_rather_than_waiting_forever(schema: s
             _raw_connection(schema, autocommit=False) as rival,
         ):
             rival.execute("LOCK TABLE sessions IN ACCESS EXCLUSIVE MODE")
-            blocked = pool.submit(
-                store.set_state, session.session_id, LifecycleState.HUMAN_VERIFIED
-            )
+            # A transition the graph allows, so that what this waits on is the lock and
+            # nothing else.
+            blocked = pool.submit(store.set_state, session.session_id, LifecycleState.INVALIDATED)
             with pytest.raises(psycopg.errors.QueryCanceled):
                 blocked.result(timeout=10)
             rival.rollback()
