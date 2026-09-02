@@ -215,6 +215,21 @@ class TestEvidenceFilter:
         ]
 
 
+def test_an_ungraded_episode_is_not_stamped_with_the_oracles_name() -> None:
+    """The function promised None when nothing gradable came back, and returned a record
+    with every field null and the oracle named as its source.
+
+    That name is what the distilling pass reads as the authority for a verdict, so an
+    episode nobody graded became one the oracle had evaluated and found nothing in. A
+    partial result is still a result — one stage graded and the other not is real — so
+    only the case with neither stage present is nothing.
+    """
+    assert reduce_feedback({}, details=True) is None
+    assert reduce_feedback({"ground_truth_root_cause": "a cause"}, details=True) is None
+    assert reduce_feedback({"Mitigation": {"success": True}}, details=True) is not None
+    assert reduce_feedback({"Diagnosis": {"success": False}}, details=True) is not None
+
+
 class _Session:
     """One MCP session, counting how many times its transport was opened."""
 

@@ -111,6 +111,15 @@ def reduce_feedback(results: Any, *, details: bool) -> ExternalFeedback | None:
     """
     if not isinstance(results, dict):
         return None
+    if not isinstance(results.get("Diagnosis"), dict) and not isinstance(
+        results.get("Mitigation"), dict
+    ):
+        # Nothing was graded, so there is no grade to report. Returning a record with
+        # every field null still stamps the oracle's name on the session, and that name
+        # is what the distilling pass reads as the authority for a verdict — so an
+        # ungraded episode became one the oracle had evaluated and found nothing in.
+        # None is what the caller already handles for a run that came back ungraded.
+        return None
     mitigation = results.get("Mitigation") or {}
     return ExternalFeedback(
         source=ORACLE_SOURCE,
