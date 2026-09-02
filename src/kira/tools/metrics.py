@@ -20,8 +20,8 @@ import ast
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from kira.tools.context import ToolContext, deliver
-from kira.tools.errors import OUTPUT_LIMIT
+from kira.tools.context import ToolContext, deliver, redact_query
+from kira.tools.errors import OUTPUT_LIMIT, tool_error
 from kira.tools.kubernetes import read_kubectl
 from kira.tools.policy import read_only
 from kira.tools.registry import tool
@@ -60,7 +60,17 @@ async def get_metrics(ctx: ToolContext, query: str) -> str:
     Returns:
         The result, saved to the session workspace when it exceeds the output limit.
     """
-    raw = await ctx.transport.query_metrics(query)
+    # Through the wrapper, and fail-closed, exactly as the log query is. A PromQL
+    # selector can name a namespace, so this is the second of the two tools whose
+    # *request* can reach somewhere the environment meant to hide — and a model that can
+    # ask about a hidden namespace learns it exists from the shape of the answer, which
+    # no amount of filtering the result afterwards undoes. Neither shipped policy
+    # rewrites a query today; the point is that when one does, it reaches here too.
+    try:
+        scoped = redact_query(ctx.evidence, query)
+    except Exception as exc:
+        return tool_error(f"the query could not be scoped: {type(exc).__name__}")
+    raw = await ctx.transport.query_metrics(scoped)
     return deliver(ctx, raw, "prometheus_metrics", OUTPUT_LIMIT)
 
 

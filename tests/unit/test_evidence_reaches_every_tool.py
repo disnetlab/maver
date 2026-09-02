@@ -100,3 +100,52 @@ async def test_a_telemetry_result_passes_through_the_evidence_policy(
     if result.startswith("error:"):
         pytest.skip(f"{name} refused before reading, so there was nothing to filter")
     assert MARKER not in result
+
+
+class RewritingPolicy:
+    """A policy that actually rewrites, which neither shipped one does."""
+
+    def filter_result(self, content: str) -> str:
+        return content
+
+    def filter_query(self, query: str) -> str:
+        return query.replace("chaos-mesh", "REDACTED")
+
+
+class RefusingPolicy(RewritingPolicy):
+    def filter_query(self, query: str) -> str:
+        raise RuntimeError("the policy could not scope this")
+
+
+async def test_a_metric_query_is_scoped_before_it_is_sent(tmp_path: pathlib.Path) -> None:
+    """The two tools whose *request* can name a hidden place are the log query and the
+    metric query, and only the log query was scoped.
+
+    A PromQL selector can name a namespace, and a model that can ask about a hidden one
+    learns it exists from the shape of the answer — which no amount of filtering the
+    result afterwards undoes. Neither shipped policy rewrites a query, so this is inert
+    today; the point is that when one does, it reaches both.
+    """
+    sent: list[str] = []
+
+    class Recording(Transport):
+        async def query_metrics(self, query: str, *, window_minutes: int | None = None) -> str:
+            sent.append(query)
+            return "{}"
+
+    ctx = context(tmp_path)
+    object.__setattr__(ctx, "transport", Recording())
+    object.__setattr__(ctx, "evidence", RewritingPolicy())
+
+    await get_metrics(ctx, query='up{namespace="chaos-mesh"}')
+
+    assert sent == ['up{namespace="REDACTED"}']
+
+
+async def test_a_query_that_could_not_be_scoped_is_refused(tmp_path: pathlib.Path) -> None:
+    """Fail closed, as the log query does: an unrewritten query reaches the place the
+    environment meant to hide."""
+    ctx = context(tmp_path)
+    object.__setattr__(ctx, "evidence", RefusingPolicy())
+
+    assert (await get_metrics(ctx, query="up")).startswith("error:")
