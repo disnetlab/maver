@@ -284,3 +284,25 @@ def test_every_shipped_profile_is_pinned() -> None:
     """A new profile file joins the table above, rather than shipping unpinned."""
     shipped = {path.stem for path in MODELS.glob("*.yaml")}
     assert shipped == set(SHIPPED_SAMPLING)
+
+
+@pytest.mark.parametrize("name", sorted(SHIPPED_SAMPLING))
+def test_the_auxiliary_set_turns_thinking_off(name: str) -> None:
+    """Two modules asserted opposite things about the same value.
+
+    `secondpass/select.py` says thinking must be off for the selector, that the reason is
+    a measured failure rather than a preference — with thinking on, the model spent the
+    budget reasoning and every selector call in one rerun parsed to empty and fell back to
+    the first opinion — and that in Kira this is a property of the auxiliary sampling set.
+    The function deriving that set kept the reasoning knobs, and justified keeping them.
+
+    Inert on the profiles every campaign used, which set neither knob; live on any profile
+    that sets one, where the gate, the nominator and the selector all ran with reasoning on
+    against the module that says they must not.
+    """
+    aux = load_profile(name, MODELS).aux_sampling
+
+    assert aux.reasoning_effort is None
+    assert aux.thinking_token_budget is None
+    # The seed survives: it says which behaviour is being used, not how far it may wander.
+    assert aux.seed == SHIPPED_SAMPLING[name][1]["seed"]

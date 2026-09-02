@@ -298,9 +298,15 @@ def _derive_aux(primary: SamplingSet) -> SamplingSet:
     """Build an auxiliary set from a primary one.
 
     Temperature to zero and every diversity or repetition knob off, because each of them
-    exists to shape a long generation and each of them distorts a short one. The seed
-    and the reasoning budget are kept: they say which model behaviour is being used, not
-    how widely it is allowed to wander.
+    exists to shape a long generation and each of them distorts a short one. The
+    reasoning knobs go with them, for the same reason and one more: an auxiliary call has
+    no tools, so its whole answer has to arrive in the content, and with thinking on the
+    model spends the budget reasoning and returns nothing. That is measured — every
+    selector call in one rerun parsed to empty and fell back to the first opinion — and
+    :mod:`kira.secondpass.select` states it as a property of this set. It was not one.
+
+    The seed is kept. It says which behaviour is being used rather than how widely the
+    model may wander, which is the test the rest of these fail.
 
     Args:
         primary: The profile's open-ended set.
@@ -319,6 +325,6 @@ def _derive_aux(primary: SamplingSet) -> SamplingSet:
         repetition_penalty=None,
         no_repeat_ngram_size=None,
         seed=primary.seed,
-        reasoning_effort=primary.reasoning_effort,
-        thinking_token_budget=primary.thinking_token_budget,
+        reasoning_effort=None,
+        thinking_token_budget=None,
     )

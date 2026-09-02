@@ -31,6 +31,7 @@ READ_GENERICALLY = {
     "model.overrides.frequency_penalty",
     "model.overrides.repetition_penalty",
     "model.overrides.no_repeat_ngram_size",
+    "model.overrides.reasoning_effort",
     "model.overrides.seed",
     "model.overrides.max_tokens",
 }
