@@ -163,10 +163,20 @@ class Settings(SettingsGroup):
                 "memory.learning_enabled requires memory.enabled: distilling records "
                 "that nothing can retrieve is work with no consumer."
             )
-        if not self.intake.http_enabled and not self.intake.kafka.enabled:
+        if self.intake.kafka.enabled:
+            # The group is configurable because the intake is designed; nothing consumes
+            # from it yet. Accepting the flag let it satisfy the check below, so a
+            # deployment with HTTP off and a queue configured started clean and could
+            # never receive an incident — the outcome that check exists to refuse.
             raise ValueError(
-                "no intake is enabled: set intake.http_enabled or intake.kafka.enabled, "
-                "otherwise the service starts and can never receive an incident."
+                "intake.kafka.enabled is set and the queue intake is not implemented: "
+                "nothing consumes from the topic, so this would start a service that "
+                "can never receive an incident. Use intake.http_enabled."
+            )
+        if not self.intake.http_enabled:
+            raise ValueError(
+                "no intake is enabled: set intake.http_enabled, otherwise the service "
+                "starts and can never receive an incident."
             )
         return self
 

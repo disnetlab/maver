@@ -42,6 +42,8 @@ class TestAliases:
         working while the legacy name keeps working. That is invisible without this test.
         """
         assert field.modern.startswith("KIRA_"), f"{field.modern} is not a prefixed name"
+        if reason := _ONE_VALID_VALUE.get(field.modern):
+            pytest.skip(reason)
         probe = _probe_value(field)
         _apply_companions(field, monkeypatch)
         monkeypatch.setenv(field.modern, probe)
@@ -52,6 +54,8 @@ class TestAliases:
         self, field: AliasedField, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Existing evaluation run scripts export the flat names and must keep working."""
+        if reason := _ONE_VALID_VALUE.get(field.modern):
+            pytest.skip(reason)
         probe = _probe_value(field)
         _apply_companions(field, monkeypatch)
         for name in field.legacy:
@@ -63,12 +67,16 @@ class TestAliases:
 # Companions needed so a probe does not trip an unrelated cross-group rule.
 _COMPANIONS: dict[str, dict[str, str]] = {
     "KIRA_MEMORY__ENABLED": {"LEARNING_ENABLED": "false"},
-    "KIRA_INTAKE__HTTP_ENABLED": {
-        "KAFKA_ENABLED": "true",
-        "KAFKA_BOOTSTRAP_SERVERS": "broker:9092",
-    },
-    "KIRA_INTAKE__KAFKA__ENABLED": {"KAFKA_BOOTSTRAP_SERVERS": "broker:9092"},
     "KIRA_MEMORY__BACKEND": {"MEMORY_POSTGRES_DSN": "postgresql://u:p@db/kira"},
+}
+
+# A probe flips a boolean away from its default, which needs the other value to be a
+# configuration the settings will accept. These two have only one, and naming them here
+# is the honest way to say so: until something consumes from the queue, the queue intake
+# cannot be turned on and the HTTP intake cannot be turned off.
+_ONE_VALID_VALUE: dict[str, str] = {
+    "KIRA_INTAKE__KAFKA__ENABLED": "the queue intake is unbuilt, so enabling it is refused",
+    "KIRA_INTAKE__HTTP_ENABLED": "with no queue intake to fall back to, it cannot be off",
 }
 
 
@@ -550,3 +558,26 @@ def test_an_arm_that_disarms_the_approval_gate_says_so(
     monkeypatch.setenv("KIRA_AUTHORITY__MODE", "prompt")
     reset_settings()
     assert load_settings().authority.mode == "prompt"
+
+
+def test_a_queue_intake_that_consumes_nothing_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The check that refuses a service with no intake was satisfiable by a flag that
+    builds no consumer.
+
+    Nothing under `src/` reads from the topic, so a deployment with the HTTP intake off
+    and a broker configured validated, started clean, and could never receive an
+    incident — which is, word for word, the outcome that check exists to prevent. A flag
+    that answers a liveness question without supplying the liveness is worse than one
+    that is absent.
+    """
+    monkeypatch.setenv("KIRA_INTAKE__HTTP_ENABLED", "false")
+    monkeypatch.setenv("KIRA_INTAKE__KAFKA__ENABLED", "true")
+    monkeypatch.setenv("KIRA_INTAKE__KAFKA__BOOTSTRAP_SERVERS", "broker:9092")
+
+    with pytest.raises(ValidationError, match="queue intake is not implemented"):
+        Settings()
+
+
+def test_the_default_deployment_can_still_receive_an_incident() -> None:
+    """The control: refusing the queue must not refuse the configuration everything uses."""
+    assert Settings().intake.http_enabled is True
