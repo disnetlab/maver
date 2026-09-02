@@ -172,7 +172,7 @@ def make_node(spec: RoleSpec, deps: IncidentDeps) -> NodeFn:
             deps.journal.record(StageEvent(stage=spec.name, event="failed", detail=repr(exc)))
             raise
 
-        return {**delta, **_merge(spec, state, outcome, run_id, deps)}
+        return {**delta, **_merge(spec, state, outcome, run_id, deps, context)}
 
     return node
 
@@ -204,6 +204,7 @@ def _merge(
     outcome: RoleOutcome,
     run_id: str,
     deps: IncidentDeps,
+    context: RoleContext,
 ) -> StateDelta:
     """Turn a role's outcome into a state delta, uniformly."""
     artifact = outcome.artifact
@@ -234,7 +235,17 @@ def _merge(
         output=artifact.model_dump(mode="json") if artifact is not None else None,
         trace_summary=summary.model_dump(mode="json"),
         error=outcome.error,
-        metadata=dict(outcome.metadata),
+        # Two facts about the run that exist nowhere else. Which tools the model was
+        # offered is not reconstructible from the arm or the code: the toolset resolves
+        # against the transport's capabilities as well, so the same role in the same arm
+        # offers different tools on different hosts — and whether a memory arm actually
+        # held its retrieval tools is the question its result rests on. And the gated arm
+        # runs the diagnosing role twice, where both rows said only `rca`.
+        metadata={
+            **outcome.metadata,
+            "tools_withheld": dict(context.toolset.dropped),
+            **({"run_label": context.run_label} if context.run_label else {}),
+        },
     )
 
     if artifact is not None or outcome.error:

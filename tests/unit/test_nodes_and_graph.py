@@ -10,6 +10,7 @@ from kira.contracts.state import IncidentState
 from kira.orchestration.nodes import IncidentDeps, make_node
 from kira.orchestration.routing import RoutingPolicy
 from kira.roles.base import RoleOutcome, RoleSpec
+from kira.tools.toolsets import ResolvedToolset
 
 SRC = pathlib.Path(__file__).resolve().parents[2] / "src" / "kira"
 POLICY = RoutingPolicy(verify_enabled=True, remediation_retries=2, inconclusive_retries=1)
@@ -30,7 +31,14 @@ class Recorder:
 
 def deps(recorder: Recorder, sink: ListSink) -> IncidentDeps:
     def build_context(spec, state, handback, run_id):  # type: ignore[no-untyped-def]
-        return _Captured(spec=spec, state=state, handback=handback, run_id=run_id)
+        return _Captured(
+            spec=spec,
+            state=state,
+            handback=handback,
+            run_id=run_id,
+            toolset=ResolvedToolset(definitions=(), dispatch={}),
+            run_label="",
+        )
 
     return IncidentDeps(
         policy=POLICY,
@@ -41,7 +49,12 @@ def deps(recorder: Recorder, sink: ListSink) -> IncidentDeps:
 
 
 class _Captured:
-    """Stands in for a RoleContext; the wrapper only passes it to the role."""
+    """Stands in for a RoleContext.
+
+    It carries a toolset and a run label because the wrapper reads both: what a run
+    withheld from the model, and which of a mechanism's several runs of one role this
+    was, go on the run row and are recorded nowhere else.
+    """
 
     def __init__(self, **kw) -> None:
         self.__dict__.update(kw)

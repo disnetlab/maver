@@ -258,6 +258,7 @@ class _RunRecorder:
             status=_RUN_STATUS.get(status, "failed"),
             output=dict(output) if output is not None else None,
             trace_summary=dict(trace_summary) if trace_summary is not None else None,
+            metadata=dict(metadata),
             error=error,
         )
 
@@ -322,6 +323,7 @@ def _second_pass_node(
                     None,
                     assignment=brief or "",
                     retrieval=retrieval,
+                    run_label=run_label,
                 ),
             ),
         )
@@ -400,6 +402,7 @@ def _context_builder(
     resume_for: dict[str, list[dict[str, Any]]] | None = None,
     assignment: str = "",
     retrieval: bool | None = None,
+    run_label: str = "",
 ) -> ContextBuilder:
     """Assemble a role's context from the incident's own resources.
 
@@ -468,6 +471,7 @@ def _context_builder(
             memory=tools.memory,
             milestone=milestone,
             assignment=assignment,
+            run_label=run_label,
             resume=pending_resume.pop(spec.name, None),
         )
 

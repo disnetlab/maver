@@ -270,3 +270,33 @@ async def test_the_incident_span_records_how_the_incident_ended(
     assert recorded["kira.outcome"] == "success"
     assert recorded["kira.lifecycle"] == "tentative_success"
     deploy.storage.close()
+
+
+async def test_a_run_row_records_what_the_model_was_not_offered(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The toolset resolves against the transport's capabilities as well as the arm, so
+    the same role in the same arm offers different tools on different hosts.
+
+    Which tools a run actually held is therefore not reconstructible from the arm, the
+    code, or the transcript — and whether a memory arm held its retrieval tools is the
+    question its result rests on. The resolved toolset recorded every drop with its
+    reason, and the field was read by nothing.
+    """
+    deploy, _, _ = deployment(tmp_path)
+    session = deploy.storage.sessions.create_session(ALERT)
+
+    await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+
+    rca, planning, *_ = deploy.storage.runs.runs_for(session.session_id)
+
+    withheld = rca.metadata["tools_withheld"]
+    assert withheld["memory_search"] == "no experience store in this configuration"
+    assert "submit_root_cause" not in withheld
+    # A role's own recorded facts reach the row too; they were dropped entirely before.
+    assert rca.metadata["reassess_mode"]
+    # And the pipeline edge written when the row opened survives the merge rather than
+    # being replaced by what the role recorded when it closed.
+    assert planning.metadata["after"] == rca.agent_run_id
+    assert "tools_withheld" in planning.metadata
+    deploy.storage.close()

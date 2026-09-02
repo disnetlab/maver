@@ -133,6 +133,17 @@ async def test_the_mechanism_replaces_the_diagnosis_and_keeps_both_runs(
     assert len([r for r in storage.runs.runs_for(session.session_id) if r.agent_name == "rca"]) == 2
     assert len([rid for rid in final["run_ids"] if ":rca:" in rid]) == 2
     assert final["root_cause"] is not None
+
+    # And the two are told apart. Both rows say `rca`, which is right — they are the same
+    # role — so without the label nothing downstream could tell the retrieval-free first
+    # opinion from the precedent-informed second, which is the comparison this arm exists
+    # to make. The mechanism passed the label from the start; the runner dropped it.
+    labels = [
+        r.metadata.get("run_label")
+        for r in storage.runs.runs_for(session.session_id)
+        if r.agent_name == "rca"
+    ]
+    assert sorted(labels) == ["rca.first", "rca.second"]
     storage.close()
 
 

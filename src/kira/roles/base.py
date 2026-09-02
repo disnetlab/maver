@@ -114,6 +114,13 @@ class RoleContext:
     """A brief the gated second pass hands this run, rendered into the role's own
     template. Empty on every ordinary run: only that mechanism has anything to assign,
     and a role that invented one would be second-guessing itself."""
+    run_label: str = ""
+    """Which of a mechanism's several runs of one role this is, for the record.
+
+    Empty on an ordinary run, where the role name is the whole answer. The gated second
+    pass runs the diagnosing role twice — once retrieval-free, once with precedents — and
+    both rows say `rca`, so without this nothing downstream can tell the first opinion
+    from the second, which is the comparison that arm exists to make."""
     resume: list[Message] | None = None
     """The transcript this role was paused in, with the decided call already answered.
 
