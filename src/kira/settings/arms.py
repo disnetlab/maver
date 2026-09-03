@@ -72,6 +72,32 @@ class Arm(BaseModel):
     notes: str = ""
 
     @model_validator(mode="after")
+    def _no_authority_over_the_approval_gate(self) -> Self:
+        """Refuse an arm that sets how cluster writes are authorised.
+
+        An arm is a research overlay, and every shipped one asked for unattended
+        approval because a measured campaign cannot park on a person. Wiring arm files
+        up made that live, so naming an arm disabled human review on a process holding
+        cluster write credentials. No archived campaign ever supplied the value this
+        way: all twenty-three set it in the environment, which is also where the
+        evaluation compose file sets it and where an operator looks for it.
+
+        Returns:
+            The validated arm.
+
+        Raises:
+            ValueError: When the arm carries an ``authority`` stanza.
+        """
+        if "authority" in self.settings:
+            raise ValueError(
+                f"arm {self.name!r} sets authority, which decides whether cluster "
+                "writes are reviewed by a human. That is a deployment posture, not an "
+                "experimental variable: set KIRA_AUTHORITY__MODE in the environment "
+                "beside KIRA_ARM."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _label_and_name_are_both_present(self) -> Self:
         """Reject an arm that cannot be cited.
 

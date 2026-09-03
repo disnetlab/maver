@@ -11,7 +11,7 @@ import yaml
 from pydantic import SecretStr, ValidationError
 
 from kira.settings import Settings, VerifySettings, legacy_names_in_use, load_settings
-from kira.settings.arms import arm_digest
+from kira.settings.arms import arm_digest, load_arm
 from kira.settings.authority import AuthorityRule, AuthoritySettings
 from kira.settings.root import (
     AliasedField,
@@ -250,7 +250,7 @@ class TestArmFiles:
         """
         monkeypatch.setenv("KIRA_ARM", "ma-s")
         s = load_settings()
-        assert (s.arm, s.pipeline.mode, s.authority.mode) == ("ma-s", "multi", "auto")
+        assert (s.arm, s.pipeline.mode) == ("ma-s", "multi")
         assert (s.secondpass.enabled, s.secondpass.gate) == (True, "quality")
         assert (s.memory.top_k, s.memory.role_retrieval) == (3, False)
 
@@ -540,25 +540,40 @@ def test_a_configured_node_leaves_the_warning_unsaid(
     assert not any("HOST_RECOVERY" in r.getMessage() for r in caplog.records)
 
 
-def test_an_arm_that_disarms_the_approval_gate_says_so(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+def test_an_arm_may_not_decide_who_authorises_a_cluster_write(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Every shipped arm sets the authority to auto, because a measured campaign cannot
-    park on a person. That was inert while nothing read arm files, so wiring them up
-    made one line in a research configuration disable the approval gate on a process
-    holding cluster write credentials. The environment still outranks it; what must not
-    happen is that the flip is silent."""
+    """Every shipped arm asked for unattended approval, because a measured campaign
+    cannot park on a person. That was inert while nothing read arm files, so wiring them
+    up made one line in a research configuration disable the approval gate on a process
+    holding cluster write credentials — and `KIRA_ARM=<anything>` was enough to do it.
+
+    No archived campaign supplied the value that way; all twenty-three set it in the
+    environment. So the key is refused where it does not belong rather than warned
+    about where it does not work."""
+    arm = tmp_path / "unattended.yaml"
+    arm.write_text(
+        "schema_version: 1\n"
+        "name: unattended\n"
+        "label: Unattended\n"
+        "description: an arm that turns the gate off\n"
+        "model_profile: qwen3.6-35b-a3b\n"
+        "registered: {date: '2026-09-03', campaign: none, hypothesis: none}\n"
+        "settings:\n"
+        "  authority: {mode: auto}\n"
+    )
+    with pytest.raises(ValidationError, match="set KIRA_AUTHORITY__MODE in the environment"):
+        load_arm("unattended", tmp_path)
+
     monkeypatch.setenv("KIRA_ARM", "ma-s")
     reset_settings()
-    with caplog.at_level(logging.WARNING, logger="kira.settings.root"):
-        settings = load_settings()
-
-    assert settings.authority.mode == "auto"
-    assert any("will not be reviewed by a human" in r.getMessage() for r in caplog.records)
-
-    monkeypatch.setenv("KIRA_AUTHORITY__MODE", "prompt")
-    reset_settings()
     assert load_settings().authority.mode == "prompt"
+
+
+def test_no_shipped_arm_carries_an_authority_stanza() -> None:
+    """The refusal above is only worth having if the files it governs comply."""
+    for path in sorted(Path("configs/arms").glob("*.yaml")):
+        assert "authority" not in yaml.safe_load(path.read_text()).get("settings", {}), path.name
 
 
 def test_a_queue_intake_that_consumes_nothing_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -52,12 +52,6 @@ settings:
     gate_max_tokens: 600
     selector_max_tokens: 1600
     selector_timeout_s: 180
-  # Stated rather than inherited. The shipped default is `prompt`, because a
-  # service holding cluster write permissions should not write unattended just
-  # because nobody set a variable. An evaluation arm runs unattended by
-  # definition, so it says so here — which also puts the value in the run's
-  # configuration snapshot instead of leaving it to be inferred afterwards.
-  authority:  {mode: auto}
 holds_constant:
   - model_profile
   - runtime.*

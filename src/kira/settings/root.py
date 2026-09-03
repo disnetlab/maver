@@ -546,33 +546,8 @@ def load_settings() -> Settings:
             "as single-variable, so this is a startup failure rather than a run whose "
             "comparison quietly means something else."
         )
-    _warn_if_the_arm_disarms_the_gate(settings)
     _warn_if_no_node_can_be_recovered(settings)
     return settings
-
-
-def _warn_if_the_arm_disarms_the_gate(settings: Settings) -> None:
-    """Say out loud when a named arm is what turned the human approval gate off.
-
-    Every shipped arm sets the authority to auto, because a measured campaign cannot
-    park on a person. That was inert while arm files were read by nothing, and wiring
-    them up made one line in a research configuration disable the approval gate on a
-    process holding cluster write credentials. It is what the arm intends and documents,
-    and the environment still outranks it — but a safety default that changes because a
-    file was finally being read is exactly the kind of quiet flip this system is
-    supposed to be legible about.
-    """
-    arm = resolved_arm(settings)
-    if arm is None or settings.authority.mode != "auto":
-        return
-    declared = _at_path(arm.settings, "authority.mode")
-    if declared != "auto":
-        return
-    _log.warning(
-        "arm %r sets authority.mode=auto: cluster writes will not be reviewed by a "
-        "human in this process. Set KIRA_AUTHORITY__MODE to override it.",
-        settings.arm,
-    )
 
 
 def _warn_if_no_node_can_be_recovered(settings: Settings) -> None:
@@ -597,16 +572,6 @@ def _warn_if_no_node_can_be_recovered(settings: Settings) -> None:
         "this agent failed to fix. Set KIRA_TOOLS__HOST_RECOVERY_NODES to the SSH "
         "aliases of the nodes this deployment may act on."
     )
-
-
-def _at_path(mapping: Mapping[str, Any], path: str) -> Any:
-    """Read a dotted path out of a nested mapping, or None if it is not there."""
-    current: Any = mapping
-    for part in path.split("."):
-        if not isinstance(current, Mapping):
-            return None
-        current = current.get(part)
-    return current
 
 
 def _closest(name: str, known: set[str]) -> str | None:
