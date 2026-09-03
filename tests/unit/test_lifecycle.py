@@ -13,6 +13,7 @@ from kira.memory.lifecycle import (
     weight_for,
 )
 from kira.memory.ports import SearchScope, SessionMemory
+from kira.memory.ranking import Bm25Ranker
 from kira.memory.retrieval import Retriever
 
 
@@ -130,7 +131,7 @@ def test_a_demoted_record_still_comes_back_below_an_equal_one() -> None:
     retriever = Retriever(
         text=Records(corpus),
         k=2,
-        min_score_per_token=0.0,
+        ranker=Bm25Ranker(min_score_per_token=0.0),
         states=lambda ids: {"demoted": S.INVALIDATED.value},
     )
 

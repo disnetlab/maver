@@ -1,11 +1,14 @@
 import json
 import pathlib
+from collections.abc import Sequence
 
 import pytest
 
-from kira.memory import bm25
+from kira.memory import bm25, ranking
 from kira.memory.ports import SearchScope, SessionMemory
+from kira.memory.ranking import Bm25Ranker
 from kira.memory.retrieval import Retriever, build_query
+from kira.settings.groups import MemorySettings
 
 FIXTURE = json.loads(
     (pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "prototype_bm25.json").read_text(
@@ -91,13 +94,13 @@ def test_retrieval_can_answer_that_nothing_is_comparable() -> None:
     given five unrelated incidents treats them as evidence. The floor is what buys the
     ability to return nothing, which is a real answer.
     """
-    retriever = Retriever(text=FakeText(CORPUS), min_score_per_token=0.5)
+    retriever = Retriever(text=FakeText(CORPUS), ranker=Bm25Ranker(min_score_per_token=0.5))
     assert retriever.search("nothing whatsoever resembling these records") == []
 
 
 def test_a_real_match_still_comes_back_above_the_floor() -> None:
     """The floor must not be so high that it rejects everything."""
-    retriever = Retriever(text=FakeText(CORPUS), min_score_per_token=0.5)
+    retriever = Retriever(text=FakeText(CORPUS), ranker=Bm25Ranker(min_score_per_token=0.5))
     hits = retriever.search("zero endpoints selector checkout")
     assert hits, "a directly matching record should clear the floor"
     assert hits[0].session_id == "s1"
@@ -106,7 +109,7 @@ def test_a_real_match_still_comes_back_above_the_floor() -> None:
 
 def test_the_harness_exclusion_withholds_a_run_s_own_record() -> None:
     """Leave-one-out is supplied per cell by the evaluation harness, not inferred."""
-    retriever = Retriever(text=FakeText(CORPUS), min_score_per_token=0.0)
+    retriever = Retriever(text=FakeText(CORPUS), ranker=Bm25Ranker(min_score_per_token=0.0))
     hits = retriever.search("zero endpoints selector checkout", exclude=("s1",))
     assert "s1" not in [h.session_id for h in hits]
 
@@ -139,3 +142,47 @@ def test_an_empty_query_retrieves_nothing_rather_than_everything() -> None:
     backend = FakeText(CORPUS)
     assert Retriever(text=backend).search("") == []
     assert backend.asked_for == [], "an empty query should not reach the backend"
+
+
+# --- the seam ---------------------------------------------------------------------
+
+
+def test_another_ranker_reaches_retrieval_without_a_fork(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scoring is the one step of retrieval that is a research question, and lexical
+    ranking being the ceiling is a claim about this corpus rather than about retrieval.
+
+    So a different ranker registers by name and everything around it — the lifecycle
+    weight, the tie-break, the cut to k — is unchanged.
+    """
+    monkeypatch.setattr(ranking, "_REGISTRY", dict(ranking.registered_rankers()))
+
+    @ranking.ranker("reverse")
+    def _build(settings: MemorySettings) -> ranking.Ranker:
+        class Reverse:
+            def rank(self, query: str, documents: Sequence[str]) -> list[tuple[int, float]]:
+                return [(i, float(len(documents) - i)) for i in range(len(documents))]
+
+        return Reverse()
+
+    built = ranking.build_ranker(MemorySettings(ranker="reverse"))
+    hits = Retriever(text=FakeText(CORPUS), ranker=built).search("anything at all")
+    assert [hit.session_id for hit in hits] == [memory.session_id for memory in CORPUS]
+
+
+def test_a_ranker_nothing_registered_is_a_startup_failure() -> None:
+    """Not a fall back to the shipped one: a run reporting a ranker it did not retrieve
+    with is a result that does not mean what it says."""
+    with pytest.raises(ValueError, match="unknown ranker 'dense'; registered: bm25"):
+        ranking.build_ranker(MemorySettings(ranker="dense"))
+
+
+def test_the_relevance_decision_belongs_to_whatever_produced_the_score() -> None:
+    """A threshold in the caller cannot serve BM25's unbounded scores, a cosine in
+    [-1, 1] and a cross-encoder's logit at once, and one that tried would silently mean
+    something different for each. A ranker returning fewer results than it was given
+    documents is how it says the rest are not comparable."""
+    admits_nothing = Bm25Ranker(min_score_per_token=1e9)
+    assert admits_nothing.rank("payment service latency", ["payment service latency"]) == []
+    assert Retriever(text=FakeText(CORPUS), ranker=admits_nothing).search("payment") == []

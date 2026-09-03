@@ -6,7 +6,8 @@ the same offline campaign over this corpus.
 **Lexical ranking is the ceiling.** Pure BM25 beat six dense embedders, two
 cross-encoders and a model reranker, so it is the default and a vector lane is optional.
 That is not a claim about retrieval in general; it is a claim about short records dense
-with service names, error strings and resource identifiers.
+with service names, error strings and resource identifiers — which is why scoring sits
+behind a seam. See :mod:`kira.memory.ranking`.
 
 **A query is short.** The deployed query reached roughly 206 terms by appending
 namespace-snapshot lines and tool output, and 84.6% of its body was boilerplate carrying
@@ -33,12 +34,12 @@ verdict changes the next retrieval and nothing has to be reindexed. See
 
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from kira.contracts.lifecycle import LifecycleState
-from kira.memory import bm25
 from kira.memory.lifecycle import LIFECYCLE_WEIGHTS, weight_for
 from kira.memory.ports import SearchHit, SearchScope, SessionMemory, TextSearch
+from kira.memory.ranking import Bm25Ranker, Ranker
 
 __all__ = ["Retriever", "build_query"]
 
@@ -99,14 +100,12 @@ class Retriever:
     pool: int = 500
     """How many candidates to rank. Corpora here are hundreds of records, so this is
     normally the whole temporally valid corpus."""
-    min_score_per_token: float = 0.5
-    """Floor on a hit's score divided by the query's token count.
+    ranker: Ranker = field(default_factory=Bm25Ranker)
+    """Scores the pool and decides how much of it is worth returning.
 
-    Divided by token count so the threshold does not move with query length. Zero
-    disables the floor, which restores the behaviour of always returning k results —
-    what the prototype shipped, and what an arm reproducing one of its campaigns pins
-    through ``memory.min_score_per_token`` rather than inheriting the default here.
-    """
+    Relevance belongs to the ranker because only what produced a score knows its scale.
+    Everything this class does around it — the lifecycle weight, the tie-break, the cut
+    to k — is the same whatever scored the pool."""
     states: Callable[[Sequence[str]], Mapping[str, str]] | None = None
     """Reads the current lifecycle state of many candidates at once.
 
@@ -137,8 +136,9 @@ class Retriever:
         Returns:
             Hits carrying their scores, at most ``k`` of them.
         """
-        tokens = bm25.tokenize(query)
-        if not tokens:
+        if not query.strip():
+            # Before the backend, not after. A blank query is not a search, and asking
+            # a database to narrow a corpus by nothing costs a round trip to be told so.
             return []
 
         candidates = self.text.candidates(query, limit=self.pool, scope=scope, exclude=exclude)
@@ -146,18 +146,15 @@ class Retriever:
             return []
 
         documents = [_document(memory, scope) for memory in candidates]
-        floor = self.min_score_per_token * len(tokens)
         states = self._current_states(candidates)
 
         hits: list[SearchHit] = []
-        for index, score in bm25.rank(documents, query):
-            if score < floor:
-                # Ranked best first, so the first hit under the floor ends the list.
-                # The floor reads the lexical score alone, before the lifecycle weight:
-                # it is a relevance test calibrated on that score, and applying it after
-                # the weight would let the demotion drop a record from the results,
-                # which is the exclusion the campaign measured and rejected.
-                break
+        # The ranker has already dropped what it does not consider relevant, and it
+        # judged that on the raw score, before any lifecycle weight. That order matters:
+        # applying a relevance test after the demotion would let the demotion drop a
+        # record from the results, which is the exclusion the campaign measured and
+        # rejected.
+        for index, score in self.ranker.rank(query, documents):
             memory = candidates[index]
             state = states.get(memory.session_id, memory.lifecycle_state)
             hits.append(_to_hit(memory, scope, score * weight_for(state, self.weights), state))

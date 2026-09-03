@@ -22,6 +22,7 @@ from typing import Protocol
 from kira.memory.backends.sqlite import SqliteStore
 from kira.memory.lifecycle import resolve_weights
 from kira.memory.ports import ApprovalStore, RunStore, SessionStore, TextSearch
+from kira.memory.ranking import build_ranker, load_entry_point_rankers
 from kira.memory.retrieval import Retriever
 from kira.settings.root import Settings
 
@@ -69,10 +70,12 @@ def build_storage(settings: Settings) -> StorageStack:
         The stack, already wired to a retriever configured from the same settings.
 
     Raises:
-        ValueError: When the configured backend is not available in this installation,
-            naming what to install. Raised here at startup rather than at the first
-            incident, because a deployment that cannot persist has nothing useful to do.
+        ValueError: When the configured backend or ranker is not available in this
+            installation, naming what to install. Raised here at startup rather than at
+            the first incident, because a deployment that cannot persist, or cannot
+            retrieve with the ranker it reports, has nothing useful to do.
     """
+    load_entry_point_rankers()
     store = (
         _open_postgres(settings)
         if settings.memory.backend == "postgres"
@@ -86,10 +89,10 @@ def build_storage(settings: Settings) -> StorageStack:
         retriever=Retriever(
             text=store.records,
             k=settings.memory.top_k,
-            # Threaded rather than defaulted, because the floor decides how many
-            # precedents a run is served and a campaign that ran without one has no
-            # other way to say so.
-            min_score_per_token=settings.memory.min_score_per_token,
+            # Built here rather than defaulted, because the ranker decides how many
+            # precedents a run is served and a campaign that ran under a different
+            # relevance floor has no other way to say so.
+            ranker=build_ranker(settings.memory),
             # The session row, not the record's write-time snapshot, is the authority on
             # a record's standing, so the retriever re-reads it as it ranks.
             states=store.get_states,

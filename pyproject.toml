@@ -71,13 +71,15 @@ kira = "kira.cli:app"
 # deployed harness already names keeps working.
 kira-sregym-driver = "kira.adapters.sregym.driver:main"
 
-# Extension seams. A third party ships a role, tool, transport or environment
+# Extension seams. A third party ships a role, tool, transport, ranker or environment
 # adapter by declaring an entry point in these groups; no fork required.
 [project.entry-points."kira.roles"]
 
 [project.entry-points."kira.tools"]
 
 [project.entry-points."kira.transports"]
+
+[project.entry-points."kira.rankers"]
 
 [project.entry-points."kira.adapters"]
 # Present in every install, including one without the sregym extra, so the module it

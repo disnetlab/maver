@@ -578,6 +578,17 @@ class MemorySettings(SettingsGroup):
             "zero here rather than inheriting a floor that would cut its dose."
         ),
     )
+    ranker: str = setting(
+        "bm25",
+        "KIRA_MEMORY__RANKER",
+        description=(
+            "Which registered ranker scores the candidate pool. `bm25` ships; another "
+            "is added by registering a factory in the `kira.rankers` entry-point group, "
+            "with no fork. A name nothing registered is a startup failure rather than a "
+            "fall back to the default, because retrieving with a ranker other than the "
+            "one a run reports is how a result stops meaning what it says."
+        ),
+    )
     lifecycle_weights: dict[str, float] | None = setting(
         None,
         "KIRA_MEMORY__LIFECYCLE_WEIGHTS",

@@ -95,7 +95,7 @@ src/kira/
   roles/         the bounded model/tool loop and the roles that run in it
   middleware/    the hook protocol, and the write gate and approval authority
   tools/         the registry, the capability modules, and the transports
-  memory/        ports, BM25 retrieval, lifecycle, projections, backends
+  memory/        ports, ranking, lifecycle, projections, backends
   secondpass/    the gated second opinion, as five composable stages
   orchestration/ routing, the graph, the runner, outcomes, and the offline pass
   adapters/      the environment seam, and the SREGym adapter

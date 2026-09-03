@@ -6,6 +6,7 @@ import sys
 import pytest
 
 from kira.memory.factory import build_storage
+from kira.memory.ranking import Bm25Ranker
 from kira.settings.groups import MemorySettings, ServerSettings
 from kira.settings.root import Settings
 
@@ -37,7 +38,8 @@ def test_the_retrieval_floor_reaches_the_retriever(tmp_path: pathlib.Path) -> No
     ran without a floor had no way to say so and could not be reproduced."""
     stack = build_storage(settings_for(tmp_path, min_score_per_token=0.0))
     try:
-        assert stack.retriever.min_score_per_token == 0.0
+        assert isinstance(stack.retriever.ranker, Bm25Ranker)
+        assert stack.retriever.ranker.min_score_per_token == 0.0
     finally:
         stack.close()
 

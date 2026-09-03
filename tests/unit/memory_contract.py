@@ -34,6 +34,7 @@ from kira.memory.ports import (
     SessionStore,
     TextSearch,
 )
+from kira.memory.ranking import Bm25Ranker
 from kira.memory.retrieval import Retriever
 
 __all__ = [
@@ -562,7 +563,7 @@ class MemoryStoreContract:
         query = "checkout service crashloopbackoff oomkilled"
         assert len(records.candidates(query)) == 3, "every record shares a term with the query"
 
-        hits = Retriever(text=records, min_score_per_token=0.0).search(query)
+        hits = Retriever(text=records, ranker=Bm25Ranker(min_score_per_token=0.0)).search(query)
         assert hits[0].session_id == "oom"
         assert hits[0].score is not None
 
