@@ -53,6 +53,14 @@ PLAN: dict[str, Any] = {
     "expected_outcome": "svc/user has endpoints",
     "confidence": 0.8,
 }
+VERIFY: dict[str, Any] = {
+    "recovered": True,
+    "verdict": "recovered",
+    "checks": ["endpoints present for svc/user"],
+    "entry_point_status": "frontend returned 200 on /",
+    "summary": "the symptom is gone",
+    "confidence": 0.8,
+}
 EXECUTION: dict[str, Any] = {
     "succeeded": True,
     "steps": [{"step_index": 0, "succeeded": True, "observation": "patched"}],
@@ -73,6 +81,7 @@ class ScriptedModel:
 
     def __init__(self) -> None:
         self.callers: list[str] = []
+        self.free_text: list[str] = []
         self.tool_results: list[str] = []
 
     async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
@@ -86,7 +95,21 @@ class ScriptedModel:
             "rca": ("submit_root_cause", ROOT_CAUSE),
             "planning": ("submit_plan", PLAN),
             "execution": ("submit_execution_result", EXECUTION),
+            "verify": ("submit_verify_result", VERIFY),
         }
+        if caller not in submissions:
+            # The gate, the nominator and the selector answer in free text rather than
+            # through a submission tool, and they are counted like every other call.
+            self.free_text.append(caller)
+            return ModelResponse(
+                text='{"verdict": "sound", "reason": "the cited evidence supports it"}',
+                tool_calls=(),
+                finish_reason="stop",
+                reasoning=None,
+                usage=Usage(prompt_tokens=5, completion_tokens=3),
+                duration_ms=1,
+                attempts=1,
+            )
         if first and caller in {"rca", "execution"}:
             name: str = "exec_kubectl_cmd_safely"
             arguments: dict[str, Any] = {"cmd": "kubectl get svc user -n shop"}
@@ -187,3 +210,41 @@ async def test_an_incident_runs_end_to_end_on_the_shipped_transport(deployment: 
     # sink the composition root chose rather than the discarding default.
     events = deployment.storage.runs.events_for(runs[0].agent_run_id)
     assert events, "the audit sink wrote nothing for the diagnosing role"
+
+
+@pytest.fixture
+def every_mechanism(deployment: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """The same composition with the store, the second pass and verification on."""
+    monkeypatch.setenv("KIRA_MEMORY__ENABLED", "true")
+    monkeypatch.setenv("KIRA_MEMORY__SECOND_PASS__ENABLED", "true")
+    monkeypatch.setenv("KIRA_MEMORY__SECOND_PASS__GATE", "quality")
+    monkeypatch.setenv("KIRA_MEMORY__SECOND_PASS__DELIVERY", "context")
+    monkeypatch.setenv("KIRA_VERIFY__ENABLED", "true")
+    reset_settings()
+    return replace(build_deployment(load_settings()), completion=ScriptedModel())
+
+
+async def test_every_mechanism_composes_on_the_shipped_transport(every_mechanism: Any) -> None:
+    """The configuration with the most moving parts, assembled for real.
+
+    Two diagnoses under a gate, a blinded selection between them, a plan, an apply and an
+    independent re-check — each reading a cluster through the transport this ships with.
+    """
+    app = create_app(deployment=every_mechanism, schedule_resume=lambda request_id: None)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://kira"
+    ) as http:
+        created = await http.post("/api/v1/incidents", json={"alert": ALERT})
+        session_id = created.json()["session_id"]
+        while pending := {t for t in app.state.service.tasks if not t.done()}:
+            await asyncio.gather(*pending, return_exceptions=True)
+        body = (await http.get(f"/api/v1/incidents/{session_id}")).json()
+
+    assert body["verify_result"]["verdict"] == "recovered"
+    assert every_mechanism.completion.free_text == ["secondpass.gate", "secondpass.selector"]
+
+    runs = every_mechanism.storage.runs.runs_for(session_id)
+    assert [run.agent_name for run in runs] == ["rca", "rca", "planning", "execution", "verify"]
+    # Both diagnoses are on the record and tellable apart. They were two rows saying only
+    # `rca`, which made the pass's own dose unreadable from the run it produced.
+    assert [run.metadata.get("run_label") for run in runs[:2]] == ["rca.first", "rca.second"]
