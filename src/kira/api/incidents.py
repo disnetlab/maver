@@ -93,7 +93,7 @@ async def create_incident(body: IncidentRequest, service: ServiceDep) -> dict[st
         }
 
     limit = service.deployment.settings.server.max_concurrent_incidents
-    if service.runs.at_capacity(limit):
+    if not service.runs.reserve(limit):
         # Refused rather than queued. The queue would be invisible to the caller and
         # every run already in flight would slow down to make room for it; a refusal an
         # alerting source can retry is the honest answer.
@@ -102,7 +102,13 @@ async def create_incident(body: IncidentRequest, service: ServiceDep) -> dict[st
             detail=f"already handling {limit} incidents",
             headers={"Retry-After": "60"},
         )
-    return await start_incident(body.alert, target_stage=body.target_stage, service=service)
+    try:
+        return await start_incident(body.alert, target_stage=body.target_stage, service=service)
+    finally:
+        # The slot is held across the two writes that open the session, because that is
+        # the window a burst passes through, and given back once the run it started is
+        # registered under its own id — or once it is certain none will be.
+        service.runs.release()
 
 
 @router.get("/incidents/{session_id}")

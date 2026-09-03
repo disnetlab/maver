@@ -91,6 +91,7 @@ class RunRegistry:
         """Start empty."""
         self._runs: dict[str, RunControl] = {}
         self._by_alert: dict[str, str] = {}
+        self._reserved = 0
 
     def register(self, session_id: str, *, fingerprint: str | None = None) -> RunControl:
         """Start tracking a run.
@@ -149,7 +150,39 @@ class RunRegistry:
         Returns:
             True when a further incident should not be accepted.
         """
-        return len(self._runs) >= limit
+        return len(self._runs) + self._reserved >= limit
+
+    def reserve(self, limit: int) -> bool:
+        """Take one of this process's slots, without awaiting anything.
+
+        Asking whether there is room and taking the room have to be one step. Opening a
+        session and marking it running are two database writes, and every request in a
+        burst yields at both — so each of them passed a capacity check that no other had
+        yet invalidated, and a process configured for two carried seven. A bound that
+        holds only when requests arrive one at a time is not a bound, and this one exists
+        because oversubscribing a private endpoint wedges it rather than queueing.
+
+        Args:
+            limit: The configured ceiling.
+
+        Returns:
+            True when a slot was taken. The caller releases it once the run it started
+            is registered, or once it is certain none will be.
+        """
+        if self.at_capacity(limit):
+            return False
+        self._reserved += 1
+        return True
+
+    def release(self) -> None:
+        """Give back a reserved slot.
+
+        Paired with :meth:`reserve` by the caller rather than consumed by
+        :meth:`register`, because runs are registered on paths that never reserved —
+        a resumed incident among them — and a counter two callers decrement is one that
+        drifts.
+        """
+        self._reserved = max(0, self._reserved - 1)
 
     def get(self, session_id: str) -> RunControl | None:
         """Look up a live run.

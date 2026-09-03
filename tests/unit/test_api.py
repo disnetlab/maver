@@ -368,6 +368,33 @@ async def test_intake_refuses_rather_than_queues_when_it_is_full(
     deploy.storage.close()
 
 
+async def test_the_bound_holds_when_the_requests_arrive_together(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Asking whether there is room and taking the room have to be one step.
+
+    Opening a session and marking it running are two database writes, and every request
+    in a burst yields at both — so each passed a capacity check no other had yet
+    invalidated. A process configured for two carried seven, which is the arrival
+    pattern the bound exists for: an alert storm, or a harness firing several problems
+    at once, against an endpoint that wedges rather than queues when oversubscribed.
+    """
+    deploy = deployment(tmp_path)
+    object.__setattr__(deploy.settings.server, "max_concurrent_incidents", 2)
+    app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
+
+    async with client(app) as http:
+        replies = await asyncio.gather(
+            *(
+                http.post("/api/v1/incidents", json={"alert": {**ALERT, "service": f"s{i}"}})
+                for i in range(6)
+            )
+        )
+        assert sorted(reply.status_code for reply in replies) == [202, 202, 429, 429, 429, 429]
+        await settle(app.state.service)
+    deploy.storage.close()
+
+
 class _NeedsTheLoop:
     """A session store whose reads need the event loop to run something for them.
 
