@@ -7,25 +7,39 @@ description: >
   contract, diagnosis then mitigation, as two passes over a single transcript. The null
   hypothesis against the structured pipeline.
 model_profile: qwen3.6-35b-a3b
-frozen: true
+frozen: false
 registered:
-  date: "2026-08-12"
-  campaign: sweep_20260812
+  date: "2026-08-14"
+  campaign: friday_sweep
   hypothesis: "decomposing the work into typed roles buys nothing"
 settings:
-  pipeline:   {mode: single, max_turns: 20, auto_snapshot: true}
+  pipeline:
+    mode: single
+    max_turns: 100
+    auto_snapshot: true
   memory:
     enabled: false
+    role_retrieval: false
     learning_enabled: false
     playbook: false
     second_pass: {enabled: false}
-  verify:     {enabled: false}
+  verify: {enabled: false}
 holds_constant:
   - model_profile
   - runtime.*
   - pipeline.max_turns
+not_reproducible:
+  - >
+    Its decoding. The 2026-08-14 campaign ran a frequency penalty of 0.3 and a 300-second
+    request timeout, both of which belong to the model profile rather than to an arm, and
+    the shipped profile carries the later values. Reproducing that campaign means a
+    profile file of its own, not an override here: a sampling override is refused while
+    this arm holds the model profile constant.
 notes: >
-  Everything non-agentic is retained: the submission protocol, the approval gate, the
-  repeat breaker and the finaliser rescue. What is stripped is workflow prescription, not
-  harness plumbing. Strip the plumbing too and the contrast measures the harness rather
-  than the structure.
+  Not one of the manuscript's configurations. It is retained because the single-agent mode
+  is a shipped pipeline mode with its own role and tests, and an unpublished configuration
+  that can still be selected by name is worth more than one that cannot; it must not be
+  cited as a published baseline. Everything non-agentic is retained within it: the
+  submission protocol, the approval gate, the repeat breaker and the finaliser rescue.
+  What is stripped is workflow prescription, not harness plumbing — strip the plumbing too
+  and the contrast measures the harness rather than the structure.

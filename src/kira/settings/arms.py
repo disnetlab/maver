@@ -69,6 +69,14 @@ class Arm(BaseModel):
             "another arm must find identical."
         ),
     )
+    not_reproducible: list[str] = Field(
+        default_factory=list,
+        description=(
+            "What this file cannot restore, named rather than left to be discovered. "
+            "An arm is a claim that a configuration can be run again; anything it "
+            "cannot bring back belongs here, in a field, not in prose nothing parses."
+        ),
+    )
     notes: str = ""
 
     @model_validator(mode="after")
@@ -111,6 +119,19 @@ class Arm(BaseModel):
             raise ValueError("an arm needs both a name and a published label")
         return self
 
+    def overlay(self) -> dict[str, Any]:
+        """Everything this arm says about the settings, as one partial tree.
+
+        The profile is part of the overlay rather than a label beside it. It names the
+        model a published number was measured on and reached nothing: only the
+        held-constant comparison read it, so an arm pinning a second profile resolved
+        the default one and then reported the pinned name.
+
+        Returns:
+            The partial settings tree.
+        """
+        return deep_merge({"model": {"profile": self.model_profile}}, self.settings)
+
     def apply_to(self, defaults: dict[str, Any]) -> dict[str, Any]:
         """Overlay this arm's settings on a default settings tree.
 
@@ -120,7 +141,7 @@ class Arm(BaseModel):
         Returns:
             A new tree with the arm's values merged in.
         """
-        return deep_merge(defaults, self.settings)
+        return deep_merge(defaults, self.overlay())
 
     def is_held_constant(self, path: str) -> bool:
         """Report whether a dotted setting path is one this arm claims not to vary.
@@ -152,7 +173,7 @@ class Arm(BaseModel):
         actual = _flatten(resolved)
         return {
             path: (declared, actual[path])
-            for path, declared in _flatten(self.settings).items()
+            for path, declared in _flatten(self.overlay()).items()
             if path in actual and actual[path] != declared
         }
 

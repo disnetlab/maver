@@ -1,0 +1,51 @@
+schema_version: 1
+name: ma-s-v
+label: MA+S+V
+description: >
+  Both mechanisms at once: the gated second opinion and the verification role. The second
+  pass runs on the first diagnosis only, so a verification hand-back re-enters plain
+  diagnosis carrying the reassessment context rather than triggering a second second
+  opinion. Everything else matches MA+S and MA+V, which is what makes the four a factorial
+  rather than four separate configurations.
+model_profile: qwen3.6-35b-a3b
+frozen: true
+registered:
+  date: "2026-09-01"
+  campaign: 2x2-replication
+  hypothesis: "the two mechanisms compose rather than substituting for one another"
+settings:
+  pipeline:
+    mode: multi
+    max_turns: 100
+    remediation_retries: 2
+    auto_snapshot: true
+  memory:
+    enabled: true
+    role_retrieval: false
+    learning_enabled: false
+    playbook: false
+    top_k: 3
+    min_score_per_token: 0.0
+    second_pass:
+      enabled: true
+      gate: quality
+      delivery: context
+      force: false
+      max_precedents: 6
+      gate_max_tokens: 600
+      selector_max_tokens: 1600
+      selector_timeout_s: 180
+  verify: {enabled: true, health_gate: false, inconclusive_retries: 1}
+holds_constant:
+  - model_profile
+  - runtime.*
+  - pipeline.max_turns
+  - pipeline.remediation_retries
+not_reproducible:
+  - >
+    The corpus, for the same reason as MA+S: so_gate_corpus_35b is not in this repository
+    and its exclusion set is per incident.
+notes: >
+  This configuration is published and had no arm file, which meant the one row of the
+  factorial that carries the interaction could not be selected by name. Its published
+  cells came from so_verify_context_35b (2026-08-31).

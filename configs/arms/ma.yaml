@@ -9,19 +9,35 @@ description: >
 model_profile: qwen3.6-35b-a3b
 frozen: true
 registered:
-  date: "2026-08-12"
-  campaign: sweep_20260812
+  date: "2026-09-01"
+  campaign: 2x2-replication
   hypothesis: "baseline against which every optional mechanism is measured"
 settings:
-  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2, auto_snapshot: true}
+  pipeline:
+    mode: multi
+    # One hundred, not twenty. Twenty is the shipped default and the deployment overlay
+    # raised it on every host: sixteen of sixteen archived environments say 100, and no
+    # run script ever pinned it.
+    max_turns: 100
+    remediation_retries: 2
+    auto_snapshot: true
   memory:
     enabled: false
+    role_retrieval: false
     learning_enabled: false
     playbook: false
     second_pass: {enabled: false}
-  verify:     {enabled: false}
+  verify: {enabled: false}
 holds_constant:
   - model_profile
   - runtime.*
   - pipeline.max_turns
   - pipeline.remediation_retries
+notes: >
+  The published August numbers for this configuration came from the `multinomem` arm of
+  the 2026-08-16 memory-vs-multinomem campaign, whose baseline corner differed from the
+  other three in three ways: it ran at MAX_REMEDIATION_RETRIES=0, it was self-judged by
+  the agent model with diagnosis recovered later from an external re-grade, and it
+  predates the other corners by ten days. This file describes the config-matched
+  replication registered on 2026-09-01, which removes all three; it is not a
+  reconstruction of the August baseline cells.

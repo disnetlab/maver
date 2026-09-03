@@ -5,27 +5,25 @@ description: >
   The earlier second-opinion variant. A nominator maps retrieved precedents to one of
   eleven operational fault families and serves as the gate: a verdict that the family
   differs both triggers the second diagnosis and supplies its content. The second run
-  receives a verify-or-falsify assignment and no precedent text. This configuration also
-  leaves the planning role's direct retrieval path open, which MA+S closes.
+  receives a verify-or-falsify assignment and no precedent text.
 model_profile: qwen3.6-35b-a3b
-frozen: true
+frozen: false
 registered:
   date: "2026-08-09"
   campaign: second_opinion
   hypothesis: "memory helps as a candidate nominator rather than as context"
 settings:
-  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2, auto_snapshot: true}
+  pipeline:
+    mode: multi
+    max_turns: 100
+    remediation_retries: 2
+    auto_snapshot: true
   memory:
     enabled: true
     role_retrieval: true
     learning_enabled: true
     playbook: true
     top_k: 5
-    # Pinned, and not to the shipped value. Kira floors a hit at 0.5 of its lexical
-    # score per query token so retrieval can answer that nothing is comparable; the
-    # prototype shipped that floor off and no campaign ever set it, so the cells this
-    # arm reproduces admitted every text match. Inheriting the floor here would cut the
-    # precedent dose the arm's result is read against.
     min_score_per_token: 0.0
     second_pass:
       enabled: true
@@ -36,12 +34,23 @@ settings:
       nominator_max_tokens: 900
       selector_max_tokens: 1600
       selector_timeout_s: 180
-  verify:     {enabled: false}
+  verify: {enabled: false}
 holds_constant:
   - model_profile
   - runtime.*
   - pipeline.max_turns
+not_reproducible:
+  - >
+    Its retrieval. The campaign ran a hybrid ranker blending vector similarity at 0.6 with
+    lexical score at 0.4. Kira ships lexical ranking only, because an offline sweep over
+    this corpus found it the ceiling, so this file cannot express what that campaign
+    retrieved with. A vector ranker registered in the `kira.rankers` group could.
+  - >
+    Its decoding, for the same reason as the single-agent arm: a frequency penalty of 0.3
+    and a 300-second request timeout, both of which belong to a profile of their own.
 notes: >
-  This differs from MA+S on three axes at once: the gate, the delivery, and whether the
-  planning role may retrieve. It is a historical configuration, not a single-variable
-  contrast, and must be read as one.
+  Not one of the manuscript's configurations, and a reproduced negative result: guided
+  minus unconditional resampling is -1.7 composite points, CI [-11.1, +7.3]. It varies
+  three axes at once against MA+S — the gate, the delivery, and whether a role may
+  retrieve — so it is a historical configuration rather than a single-variable contrast,
+  and must be read as one. Retained because the composition it selects is still shipped.

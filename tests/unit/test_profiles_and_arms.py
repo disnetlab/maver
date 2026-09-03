@@ -19,7 +19,9 @@ from kira.tools.workspace import SessionWorkspace
 MODELS = Path("configs/models")
 ARMS = Path("configs/arms")
 SHIPPED_PROFILES = ["qwen3.6-35b-a3b", "qwen3.8-27b", "claude-sonnet-4-6"]
-SHIPPED_ARMS = ["ma", "ma-v", "ma-s", "ma-r", "resample", "single"]
+SHIPPED_ARMS = sorted(path.stem for path in ARMS.glob("*.yaml"))
+"""Read from the directory, not listed. A hand-written list is a second place to add an
+arm, and the one it silently omitted was the configuration carrying the interaction."""
 
 
 def _profile_dict(**overrides: object) -> dict[str, object]:
@@ -153,14 +155,35 @@ class TestShippedArms:
         shipped that floor off and no campaign set it. An arm inheriting the default
         would be served fewer precedents than the cells it reproduces, and the dose is
         what its memory result is divided by."""
-        for name in ("ma-s", "ma-r"):
+        for name in ("ma-s", "ma-s-v", "ma-r"):
             memory = load_arm(name, ARMS).settings["memory"]
             assert memory["enabled"] and memory["min_score_per_token"] == 0.0
 
+    def test_every_published_configuration_has_an_arm_file(self) -> None:
+        """The manuscript publishes four pipeline configurations and a content-test
+        partner. The combined one carries the interaction between the two mechanisms and
+        had no file, so the row of the factorial that the paper reads as an interaction
+        was the one nobody could select by name."""
+        published = {"MA", "MA+S", "MA+V", "MA+S+V", "Content-test partner"}
+        shipped = {load_arm(name, ARMS).label for name in SHIPPED_ARMS}
+        assert published <= shipped, published - shipped
+
     def test_the_published_arms_are_frozen(self) -> None:
-        """A change to a frozen arm changes what its published number means."""
-        for name in ("ma", "ma-v", "ma-s", "ma-r", "single"):
+        """A change to a frozen arm changes what its published number means. `single`
+        and `ma-r` are not among them: neither is a configuration the manuscript
+        reports, and marking an unpublished arm frozen makes the flag mean nothing."""
+        for name in ("ma", "ma-v", "ma-s", "ma-s-v", "resample"):
             assert load_arm(name, ARMS).frozen, f"{name} carries published results"
+        for name in ("single", "ma-r"):
+            assert not load_arm(name, ARMS).frozen, f"{name} publishes nothing"
+
+    def test_an_arm_that_cannot_restore_something_says_which(self) -> None:
+        """Every retrieving arm reads a corpus that is not in this repository, and two
+        arms ran under decoding a profile would have to carry. An arm is a claim that a
+        configuration can be run again, so what it cannot bring back is a field rather
+        than a remark in prose."""
+        for name in ("ma-s", "ma-s-v", "ma-r", "single", "ma-v"):
+            assert load_arm(name, ARMS).not_reproducible, name
 
     def test_the_treatment_between_ma_and_ma_v_is_verification_alone(self) -> None:
         base = {
@@ -168,7 +191,6 @@ class TestShippedArms:
             "runtime": {"no_tool_nudges": 2},
             "memory": {},
             "verify": {},
-            "secondpass": {},
         }
         ma, mav = load_arm("ma", ARMS), load_arm("ma-v", ARMS)
         assert compare_constants(ma, ma.apply_to(base), mav, mav.apply_to(base)) == {}
@@ -362,3 +384,29 @@ def test_the_gated_arm_gives_no_role_a_retrieval_tool(
             assert not offered & RETRIEVAL_TOOLS, f"{role} was offered {offered & RETRIEVAL_TOOLS}"
     finally:
         storage.close()
+
+
+def test_the_profile_an_arm_names_is_the_profile_it_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`model_profile` reached nothing. Only the held-constant comparison read it, so an
+    arm pinning a second profile resolved the default one and then reported the pinned
+    name — which is the one field whose whole job is saying what a number was measured
+    on. The environment still outranks it, as it does every other arm value."""
+    arm = tmp_path / "other.yaml"
+    arm.write_text(
+        "schema_version: 1\n"
+        "name: other\n"
+        "label: Other\n"
+        "description: an arm on the other profile\n"
+        "model_profile: qwen3.8-27b\n"
+        "registered: {date: '2026-09-03', campaign: c, hypothesis: h}\n"
+    )
+    monkeypatch.setenv("KIRA_ARM", "other")
+    monkeypatch.setenv("KIRA_ARM_DIR", str(tmp_path))
+    reset_settings()
+    assert load_settings().model.profile == "qwen3.8-27b"
+
+    monkeypatch.setenv("KIRA_MODEL__PROFILE", "qwen3.6-35b-a3b")
+    reset_settings()
+    assert load_settings().model.profile == "qwen3.6-35b-a3b"

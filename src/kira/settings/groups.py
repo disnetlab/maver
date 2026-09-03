@@ -58,10 +58,16 @@ class PipelineSettings(SettingsGroup):
         ),
     )
     max_turns: int = setting(
-        20,
+        100,
         "KIRA_PIPELINE__MAX_TURNS",
         "MAX_TURNS",
-        description="Model/tool turns a role may take before its run is ended.",
+        description=(
+            "Model/tool turns a role may take before its run is ended. One hundred is "
+            "what every measured campaign ran: sixteen of sixteen archived environments "
+            "set it, and none set anything else. The prototype's default was twenty, "
+            "which its own deployment overlay raised on every host — so twenty was a "
+            "value no result was ever produced under."
+        ),
     )
     remediation_retries: int = setting(
         2,

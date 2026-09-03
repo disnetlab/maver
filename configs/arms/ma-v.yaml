@@ -10,20 +10,36 @@ description: >
 model_profile: qwen3.6-35b-a3b
 frozen: true
 registered:
-  date: "2026-08-12"
-  campaign: broad_verify_35b
+  date: "2026-09-01"
+  campaign: 2x2-replication
   hypothesis: "a verification step converts applied-but-not-recovered cells into recovered ones"
 settings:
-  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2, auto_snapshot: true}
+  pipeline:
+    mode: multi
+    max_turns: 100
+    remediation_retries: 2
+    auto_snapshot: true
   memory:
     enabled: false
+    role_retrieval: false
     learning_enabled: false
     playbook: false
     second_pass: {enabled: false}
-  verify:     {enabled: true, health_gate: false, inconclusive_retries: 1}
+  verify: {enabled: true, health_gate: false, inconclusive_retries: 1}
 holds_constant:
   - model_profile
   - runtime.*
   - pipeline.max_turns
   - pipeline.remediation_retries
   - memory.enabled
+not_reproducible:
+  - >
+    The verification prompt. The 2026-08-26 broad_verify_35b campaign that produced the
+    published cells ran before three prompt corrections that ship here, and its own write-up
+    states that its treatment was the verify configuration as a whole — the step together
+    with the retry budget its hand-backs consume, which its baseline did not have. Running
+    this file reproduces the configuration, not those cells.
+notes: >
+  The published cells came from broad_verify_35b (VM2, 2026-08-26, 30 problems) against the
+  2026-08-16 no-verify baseline, which is the mismatched pairing the 2026-09-01 replication
+  exists to replace.

@@ -262,7 +262,7 @@ class ArmYamlSource(PydanticBaseSettingsSource):
             return {}
         directory = state.get("arm_dir") or self.settings_cls.model_fields["arm_dir"].default
         arm = load_arm(str(name), Path(str(directory)))
-        return _prune(self.settings_cls, arm.settings, state, set(state))
+        return _prune(self.settings_cls, arm.overlay(), state, set(state))
 
 
 def _by_field_name(model: type[BaseSettings], state: Mapping[str, Any]) -> dict[str, Any]:

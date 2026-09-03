@@ -150,6 +150,13 @@ def _apply_companions(field: AliasedField, monkeypatch: pytest.MonkeyPatch) -> N
         monkeypatch.setenv(name, value)
 
 
+def test_the_turn_budget_defaults_to_what_every_campaign_ran() -> None:
+    """Twenty was the prototype's default and its deployment overlay raised it on every
+    host, so twenty is a value no published result was ever produced under. Sixteen of
+    sixteen archived environments set one hundred, and none set anything else."""
+    assert Settings().pipeline.max_turns == 100
+
+
 class TestExperienceAdoption:
     """A past incident reaches a present one two ways, and they share one store."""
 

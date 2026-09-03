@@ -1,31 +1,40 @@
 schema_version: 1
 name: resample
-label: Resample
+label: Content-test partner
 description: >
-  The attribution control for MA+S. A second diagnosis always runs, carries no assignment
-  and no precedent text, and the same blinded selector chooses between the two. The
-  contrast against MA+S therefore isolates the value of the retrieved content from the
-  value of simply diagnosing twice, and the contrast against MA isolates the second
-  inference itself.
+  MA+S with retrieval switched off. The same quality gate decides when to look again, the
+  same second diagnosis runs, and the same blinded selector chooses between the two — the
+  second run simply receives nothing. The contrast against MA+S therefore isolates the
+  value of the retrieved content from the value of diagnosing twice, and the contrast
+  against MA isolates the second inference itself.
 model_profile: qwen3.6-35b-a3b
-frozen: false
+frozen: true
 registered:
-  date: "2026-08-26"
-  campaign: so_gate_35b
+  date: "2026-08-31"
+  campaign: so_gate_resample_35b
   hypothesis: "the MA+S gain is the second look rather than the precedent text"
 settings:
-  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2, auto_snapshot: true}
+  pipeline:
+    mode: multi
+    max_turns: 100
+    remediation_retries: 2
+    auto_snapshot: true
   memory:
     enabled: false
+    role_retrieval: false
     learning_enabled: false
     playbook: false
     second_pass:
+      # The gate is the quality audit, not `always`. Its pre-registration is explicit
+      # that this arm is identical to MA+S except for one environment value, so a gate
+      # that fires on every incident would change the dose as well as the content and
+      # the pair would no longer be a content test. `always` is a different experiment.
       enabled: true
-      gate: always
+      gate: quality
       delivery: none
       selector_max_tokens: 1600
       selector_timeout_s: 180
-  verify:     {enabled: false}
+  verify: {enabled: false}
 holds_constant:
   - model_profile
   - runtime.*
@@ -33,7 +42,7 @@ holds_constant:
   - pipeline.remediation_retries
   - verify.enabled
 notes: >
-  Memory is off here and on in MA+S. That difference is the treatment; the selector, the
-  second diagnosis and every budget are otherwise identical. Dose matters when reading the
-  result: the MA+S gate declines to fire on a substantial share of cells, so an arm gap has
-  to be divided by the measured dose before it is interpreted.
+  Memory is off here and on in MA+S. That difference is the treatment; the gate, the
+  selector, the second diagnosis and every budget are otherwise identical. Dose matters
+  when reading the result: the gate declines to fire on a substantial share of cells, so
+  a gap between the two has to be divided by the measured dose before it is interpreted.

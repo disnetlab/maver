@@ -12,31 +12,31 @@ description: >
 model_profile: qwen3.6-35b-a3b
 frozen: true
 registered:
-  date: "2026-08-12"
-  campaign: sweep_20260812
+  date: "2026-09-01"
+  campaign: 2x2-replication
   hypothesis: "a gated second look carrying precedent text beats a single pass"
 settings:
-  pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2, auto_snapshot: true}
+  pipeline:
+    mode: multi
+    max_turns: 100
+    remediation_retries: 2
+    auto_snapshot: true
   memory:
     enabled: true
     # The store is readable and no role holds a retrieval tool. That combination is the
     # arm: the harness searches for precedents while both diagnosis runs stay
-    # retrieval-free, which is what makes the second run's precedent text the only
-    # thing separating this arm from the resampling control.
+    # retrieval-free, which is what makes the second run's precedent text the only thing
+    # separating this arm from its content-test partner. The campaign states the same
+    # narrowing in its own pre-registration: the memory factor is precedent text handed
+    # to the second diagnosis under a quality gate, and no other delivery path is tested.
     role_retrieval: false
     learning_enabled: false
     playbook: false
     top_k: 3
-    # Pinned, and not to the shipped value. Kira ranks an invalidated record at 0.3 of
-    # its lexical score; the campaign this arm is frozen against never set that weight,
-    # so its retrieval ranked invalidated and successful records alike. Reproducing the
-    # campaign means saying so here rather than inheriting a default that has since
-    # changed underneath it.
-    lifecycle_weights: {invalidated: 1.0}
-    # Pinned, and not to the shipped value. Kira floors a hit at 0.5 of its lexical
-    # score per query token so retrieval can answer that nothing is comparable; the
-    # prototype shipped that floor off and no campaign ever set it, so the cells this
-    # arm reproduces admitted every text match. Inheriting the floor here would cut the
+    # Pinned, and not to the shipped value. Kira floors a hit at 0.5 of its lexical score
+    # per query token so retrieval can answer that nothing is comparable. The prototype
+    # shipped that floor at zero and no archived environment sets it, so the cells this
+    # arm reproduces admitted every text match; inheriting the floor would cut the
     # precedent dose the arm's result is read against.
     min_score_per_token: 0.0
     second_pass:
@@ -51,14 +51,21 @@ settings:
       gate_max_tokens: 600
       selector_max_tokens: 1600
       selector_timeout_s: 180
-  verify:     {enabled: false}
+  verify: {enabled: false}
 holds_constant:
   - model_profile
   - runtime.*
   - pipeline.max_turns
   - pipeline.remediation_retries
   - verify.enabled
+not_reproducible:
+  - >
+    The corpus. The published cells retrieved from so_gate_corpus_35b, 123 diagnosis
+    records confirmed correct by external benchmark feedback and frozen for the campaign,
+    under a per-problem leave-one-out exclusion supplied by the environment adapter. The
+    corpus is not in this repository and the exclusion set is per incident, so this file
+    configures the mechanism and cannot restore what it read.
 notes: >
   Learning is off because the corpus is frozen for the campaign, so a test pass would add
-  nothing to it. The leave-one-out exclusion set is supplied by the environment adapter,
-  not by this file.
+  nothing to it. The lifecycle weighting is inherited rather than pinned: two archived
+  environments set the invalidated weight to 0.3, which is the shipped default.
