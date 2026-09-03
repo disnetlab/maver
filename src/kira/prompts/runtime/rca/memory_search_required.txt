@@ -1,1 +1,0 @@
-call `{{TOOL_NAME}}` once before submitting — search on the symptoms and error signatures you observed, then verify or reject what it returns against live evidence and submit.
