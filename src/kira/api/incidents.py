@@ -223,14 +223,43 @@ async def run_incident_task(
         _log.info("session %s is awaiting approval request %s", session_id, pending.request_id)
     except asyncio.CancelledError:
         # Re-raised rather than absorbed: cooperative cancellation is what a drain and
-        # an operator's stop both depend on.
+        # an operator's stop both depend on. Recorded first, though — a session left
+        # saying `running` after the process carrying it is gone is a session nothing
+        # will ever finish and nothing reports as over, and `cancelled` was a terminal
+        # status both backends already recognised and nothing ever wrote.
         _log.info("session %s was cancelled", session_id)
+        _record_cancellation(service.deployment, session_id)
         raise
     except Exception as exc:
         _log.exception("session %s crashed", session_id)
         _record_failure(service.deployment, session_id, exc)
     finally:
         service.runs.unregister(session_id)
+
+
+def _record_cancellation(deployment: Deployment, session_id: str) -> None:
+    """Leave a cancelled incident in a state a reader can tell is over.
+
+    Written inline for the same reason the crash record is, and additionally because a
+    coroutine being cancelled cannot reliably await anything: the writes are the store's
+    own synchronous calls.
+
+    The lifecycle state is not touched. A cancellation disproves nothing about the claim
+    the incident was making, and the offline pass distils completed sessions only, so a
+    pending record stays pending and out of the corpus.
+    """
+    try:
+        sessions = deployment.storage.sessions
+        sessions.update_artefacts(session_id, notes="cancelled before it finished")
+        sessions.set_run_status(session_id, RunStatus.CANCELLED)
+        for run in reversed(deployment.storage.runs.runs_for(session_id)):
+            if run.status in _UNFINISHED:
+                deployment.storage.runs.finish_run(
+                    run.agent_run_id, status="cancelled", error="cancelled before it finished"
+                )
+                break
+    except Exception:
+        _log.exception("could not record the cancellation of session %s", session_id)
 
 
 def _record_failure(deployment: Deployment, session_id: str, exc: BaseException) -> None:

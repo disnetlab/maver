@@ -126,6 +126,13 @@ def _flush_sink(sink: EventSink) -> None:
         _log.exception("the audit sink did not shut down cleanly")
 
 
+_CANCELLATION_GRACE_S = 5.0
+"""How long a cancelled incident gets to write that it is over.
+
+Short, and separate from the drain budget it follows: by this point the work is not
+being waited for any more, only the record of its end."""
+
+
 async def _drain(service: Service, timeout_s: float) -> None:
     """Let the incidents already in flight finish before the process goes.
 
@@ -143,9 +150,22 @@ async def _drain(service: Service, timeout_s: float) -> None:
     while service.runs.live() and time.monotonic() < deadline:
         _log.info("draining %d incident(s) before shutdown", len(service.runs.live()))
         await asyncio.sleep(1.0)
+
     remaining = service.runs.live()
-    if remaining:
-        _log.warning("shut down with %d incident(s) unfinished: %s", len(remaining), remaining)
+    if not remaining:
+        return
+
+    # Cancelled rather than abandoned. A task the process walks away from leaves its
+    # session saying `running` for good: nothing resumes an incident, only an approval,
+    # so the record would say a run is in progress on a process that no longer exists.
+    # Cancelling gives each one's handler the chance to write that it is over.
+    _log.warning("cancelling %d incident(s) that did not drain: %s", len(remaining), remaining)
+    for task in list(service.tasks):
+        task.cancel()
+    await asyncio.wait(set(service.tasks), timeout=_CANCELLATION_GRACE_S)
+    still_live = service.runs.live()
+    if still_live:
+        _log.error("shut down with %d incident(s) unrecorded: %s", len(still_live), still_live)
 
 
 def create_app(

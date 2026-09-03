@@ -16,10 +16,11 @@ import httpx
 import pytest
 import yaml
 
-from kira.api.app import create_app
+from kira.api.app import _drain, create_app
 from kira.api.deps import Service
 from kira.api.incidents import fingerprint, run_incident_task
 from kira.audit.journal import ListSink
+from kira.contracts.lifecycle import RunStatus
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
 from kira.middleware.human_approval import authorities
@@ -421,6 +422,41 @@ async def test_a_draining_process_closes_the_door_before_it_waits(
         assert (await http.get("/readyz")).status_code == 503
         assert (await http.get("/healthz")).status_code == 200
         await settle(app.state.service)
+    deploy.storage.close()
+
+
+async def test_an_incident_that_outlasts_the_drain_is_recorded_as_over(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The drain waited and then walked away, leaving the session saying `running` on a
+    process that no longer exists. Nothing resumes an incident — only an approval — so
+    that record never changed again, and `cancelled` was a terminal status both backends
+    already recognised and nothing ever wrote.
+    """
+
+    class Forever:
+        async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
+            await asyncio.sleep(3600)
+            raise AssertionError("unreachable")
+
+    deploy = dataclasses.replace(deployment(tmp_path, mode="auto"), completion=Forever())
+    app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
+
+    async with client(app) as http:
+        created = await http.post("/api/v1/incidents", json={"alert": ALERT})
+        session_id = created.json()["session_id"]
+        for _ in range(100):  # until the diagnosing role has opened its run row
+            if deploy.storage.runs.runs_for(session_id):
+                break
+            await asyncio.sleep(0.01)
+        assert deploy.storage.sessions.get_session(session_id).run_status == "running"
+
+        app.state.service.runs.begin_draining()
+        await _drain(app.state.service, 0.0)
+
+    record = deploy.storage.sessions.get_session(session_id)
+    assert record.run_status == RunStatus.CANCELLED.value
+    assert [run.status for run in deploy.storage.runs.runs_for(session_id)] == ["cancelled"]
     deploy.storage.close()
 
 
