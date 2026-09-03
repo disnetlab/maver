@@ -31,7 +31,12 @@ from kira.secondpass.query import MergedQuery, ObservationQuery, PreAnchorQuery
 from kira.secondpass.retrieve import StorePrecedents, render_precedents
 from kira.secondpass.runner import SecondPass
 from kira.secondpass.select import BlindSelector, blinded_labels, build_evidence_bundle
-from kira.secondpass.strategies import MAR, MAS, RESAMPLE, policy_for
+from kira.secondpass.strategies import (
+    NOMINATED_ASSIGNMENT,
+    QUALITY_GATED_PRECEDENT,
+    UNCONDITIONAL_RESAMPLE,
+    policy_for,
+)
 from kira.secondpass.types import (
     Brief,
     DiagnosisRun,
@@ -53,9 +58,9 @@ from kira.secondpass.types import (
 
 __all__ = [
     "ALLOWED_FAMILIES",
-    "MAR",
-    "MAS",
-    "RESAMPLE",
+    "NOMINATED_ASSIGNMENT",
+    "QUALITY_GATED_PRECEDENT",
+    "UNCONDITIONAL_RESAMPLE",
     "AlwaysGate",
     "BlindSelector",
     "Brief",

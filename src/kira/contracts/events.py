@@ -232,7 +232,7 @@ class SecondPassEvent(BaseModel):
     """
 
     kind: Literal["second_pass"] = "second_pass"
-    policy: str = Field(description="The named composition, e.g. ma-s.")
+    policy: str = Field(description="The composition, named for the settings that select it.")
     step: Literal["gate", "search", "nomination", "brief", "selection", "skip"]
     fired: bool | None = None
     reason: str = ""

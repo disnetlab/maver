@@ -1,6 +1,6 @@
 """One flow, five stages, no mode branch.
 
-The word ``mode`` does not appear here. What separates MA+S from MA+R from Resample is
+The word ``mode`` does not appear here. What separates one composition from another is
 which objects are in the policy, and the flow is the manuscript's Algorithm 1 read one
 line at a time: diagnose, gate, query, retrieve, brief, diagnose again, select.
 

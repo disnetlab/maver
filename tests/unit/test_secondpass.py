@@ -23,9 +23,9 @@ from kira.contracts.state import IncidentState
 from kira.llm.types import ModelRequest, ModelResponse, Usage
 from kira.memory.ports import SearchHit, SearchScope
 from kira.secondpass import (
-    MAR,
-    MAS,
-    RESAMPLE,
+    NOMINATED_ASSIGNMENT,
+    QUALITY_GATED_PRECEDENT,
+    UNCONDITIONAL_RESAMPLE,
     BlindSelector,
     DiagnosisRun,
     JournalEmitter,
@@ -199,10 +199,18 @@ SAME = json.dumps({"differs": False, "family": "probe_misconfiguration", "direct
 # Row numbers are the fail-safe topology in the specification. Each row states the
 # condition, and every one of them must leave the first opinion standing.
 FAIL_SAFE_ROWS = [
-    ("1 first run produced nothing", MAS, (None, None), {}, None, "first_run_failed", "none"),
+    (
+        "1 first run produced nothing",
+        QUALITY_GATED_PRECEDENT,
+        (None, None),
+        {},
+        None,
+        "first_run_failed",
+        "none",
+    ),
     (
         "2 first run halted",
-        MAS,
+        QUALITY_GATED_PRECEDENT,
         (diagnosis(halt=True), None),
         {},
         None,
@@ -211,7 +219,7 @@ FAIL_SAFE_ROWS = [
     ),
     (
         "5 gate declines",
-        MAS,
+        QUALITY_GATED_PRECEDENT,
         (diagnosis(), None),
         {"secondpass.gate": PASS},
         FakeStore([hit("m1")]),
@@ -220,7 +228,7 @@ FAIL_SAFE_ROWS = [
     ),
     (
         "6 retrieval raised",
-        MAS,
+        QUALITY_GATED_PRECEDENT,
         (diagnosis(), None),
         {"secondpass.gate": FIRE},
         FakeStore(RuntimeError("store unreachable")),
@@ -229,7 +237,7 @@ FAIL_SAFE_ROWS = [
     ),
     (
         "9 nominator unparseable",
-        MAR,
+        NOMINATED_ASSIGNMENT,
         (diagnosis(), None),
         {"secondpass.nominator": "no json here"},
         FakeStore([hit("m1")]),
@@ -238,7 +246,7 @@ FAIL_SAFE_ROWS = [
     ),
     (
         "10 nomination rejected by the vocabulary",
-        MAR,
+        NOMINATED_ASSIGNMENT,
         (diagnosis(), None),
         {
             "secondpass.nominator": json.dumps(
@@ -251,7 +259,7 @@ FAIL_SAFE_ROWS = [
     ),
     (
         "11 nomination agrees with the first opinion",
-        MAR,
+        NOMINATED_ASSIGNMENT,
         (diagnosis(), None),
         {"secondpass.nominator": SAME},
         FakeStore([hit("m1")]),
@@ -310,7 +318,7 @@ async def test_a_selector_that_cannot_decide_keeps_the_first_opinion(
     model = FakeModel({"secondpass.gate": FIRE, "secondpass.selector": reply})
     ctx, _ = context(model, store=FakeStore([hit("m1")]))
 
-    result = await SecondPass(MAS, rca=FakeRca((first, second))).run(ctx)
+    result = await SecondPass(QUALITY_GATED_PRECEDENT, rca=FakeRca((first, second))).run(ctx)
 
     assert result.chosen is first
     assert result.source == "first"
@@ -323,7 +331,7 @@ async def test_a_selector_that_exceeds_its_deadline_keeps_the_first_opinion() ->
     first, second = diagnosis(), diagnosis("the queue head is poisoned")
     model = FakeModel({"secondpass.gate": FIRE, "secondpass.selector": "__slow__"})
     ctx, _ = context(model, store=FakeStore([hit("m1")]))
-    policy = replace(MAS, selector=BlindSelector(max_tokens=1600, timeout_s=0))
+    policy = replace(QUALITY_GATED_PRECEDENT, selector=BlindSelector(max_tokens=1600, timeout_s=0))
 
     result = await SecondPass(policy, rca=FakeRca((first, second))).run(ctx)
 
@@ -337,7 +345,7 @@ async def test_a_second_run_that_fails_leaves_the_first_opinion_unopposed() -> N
     model = FakeModel({"secondpass.gate": FIRE})
     ctx, _ = context(model, store=FakeStore([hit("m1")]))
 
-    result = await SecondPass(MAS, rca=FakeRca((first, None))).run(ctx)
+    result = await SecondPass(QUALITY_GATED_PRECEDENT, rca=FakeRca((first, None))).run(ctx)
 
     assert result.chosen is first
     assert result.source == "first"
@@ -348,7 +356,11 @@ async def test_a_second_run_that_fails_leaves_the_first_opinion_unopposed() -> N
     assert "secondpass.selector" not in model.callers()
 
 
-@pytest.mark.parametrize("policy", [MAS, MAR, RESAMPLE], ids=lambda p: p.name)
+@pytest.mark.parametrize(
+    "policy",
+    [QUALITY_GATED_PRECEDENT, NOMINATED_ASSIGNMENT, UNCONDITIONAL_RESAMPLE],
+    ids=lambda p: p.name,
+)
 async def test_both_diagnosis_runs_are_retrieval_free_and_the_second_is_blind(
     policy: SecondPassPolicy,
 ) -> None:
@@ -375,7 +387,7 @@ async def test_a_gate_decline_costs_one_call_and_never_touches_the_store() -> No
     model = FakeModel({"secondpass.gate": PASS})
     ctx, _ = context(model, store=store)
 
-    result = await SecondPass(MAS, rca=FakeRca((diagnosis(), None))).run(ctx)
+    result = await SecondPass(QUALITY_GATED_PRECEDENT, rca=FakeRca((diagnosis(), None))).run(ctx)
 
     assert model.callers() == {"secondpass.gate": 1}
     assert store.queries == []
@@ -385,13 +397,17 @@ async def test_a_gate_decline_costs_one_call_and_never_touches_the_store() -> No
 @pytest.mark.parametrize(
     ("policy", "replies", "expected"),
     [
-        (MAS, {"secondpass.gate": FIRE}, {"secondpass.gate": 1, "secondpass.selector": 1}),
         (
-            MAR,
+            QUALITY_GATED_PRECEDENT,
+            {"secondpass.gate": FIRE},
+            {"secondpass.gate": 1, "secondpass.selector": 1},
+        ),
+        (
+            NOMINATED_ASSIGNMENT,
             {"secondpass.nominator": DIFFERS},
             {"secondpass.nominator": 1, "secondpass.selector": 1},
         ),
-        (RESAMPLE, {}, {"secondpass.selector": 1}),
+        (UNCONDITIONAL_RESAMPLE, {}, {"secondpass.selector": 1}),
     ],
     ids=["ma-s", "ma-r", "resample"],
 )
@@ -410,7 +426,7 @@ async def test_the_quality_audit_sees_only_the_candidate() -> None:
     model = FakeModel({"secondpass.gate": PASS})
     ctx, _ = context(model, store=FakeStore([hit("m1", "message_queue")]))
 
-    await SecondPass(MAS, rca=FakeRca((diagnosis(), None))).run(ctx)
+    await SecondPass(QUALITY_GATED_PRECEDENT, rca=FakeRca((diagnosis(), None))).run(ctx)
 
     prompt = str(model.calls[0][1].messages[0]["content"])
     assert "precedent" not in prompt
@@ -436,7 +452,7 @@ async def test_an_unreadable_audit_never_suppresses_a_second_opinion(
     ctx, _ = context(model, store=FakeStore([hit("m1")]))
     rca = FakeRca((diagnosis(), diagnosis("a different cause")))
 
-    result = await SecondPass(MAS, rca=rca).run(ctx)
+    result = await SecondPass(QUALITY_GATED_PRECEDENT, rca=rca).run(ctx)
 
     assert result.verdict is not None
     assert result.verdict.parsed is parsed
@@ -446,7 +462,9 @@ async def test_an_unreadable_audit_never_suppresses_a_second_opinion(
 
 async def test_a_quality_fire_lifts_the_nominators_veto() -> None:
     """The two gates are ORed, never ANDed: ANDing scored worse than either alone."""
-    policy = replace(MAR, gate=QualityAuditGate(max_tokens=600, on_unreadable="defer"))
+    policy = replace(
+        NOMINATED_ASSIGNMENT, gate=QualityAuditGate(max_tokens=600, on_unreadable="defer")
+    )
     model = FakeModel(
         {"secondpass.gate": FIRE, "secondpass.nominator": SAME, "secondpass.selector": PICK_A}
     )
@@ -469,7 +487,7 @@ async def test_an_empty_result_set_under_a_firing_gate_runs_blind() -> None:
     ctx, sink = context(model, store=FakeStore([]))
     rca = FakeRca((diagnosis(), diagnosis("a different cause")))
 
-    result = await SecondPass(MAS, rca=rca).run(ctx)
+    result = await SecondPass(QUALITY_GATED_PRECEDENT, rca=rca).run(ctx)
 
     assert result.brief is not None and result.brief.text is None
     assert rca.calls[1]["brief"] is None
@@ -485,7 +503,7 @@ async def test_the_resampling_control_never_reads_the_store() -> None:
     ctx, _ = context(model, store=store, policy_name="resample")
     rca = FakeRca((diagnosis(), diagnosis("a different cause")))
 
-    result = await SecondPass(RESAMPLE, rca=rca).run(ctx)
+    result = await SecondPass(UNCONDITIONAL_RESAMPLE, rca=rca).run(ctx)
 
     assert store.queries == []
     assert result.precedents is None
@@ -499,7 +517,7 @@ async def test_a_skip_still_carries_the_verdict_and_the_precedents() -> None:
         model, store=FakeStore([hit("m1")]), policy_name="ma-r", withheld=frozenset({"x"})
     )
 
-    result = await SecondPass(MAR, rca=FakeRca((diagnosis(), None))).run(ctx)
+    result = await SecondPass(NOMINATED_ASSIGNMENT, rca=FakeRca((diagnosis(), None))).run(ctx)
 
     assert result.skipped == "same_family"
     assert result.verdict is not None and result.verdict.reason == "nominator"
@@ -512,7 +530,9 @@ async def test_both_run_ids_survive_the_selection() -> None:
     model = FakeModel({"secondpass.gate": FIRE, "secondpass.selector": PICK_A})
     ctx, _ = context(model, store=FakeStore([hit("m1")]))
 
-    result = await SecondPass(MAS, rca=FakeRca((diagnosis(), diagnosis("a rival")))).run(ctx)
+    result = await SecondPass(
+        QUALITY_GATED_PRECEDENT, rca=FakeRca((diagnosis(), diagnosis("a rival")))
+    ).run(ctx)
 
     assert result.first.run_id == "run-1"
     assert result.second is not None and result.second.run_id == "run-2"
@@ -529,7 +549,9 @@ async def test_the_selector_prompt_never_names_a_source() -> None:
     model = FakeModel({"secondpass.gate": FIRE, "secondpass.selector": PICK_A})
     ctx, _ = context(model, store=FakeStore([hit("m1")]))
 
-    result = await SecondPass(MAS, rca=FakeRca((diagnosis(), diagnosis("a rival")))).run(ctx)
+    result = await SecondPass(
+        QUALITY_GATED_PRECEDENT, rca=FakeRca((diagnosis(), diagnosis("a rival")))
+    ).run(ctx)
 
     assert result.selection is not None
     prompt = result.selection.prompt.lower()

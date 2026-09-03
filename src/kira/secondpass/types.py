@@ -162,7 +162,8 @@ class Brief:
     """What the second run receives beyond the alert.
 
     ``text is None`` is a blind pass: a second diagnosis with no additional input. That
-    is Resample's normal state and MA+S's empty-retrieval degradation, and the two must
+    is the resampling control's normal state and a precedent composition's empty-retrieval
+    degradation, and the two must
     be indistinguishable to the second run for the paired contrast to mean anything.
     """
 
@@ -392,7 +393,7 @@ class SecondPassContext:
     """The auxiliary set: short structured classifications, decoded without the
     diversity knobs the agent profile is tuned for."""
     memory: PrecedentStore | None
-    """None for a policy that reads no store, which is Resample's normal state."""
+    """None for a policy that reads no store, which the resampling control never does."""
     snapshot: SnapshotProvider
     withheld_record_ids: frozenset[str]
     emit: SecondPassEmitter

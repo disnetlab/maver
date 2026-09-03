@@ -1,9 +1,10 @@
 """Mapping retrieved precedents onto a closed vocabulary of fault families.
 
-This is MA+R's mechanism, and the arm it belongs to is a reproduced negative result
+This is the nominated composition's mechanism, and the arm it was measured under is a
+reproduced negative result
 rather than a recommendation: guided minus resample is -1.7 composite points with a
 confidence interval spanning [-11.1, +7.3]. It ships so the published number can be
-reproduced, and `configs/arms/ma-r.yaml` records that it varies three axes at once.
+reproduced, and the arm file records that it varies three axes at once.
 
 Memory enters here as a candidate nominator and never as context: no precedent text
 reaches the second run under this configuration, only a family label and a directive.

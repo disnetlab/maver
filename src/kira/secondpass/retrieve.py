@@ -7,9 +7,10 @@ silently, and in the direction that flatters the result.
 
 The card a brief shows is a bounded summary, not the record. The manuscript's "receives
 the precedent records verbatim" overstates it; "bounded summary cards of the retrieved
-records" is what happens. No grade or outcome appears on a card, which is why the MA+S
+records" is what happens. No grade or outcome appears on a card, which is why the
 corpus had to be filtered to externally-graded-correct rows before the arm could run: an
-incorrect card is indistinguishable transplant poison, and MA+S has no nominator left to
+quality-gated composition's incorrect card is indistinguishable transplant poison,
+and it has no nominator left to
 filter it.
 """
 

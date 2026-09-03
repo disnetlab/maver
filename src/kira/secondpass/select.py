@@ -1,7 +1,8 @@
 """Choosing between two diagnoses under shuffled labels.
 
 One bounded model call over two typed candidates and a bundle of live tool results.
-Under MA+S it is the only safety mechanism standing between a wrong precedent and the
+Where precedent text is delivered it is the only safety mechanism standing between a
+wrong precedent and the
 pipeline's answer, so every failure mode here resolves to the first opinion.
 
 Thinking must be off for this call, and the reason is a measured failure rather than a

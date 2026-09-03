@@ -101,7 +101,7 @@ class PreAnchorQuery:
     name: str = "pre_anchor"
     observation_lines: int = 8
     """Eight is the prototype's own default and the offline champion's budget. The
-    measured MA+S campaign called the builder with twelve, so the composition that
+    measured campaign called the builder with twelve, so the composition that
     reproduces those cells passes twelve; the A/B that would settle which is better was
     specified and never run."""
     max_chars: int = 3600

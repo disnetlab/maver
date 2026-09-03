@@ -48,7 +48,7 @@ def candidate_json(candidate: RootCause) -> str:
 
 
 class AlwaysGate:
-    """Fires unconditionally and makes no model call. Resample's gate.
+    """Fires unconditionally and makes no model call. The resampling control's gate.
 
     Also the honest name for what the prototype did when the resampling mode was
     combined with the nominator gate: the quality-gate branch required the quality

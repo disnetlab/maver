@@ -1,6 +1,7 @@
 """What the second run is told, which is the only axis the three configurations vary.
 
-Resample tells it nothing, MA+S gives it bounded precedent cards, MA+R gives it a fault
+The resampling control tells it nothing, the quality-gated composition gives it bounded
+precedent cards, the nominated one gives it a fault
 family and a directive with no precedent text at all. Everything else about the two
 diagnosis runs is held identical, which is what makes the paired contrasts readable.
 
@@ -29,11 +30,12 @@ _BLIND = Brief(text=None, kind="none")
 
 
 class NoBrief:
-    """Gives the second run nothing. Resample's briefer.
+    """Gives the second run nothing. The resampling control's briefer.
 
     The second run's opening message is then byte-identical to the first's apart from
     its own freshly collected snapshot, which is the whole point of the control: the
-    contrast against MA+S measures the retrieved content and nothing else.
+    contrast against a precedent-carrying brief measures the retrieved content and
+    nothing else.
     """
 
     async def brief(
@@ -64,7 +66,8 @@ class PrecedentTextBrief:
     An empty result set does not necessarily cancel the run. Under the quality gate the
     audit — not retrieval — decided that a second look is warranted, so an empty set
     degrades the second run to a blind pass instead of cancelling it. That keeps this
-    arm's dose identical to Resample's, so a paired context-versus-resample contrast
+    composition's dose identical to the resampling control's, so a paired
+    context-versus-resample contrast
     measures the precedent text and nothing else, and the audited reason makes the
     degraded cells countable.
     """

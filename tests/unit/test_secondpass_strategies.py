@@ -19,9 +19,9 @@ from kira.contracts.state import IncidentState
 from kira.memory.ports import SearchHit, SearchScope
 from kira.secondpass import (
     ALLOWED_FAMILIES,
-    MAR,
-    MAS,
-    RESAMPLE,
+    NOMINATED_ASSIGNMENT,
+    QUALITY_GATED_PRECEDENT,
+    UNCONDITIONAL_RESAMPLE,
     BlindSelector,
     FamilyAssignmentBrief,
     GateVerdict,
@@ -41,6 +41,7 @@ from kira.secondpass import (
     render_precedents,
     validate_nomination,
 )
+from kira.secondpass.strategies import _COMPOSITIONS
 from kira.settings.groups import MemorySettings, SecondPassSettings
 from kira.settings.profiles import load_profile
 
@@ -272,14 +273,25 @@ def test_the_family_vocabulary_is_the_eleven_the_prompt_lists() -> None:
     assert all(family in listed for family in ALLOWED_FAMILIES)
 
 
+def test_a_composition_is_named_for_the_settings_that_select_it() -> None:
+    """The name is what the event log records, and what an arm gap is divided by.
+
+    Two compositions were built by varying the gate of a third and kept its name, so a
+    quality-gated resampling control recorded itself as the unconditional one. Deriving
+    the name from the key is the only arrangement in which they cannot disagree.
+    """
+    for (gate, delivery), composition in _COMPOSITIONS.items():
+        assert composition.name == f"{gate}+{delivery}"
+
+
 @pytest.mark.parametrize(
     ("gate", "delivery", "name", "gate_type"),
     [
-        ("quality", "context", "ma-s", QualityAuditGate),
-        ("always", "none", "resample", type(RESAMPLE.gate)),
-        ("nominator", "assignment", "ma-r", type(MAR.gate)),
-        ("quality", "none", "resample", QualityAuditGate),
-        ("quality", "assignment", "ma-r", QualityAuditGate),
+        ("quality", "context", "quality+context", QualityAuditGate),
+        ("always", "none", "always+none", type(UNCONDITIONAL_RESAMPLE.gate)),
+        ("nominator", "assignment", "nominator+assignment", type(NOMINATED_ASSIGNMENT.gate)),
+        ("quality", "none", "quality+none", QualityAuditGate),
+        ("quality", "assignment", "quality+assignment", QualityAuditGate),
     ],
 )
 def test_the_policy_resolution_table(gate: str, delivery: str, name: str, gate_type: type) -> None:
@@ -337,20 +349,20 @@ def test_an_arm_may_vary_the_five_numbers_and_nothing_else() -> None:
     assert isinstance(policy.selector, BlindSelector)
     assert (policy.selector.max_tokens, policy.selector.timeout_s) == (400, 20)
     # The shape is what gives the composition its name and never moves with an arm.
-    assert type(policy.briefer) is type(MAS.briefer)
-    assert type(policy.selector) is type(MAS.selector)
+    assert type(policy.briefer) is type(QUALITY_GATED_PRECEDENT.briefer)
+    assert type(policy.selector) is type(QUALITY_GATED_PRECEDENT.selector)
 
 
 def test_the_composition_owns_the_per_leg_depth() -> None:
-    """Three hits per leg, with 0.51 mean overlap, is the dose the published MA+S cells
+    """Three hits per leg, with 0.51 mean overlap, is the dose the published cells
     were served. Resolving the depth from memory.top_k instead handed anyone running the
-    second pass without an arm file five, which is not the composition MA+S names."""
+    second pass without an arm file five, which is a different composition."""
     policy = policy_for(SecondPassSettings(enabled=True), MemorySettings())
 
     assert policy is not None
     assert isinstance(policy.retriever, StorePrecedents)
-    assert isinstance(MAS.retriever, StorePrecedents)
-    assert policy.retriever.k == MAS.retriever.k == 3
+    assert isinstance(QUALITY_GATED_PRECEDENT.retriever, StorePrecedents)
+    assert policy.retriever.k == QUALITY_GATED_PRECEDENT.retriever.k == 3
 
 
 def test_force_lifts_the_nominators_veto_and_nothing_else() -> None:
