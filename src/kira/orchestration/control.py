@@ -92,6 +92,7 @@ class RunRegistry:
         self._runs: dict[str, RunControl] = {}
         self._by_alert: dict[str, str] = {}
         self._reserved = 0
+        self._draining = False
 
     def register(self, session_id: str, *, fingerprint: str | None = None) -> RunControl:
         """Start tracking a run.
@@ -152,6 +153,27 @@ class RunRegistry:
         """
         return len(self._runs) + self._reserved >= limit
 
+    @property
+    def draining(self) -> bool:
+        """Whether this process has begun shutting down.
+
+        Returns:
+            True once the drain has started.
+        """
+        return self._draining
+
+    def begin_draining(self) -> None:
+        """Stop accepting work, before waiting for what is already in flight.
+
+        Draining is two steps in that order, and only the second was here. A process
+        that keeps accepting while it drains opens an incident it cannot finish: the
+        session says running, the process goes, and nothing resumes it — which is the
+        outcome the drain exists to prevent, arriving through the front door. It is also
+        what takes the pod out of a Service's endpoint list, so the requests stop
+        arriving in the first place.
+        """
+        self._draining = True
+
     def reserve(self, limit: int) -> bool:
         """Take one of this process's slots, without awaiting anything.
 
@@ -169,7 +191,7 @@ class RunRegistry:
             True when a slot was taken. The caller releases it once the run it started
             is registered, or once it is certain none will be.
         """
-        if self.at_capacity(limit):
+        if self._draining or self.at_capacity(limit):
             return False
         self._reserved += 1
         return True

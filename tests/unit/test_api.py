@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
+import yaml
 
 from kira.api.app import create_app
 from kira.api.deps import Service
@@ -393,6 +394,45 @@ async def test_the_bound_holds_when_the_requests_arrive_together(
         assert sorted(reply.status_code for reply in replies) == [202, 202, 429, 429, 429, 429]
         await settle(app.state.service)
     deploy.storage.close()
+
+
+async def test_a_draining_process_closes_the_door_before_it_waits(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Draining is two steps in that order, and only the second was here.
+
+    A process that keeps accepting while it drains opens an incident it cannot finish:
+    the session says running, the process goes, and nothing resumes it — the outcome the
+    drain exists to prevent, arriving through the front door. `/readyz` going 503 is what
+    removes the pod from a Service's endpoint list so the requests stop arriving at all,
+    while `/healthz` stays 200 so the kubelet does not restart it mid-drain.
+    """
+    deploy = deployment(tmp_path)
+    app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
+
+    async with client(app) as http:
+        assert (await http.get("/readyz")).status_code == 200
+
+        app.state.service.runs.begin_draining()
+
+        refused = await http.post("/api/v1/incidents", json={"alert": ALERT})
+        assert refused.status_code == 503
+        assert refused.headers["Retry-After"] == "30"
+        assert (await http.get("/readyz")).status_code == 503
+        assert (await http.get("/healthz")).status_code == 200
+        await settle(app.state.service)
+    deploy.storage.close()
+
+
+def test_the_grace_period_outlasts_the_drain_it_has_to_contain() -> None:
+    """A drain cut off part-way through is killed while writing the terminal state that
+    is the record it exists to produce. The manifest's grace period has to cover the
+    drain plus the time to write it."""
+    manifest = yaml.safe_load(pathlib.Path("deploy/k8s/base/deployment.yaml").read_text())
+    grace = manifest["spec"]["template"]["spec"]["terminationGracePeriodSeconds"]
+    assert Settings().server.drain_timeout_s + 10 <= grace, (
+        "server.drain_timeout_s + 10 must fit inside terminationGracePeriodSeconds"
+    )
 
 
 class _NeedsTheLoop:

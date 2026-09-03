@@ -72,7 +72,7 @@ async def readyz(service: ServiceDep) -> JSONResponse:
         The same body either way, with 503 when a required check failed. The shape does
         not change with the verdict, so a reader parses one thing.
     """
-    checks = [_startup(service), _store(service)]
+    checks = [_startup(service), _draining(service), _store(service)]
     ready = all(check.ok for check in checks if check.required)
     body: dict[str, Any] = {
         "status": "ready" if ready else "not ready",
@@ -89,6 +89,22 @@ def _startup(service: Service) -> Check:
         ok=True,
         required=True,
         detail=f"profile={service.deployment.profile.name} authority={settings.authority.mode}",
+    )
+
+
+def _draining(service: Service) -> Check:
+    """Report a process on its way out as not ready.
+
+    Required, because this is what removes the pod from a Service's endpoint list and
+    stops requests arriving at something that will not finish them. ``/healthz`` stays
+    200 throughout, so the kubelet does not restart the pod part-way through its drain.
+    """
+    draining = service.runs.draining
+    return Check(
+        name="draining",
+        ok=not draining,
+        required=True,
+        detail="draining" if draining else "accepting",
     )
 
 

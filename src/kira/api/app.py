@@ -186,6 +186,9 @@ def create_app(
         try:
             yield
         finally:
+            # Stop accepting, then wait. The order is the whole property: a drain that
+            # runs while the door is open waits for incidents it also keeps admitting.
+            app.state.service.runs.begin_draining()
             await _drain(app.state.service, active.settings.server.drain_timeout_s)
             shutdown_scheduler()
             unbind_deployment()

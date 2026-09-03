@@ -78,6 +78,16 @@ async def create_incident(body: IncidentRequest, service: ServiceDep) -> dict[st
             status_code=503, detail="HTTP intake disabled (KIRA_INTAKE__HTTP_ENABLED=false)"
         )
 
+    if service.runs.draining:
+        # A process on its way out must not open an incident it cannot finish. Refused
+        # before the deduplication check, because a repost during shutdown is not a
+        # request to join a run this process is about to abandon.
+        raise HTTPException(
+            status_code=503,
+            detail="shutting down; not accepting new incidents",
+            headers={"Retry-After": "30"},
+        )
+
     # A retrying alert source posting the same alert twice wants one incident, not two
     # agents remediating the same fault against each other. Answered with the run that
     # is already on it, in the same shape, so the caller needs no new branch.
