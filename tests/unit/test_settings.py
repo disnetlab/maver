@@ -576,6 +576,42 @@ def test_no_shipped_arm_carries_an_authority_stanza() -> None:
         assert "authority" not in yaml.safe_load(path.read_text()).get("settings", {}), path.name
 
 
+def test_production_may_not_run_every_cluster_write_unattended(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A production deployment holding write credentials must not approve itself.
+
+    Nothing enforced this, so a production process with an unattended mode started
+    clean with the whole approval mechanism inert underneath it. The escape hatch is a
+    rule rather than a second flag: a deployment can say that routine scaling proceeds
+    unattended, and cannot say that everything does.
+    """
+    monkeypatch.setenv("KIRA_SERVER__ENVIRONMENT", "production")
+    monkeypatch.setenv("KIRA_AUTHORITY__MODE", "auto")
+    with pytest.raises(ValidationError, match="would let every cluster write proceed unreviewed"):
+        Settings()
+
+    monkeypatch.setenv("KIRA_AUTHORITY__MODE", "prompt")
+    monkeypatch.setenv(
+        "KIRA_AUTHORITY__RULES",
+        '[{"name": "routine-scaling", "selectors": ["verb:scale"], "mode": "auto"}]',
+    )
+    settings = Settings()
+    assert [rule.mode for rule in settings.authority.rules] == ["auto"]
+
+
+def test_an_unattended_benchmark_is_still_allowed_outside_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refusal above is scoped to the posture that makes it dangerous.
+
+    Every measured campaign ran unattended, and a check that stopped one from starting
+    would make the artifact unable to reproduce its own results.
+    """
+    monkeypatch.setenv("KIRA_AUTHORITY__MODE", "auto")
+    assert Settings().authority.mode == "auto"
+
+
 def test_a_queue_intake_that_consumes_nothing_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     """The check that refuses a service with no intake was satisfiable by a flag that
     builds no consumer.

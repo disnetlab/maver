@@ -178,6 +178,19 @@ class Settings(SettingsGroup):
                 "no intake is enabled: set intake.http_enabled, otherwise the service "
                 "starts and can never receive an incident."
             )
+        if self.server.environment == "production" and self.authority.mode == "auto":
+            # The escape hatch is a rule, not a flag, and that is the point. A
+            # deployment that wants routine scaling to proceed unattended can say so;
+            # what it cannot do is hand a model unreviewed write access to a production
+            # cluster by setting one global value. Refused rather than warned because
+            # the whole approval mechanism is inert underneath it, and a warning about
+            # an inert safety control is a thing an operator learns to scroll past.
+            raise ValueError(
+                "server.environment='production' with authority.mode='auto' would let "
+                "every cluster write proceed unreviewed. Set authority.mode to 'prompt' "
+                "or 'deny', and name what may proceed unattended with an authority rule "
+                "(KIRA_AUTHORITY__RULES) scoped to those tools, stages or selectors."
+            )
         return self
 
     def sampling_overrides(self) -> dict[str, Any]:
