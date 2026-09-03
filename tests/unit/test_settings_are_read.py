@@ -45,7 +45,6 @@ DECLARED_FOR_UNBUILT_WORK = {
     "authority.webhook_timeout_s": "pause notification is not implemented",
     "intake.kafka.topic": "the queue intake is a phase-two extra",
     "intake.kafka.group_id": "the queue intake is a phase-two extra",
-    "memory.playbook": "the playbook layer was dropped; the flag outlived it",
     "model.request_timeout_s": "the profile's own limit is what the client sends",
     "model.num_retries": "the profile's own limit is what the client sends",
     "observability.log_level": "logging is configured by the process, not from here",

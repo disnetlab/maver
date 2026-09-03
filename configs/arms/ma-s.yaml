@@ -31,7 +31,6 @@ settings:
     # to the second diagnosis under a quality gate, and no other delivery path is tested.
     role_retrieval: false
     learning_enabled: false
-    playbook: false
     top_k: 3
     # Pinned, and not to the shipped value. Kira floors a hit at 0.5 of its lexical score
     # per query token so retrieval can answer that nothing is comparable. The prototype

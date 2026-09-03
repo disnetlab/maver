@@ -605,16 +605,6 @@ class MemorySettings(SettingsGroup):
             "Present so a frozen arm can pin the exact ranking a past campaign used."
         ),
     )
-    playbook: bool = setting(
-        False,
-        "KIRA_MEMORY__PLAYBOOK",
-        "PLAYBOOK_ENABLED",
-        description=(
-            "Cross-cutting operational notes injected into role prompts. Off by "
-            "default: it is absent from the published system description, and it "
-            "shipped on and undocumented in the prototype."
-        ),
-    )
 
     @model_validator(mode="after")
     def _postgres_needs_a_dsn(self) -> "MemorySettings":

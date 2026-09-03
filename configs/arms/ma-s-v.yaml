@@ -23,7 +23,6 @@ settings:
     enabled: true
     role_retrieval: false
     learning_enabled: false
-    playbook: false
     top_k: 3
     min_score_per_token: 0.0
     second_pass:

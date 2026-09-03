@@ -23,7 +23,6 @@ settings:
     enabled: false
     role_retrieval: false
     learning_enabled: false
-    playbook: false
     second_pass: {enabled: false}
   verify: {enabled: true, health_gate: false, inconclusive_retries: 1}
 holds_constant:

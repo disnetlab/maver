@@ -21,7 +21,6 @@ settings:
     enabled: false
     role_retrieval: false
     learning_enabled: false
-    playbook: false
     second_pass: {enabled: false}
   verify: {enabled: false}
 holds_constant:

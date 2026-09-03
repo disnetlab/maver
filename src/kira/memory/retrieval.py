@@ -13,8 +13,9 @@ behind a seam. See :mod:`kira.memory.ranking`.
 namespace-snapshot lines and tool output, and 84.6% of its body was boilerplate carrying
 no incident-specific token. Boilerplate cannot discriminate between records but does
 dominate a bag-of-words query, so the long query retrieved roughly six times fewer true
-precedents than a short one. The query here is identifiers plus a handful of salient
-observations, one per line.
+precedents than a short one. Nothing here builds a query: a role writes its own, and the
+second pass builds two in :mod:`kira.secondpass.query`, which is where that finding is
+acted on and where the filter it suggests is a knob rather than a default.
 
 **Retrieval may answer "nothing".** Ranked retrieval returns its top-k whether or not
 anything is relevant, and on this corpus roughly 88% of what a role read at k=5 was
@@ -41,54 +42,9 @@ from kira.memory.lifecycle import LIFECYCLE_WEIGHTS, weight_for
 from kira.memory.ports import SearchHit, SearchScope, SessionMemory, TextSearch
 from kira.memory.ranking import Bm25Ranker, Ranker
 
-__all__ = ["Retriever", "build_query"]
+__all__ = ["Retriever"]
 
 _log = logging.getLogger(__name__)
-
-_BOILERPLATE = (
-    "current incident observations",
-    "no data",
-    "not available",
-    "unavailable",
-    "none found",
-    "no results",
-)
-
-
-def build_query(
-    identifiers: Sequence[str],
-    observations: Sequence[str],
-    *,
-    limit: int = 8,
-) -> str:
-    """Compose the query text for an incident.
-
-    Identifiers first, then the most salient observations, one per line. Lines that
-    say nothing incident-specific are dropped: they cannot separate one record from
-    another, and in a bag-of-words query they crowd out the terms that can.
-
-    Args:
-        identifiers: Alert name, namespace, affected resource, and the like.
-        observations: Observation lines, most salient first.
-        limit: How many observation lines to keep. Eight was measured; more stops
-            helping and considerably more actively hurts.
-
-    Returns:
-        The query text, or an empty string when nothing usable was supplied.
-    """
-    lines = [line.strip() for line in identifiers if line and line.strip()]
-    kept = 0
-    for line in observations:
-        if kept >= limit:
-            break
-        text = line.strip()
-        if not text or any(marker in text.lower() for marker in _BOILERPLATE):
-            continue
-        lines.append(text)
-        kept += 1
-    if not lines:
-        return ""
-    return "Current incident observations:\n" + "\n".join(f"- {line}" for line in lines)
 
 
 @dataclass(frozen=True)
@@ -128,7 +84,7 @@ class Retriever:
         """Return the records worth showing, best first, possibly none.
 
         Args:
-            query: The query text, from :func:`build_query`.
+            query: The query text.
             scope: Match against the evidence projection or the lesson.
             exclude: Session ids to withhold. An evaluation harness supplies these so
                 a run cannot retrieve the record its own earlier attempt wrote.

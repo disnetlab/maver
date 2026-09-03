@@ -23,7 +23,6 @@ settings:
     enabled: false
     role_retrieval: false
     learning_enabled: false
-    playbook: false
     second_pass:
       # The gate is the quality audit, not `always`. Its pre-registration is explicit
       # that this arm is identical to MA+S except for one environment value, so a gate

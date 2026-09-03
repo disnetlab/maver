@@ -22,7 +22,6 @@ settings:
     enabled: true
     role_retrieval: true
     learning_enabled: true
-    playbook: true
     top_k: 5
     min_score_per_token: 0.0
     second_pass:
@@ -48,6 +47,10 @@ not_reproducible:
   - >
     Its decoding, for the same reason as the single-agent arm: a frequency penalty of 0.3
     and a 300-second request timeout, both of which belong to a profile of their own.
+  - >
+    Its playbook. The campaign ran with the always-injected Global layer on, and that
+    layer is not in this build — it is absent from the published system description and
+    shipped on and undocumented in the prototype.
 notes: >
   Not one of the manuscript's configurations, and a reproduced negative result: guided
   minus unconditional resampling is -1.7 composite points, CI [-11.1, +7.3]. It varies

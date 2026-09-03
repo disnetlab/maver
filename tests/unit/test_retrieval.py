@@ -7,7 +7,7 @@ import pytest
 from kira.memory import bm25, ranking
 from kira.memory.ports import SearchScope, SessionMemory
 from kira.memory.ranking import Bm25Ranker
-from kira.memory.retrieval import Retriever, build_query
+from kira.memory.retrieval import Retriever
 from kira.settings.groups import MemorySettings
 
 FIXTURE = json.loads(
@@ -112,30 +112,6 @@ def test_the_harness_exclusion_withholds_a_run_s_own_record() -> None:
     retriever = Retriever(text=FakeText(CORPUS), ranker=Bm25Ranker(min_score_per_token=0.0))
     hits = retriever.search("zero endpoints selector checkout", exclude=("s1",))
     assert "s1" not in [h.session_id for h in hits]
-
-
-def test_the_query_is_short_and_drops_boilerplate() -> None:
-    """84.6% of the deployed query's body was lines carrying no incident-specific token.
-
-    They cannot discriminate between records but do dominate a bag-of-words query, so
-    the long query retrieved roughly six times fewer true precedents than a short one.
-    """
-    query = build_query(
-        ["alert=PodCrashLooping", "namespace=shop"],
-        [
-            "frontend restarting",
-            "  ",
-            "no data",
-            "unavailable",
-            *[f"observation {i}" for i in range(20)],
-        ],
-    )
-    lines = query.splitlines()
-    assert lines[0] == "Current incident observations:"
-    assert "- no data" not in lines
-    assert "- unavailable" not in lines
-    # two identifiers plus the eight-line observation budget
-    assert len(lines) == 1 + 2 + 8
 
 
 def test_an_empty_query_retrieves_nothing_rather_than_everything() -> None:

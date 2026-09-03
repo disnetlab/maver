@@ -26,7 +26,7 @@ from kira.memory.ports import (
     TextSearch,
     VectorSearch,
 )
-from kira.memory.retrieval import Retriever, build_query
+from kira.memory.retrieval import Retriever
 
 __all__ = [
     "DEFAULT_LIFECYCLE_WEIGHT",
@@ -49,7 +49,6 @@ __all__ = [
     "SessionStore",
     "TextSearch",
     "VectorSearch",
-    "build_query",
     "check_transition",
     "resolve_weights",
     "weight_for",
