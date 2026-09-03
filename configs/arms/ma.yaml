@@ -14,9 +14,12 @@ registered:
   hypothesis: "baseline against which every optional mechanism is measured"
 settings:
   pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2, auto_snapshot: true}
-  memory:     {enabled: false, learning_enabled: false, playbook: false}
+  memory:
+    enabled: false
+    learning_enabled: false
+    playbook: false
+    second_pass: {enabled: false}
   verify:     {enabled: false}
-  secondpass: {enabled: false}
 holds_constant:
   - model_profile
   - runtime.*

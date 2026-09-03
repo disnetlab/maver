@@ -108,9 +108,13 @@ async def test_the_mechanism_replaces_the_diagnosis_and_keeps_both_runs(
     settings = Settings(
         server=ServerSettings(workdir=tmp_path),
         pipeline=PipelineSettings(),
-        memory=MemorySettings(enabled=True, learning_enabled=False, role_retrieval=False),
+        memory=MemorySettings(
+            enabled=True,
+            learning_enabled=False,
+            role_retrieval=False,
+            second_pass=SecondPassSettings(enabled=True, gate="quality", delivery="context"),
+        ),
         verify=VerifySettings(enabled=False),
-        secondpass=SecondPassSettings(enabled=True, gate="quality", delivery="context"),
     )
     storage = build_storage(settings)
     model = FakeModel()
@@ -155,9 +159,13 @@ async def test_the_helpers_run_on_the_auxiliary_sampling_set(
     performance one."""
     settings = Settings(
         server=ServerSettings(workdir=tmp_path),
-        memory=MemorySettings(enabled=True, learning_enabled=False, role_retrieval=False),
+        memory=MemorySettings(
+            enabled=True,
+            learning_enabled=False,
+            role_retrieval=False,
+            second_pass=SecondPassSettings(enabled=True, gate="quality", delivery="context"),
+        ),
         verify=VerifySettings(enabled=False),
-        secondpass=SecondPassSettings(enabled=True, gate="quality", delivery="context"),
     )
     storage = build_storage(settings)
     model = FakeModel()
@@ -188,9 +196,13 @@ async def test_a_diagnosis_only_task_still_gets_its_second_opinion(
     diagnosis would silently be a different arm."""
     settings = Settings(
         server=ServerSettings(workdir=tmp_path),
-        memory=MemorySettings(enabled=True, learning_enabled=False, role_retrieval=False),
+        memory=MemorySettings(
+            enabled=True,
+            learning_enabled=False,
+            role_retrieval=False,
+            second_pass=SecondPassSettings(enabled=True, gate="quality", delivery="context"),
+        ),
         verify=VerifySettings(enabled=False),
-        secondpass=SecondPassSettings(enabled=True, gate="quality", delivery="context"),
     )
     storage = build_storage(settings)
     model = FakeModel()

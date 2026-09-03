@@ -15,14 +15,17 @@ registered:
   hypothesis: "the MA+S gain is the second look rather than the precedent text"
 settings:
   pipeline:   {mode: multi, max_turns: 20, remediation_retries: 2, auto_snapshot: true}
-  memory:     {enabled: false, learning_enabled: false, playbook: false}
+  memory:
+    enabled: false
+    learning_enabled: false
+    playbook: false
+    second_pass:
+      enabled: true
+      gate: always
+      delivery: none
+      selector_max_tokens: 1600
+      selector_timeout_s: 180
   verify:     {enabled: false}
-  secondpass:
-    enabled: true
-    gate: always
-    delivery: none
-    selector_max_tokens: 1600
-    selector_timeout_s: 180
 holds_constant:
   - model_profile
   - runtime.*

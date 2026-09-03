@@ -27,16 +27,16 @@ settings:
     # arm reproduces admitted every text match. Inheriting the floor here would cut the
     # precedent dose the arm's result is read against.
     min_score_per_token: 0.0
+    second_pass:
+      enabled: true
+      gate: nominator
+      delivery: assignment
+      force: false
+      max_precedents: 6
+      nominator_max_tokens: 900
+      selector_max_tokens: 1600
+      selector_timeout_s: 180
   verify:     {enabled: false}
-  secondpass:
-    enabled: true
-    gate: nominator
-    delivery: assignment
-    force: false
-    max_precedents: 6
-    nominator_max_tokens: 900
-    selector_max_tokens: 1600
-    selector_timeout_s: 180
 holds_constant:
   - model_profile
   - runtime.*

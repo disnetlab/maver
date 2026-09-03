@@ -347,6 +347,123 @@ class RuntimeSettings(SettingsGroup):
         return self
 
 
+class SecondPassSettings(SettingsGroup):
+    """The gated second diagnostic opinion.
+
+    A subgroup of memory rather than a group of its own, because it is one of the two
+    ways a past incident reaches a present one. The other is ``role_retrieval``, where a
+    role calls a retrieval tool itself. Splitting them across two top-level groups made
+    the pair look independent, and the pair is the mechanism.
+    """
+
+    model_config = group_config("memory__second_pass")
+
+    enabled: bool = setting(
+        False,
+        "KIRA_MEMORY__SECOND_PASS__ENABLED",
+        "MEMORY_SECOND_OPINION_ENABLED",
+        description="Allow a second diagnostic run informed by retrieved precedent.",
+    )
+    gate: Literal["quality", "nominator", "always"] = setting(
+        "quality",
+        "KIRA_MEMORY__SECOND_PASS__GATE",
+        "MEMORY_SECOND_OPINION_GATE",
+        description="What decides whether a second pass is warranted.",
+    )
+    delivery: SecondPassDelivery = setting(
+        "context",
+        "KIRA_MEMORY__SECOND_PASS__DELIVERY",
+        "MEMORY_SECOND_OPINION_MODE",
+        description=(
+            "What the second run receives: precedent text, a fault-family assignment "
+            "with no text, or nothing at all, which is the resampling control."
+        ),
+    )
+    force: bool = setting(
+        False,
+        "KIRA_MEMORY__SECOND_PASS__FORCE",
+        "MEMORY_SECOND_OPINION_FORCE",
+        description=(
+            "Deliver an assignment even when the nominator finds no differing family, "
+            "turning the second run into a blind verification pass. Lifts the "
+            "nominator's veto only; it does not override the quality gate."
+        ),
+    )
+    max_precedents: int = setting(
+        6,
+        "KIRA_MEMORY__SECOND_PASS__MAX_PRECEDENTS",
+        description=(
+            "Ceiling on the merged union of the two observation-keyed queries. Six "
+            "reproduces the measured configuration: the campaign ran three hits per "
+            "query with 0.51 mean overlap, for a merged mean of 5.49, so a cap of "
+            "three would deliver roughly half the dose the published cells received."
+        ),
+    )
+    gate_max_tokens: int = setting(
+        600,
+        "KIRA_MEMORY__SECOND_PASS__GATE_MAX_TOKENS",
+        "MEMORY_SECOND_OPINION_QUALITY_MAX_TOKENS",
+        description="Generation cap for the quality gate call.",
+    )
+    nominator_max_tokens: int = setting(
+        900,
+        "KIRA_MEMORY__SECOND_PASS__NOMINATOR_MAX_TOKENS",
+        "MEMORY_SECOND_OPINION_NOMINATOR_MAX_TOKENS",
+        description="Generation cap for the nominator call.",
+    )
+    selector_max_tokens: int = setting(
+        1600,
+        "KIRA_MEMORY__SECOND_PASS__SELECTOR_MAX_TOKENS",
+        "MEMORY_COUNTERFACTUAL_SELECTOR_MAX_TOKENS",
+        description=(
+            "Generation cap for the selector call. Deliberately well under the "
+            "run-wide cap: an unbounded reasoning budget under a frequency penalty "
+            "degenerates rather than deciding better."
+        ),
+    )
+    selector_timeout_s: int = setting(
+        180,
+        "KIRA_MEMORY__SECOND_PASS__SELECTOR_TIMEOUT_S",
+        "MEMORY_COUNTERFACTUAL_SELECTOR_TIMEOUT",
+        description=("Wall-clock bound on the selector; a timeout falls back to the first answer."),
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_delivery_names(cls, data: object) -> object:
+        """Translate the prototype's delivery vocabulary.
+
+        The old names actively misled: ``memory`` and ``context`` were both about
+        memory, and ``resample`` named a mode that deliberately used none. Both old
+        values are still accepted.
+
+        Args:
+            data: The raw input mapping.
+
+        Returns:
+            The input with any legacy delivery value translated.
+        """
+        if not isinstance(data, dict):
+            return data
+        renamed = {"memory": "assignment", "resample": "none"}
+        for key in ("delivery", "MEMORY_SECOND_OPINION_MODE", "KIRA_MEMORY__SECOND_PASS__DELIVERY"):
+            value = data.get(key)
+            if not isinstance(value, str):
+                continue
+            lowered = value.lower()
+            if lowered == "critique":
+                raise ValueError(
+                    "secondpass.delivery='critique' is not a shipped mechanism: it "
+                    "passed precedent text to the second pass verbatim, which breaks "
+                    "the invariant the published second-pass configurations rest on. "
+                    "Use 'context' for precedent text, 'assignment' for a fault-family "
+                    "assignment, or 'none' for the resampling control."
+                )
+            if lowered in renamed:
+                data[key] = renamed[lowered]
+        return data
+
+
 class MemorySettings(SettingsGroup):
     """The experience store and the offline pass that fills it."""
 
@@ -367,6 +484,8 @@ class MemorySettings(SettingsGroup):
             "every agent run stays retrieval-free."
         ),
     )
+    second_pass: SecondPassSettings = Field(default_factory=SecondPassSettings)
+    """The gated second opinion, the mechanism's other adoption path."""
     exclude_record_ids: NameSet = setting(
         frozenset(),
         "KIRA_MEMORY__EXCLUDE_RECORD_IDS",
@@ -496,6 +615,34 @@ class MemorySettings(SettingsGroup):
             )
         return self
 
+    @model_validator(mode="after")
+    def _an_adoption_path_needs_a_readable_store(self) -> "MemorySettings":
+        """Refuse a configuration that delivers experience it cannot read.
+
+        Both paths out of the store are checked in one place because they draw on one
+        store. The resampling control is the exception it looks like: it deliberately
+        uses no memory, which is what makes it the attribution control for the other.
+
+        Returns:
+            The validated group.
+
+        Raises:
+            ValueError: When a path is on with nothing behind it.
+        """
+        if self.second_pass.enabled and self.second_pass.delivery != "none" and not self.enabled:
+            raise ValueError(
+                "memory.second_pass.enabled with delivery != 'none' requires "
+                "memory.enabled: the second pass has no precedent to deliver. Use "
+                "delivery='none' for the resampling control, which is the "
+                "configuration that deliberately uses no memory."
+            )
+        if self.learning_enabled and not self.enabled:
+            raise ValueError(
+                "memory.learning_enabled requires memory.enabled: distilling records "
+                "that nothing can retrieve is work with no consumer."
+            )
+        return self
+
 
 class VerifySettings(SettingsGroup):
     """The independent end-to-end recovery check and its hand-back loop.
@@ -533,117 +680,6 @@ class VerifySettings(SettingsGroup):
             "recovery unconfirmed."
         ),
     )
-
-
-class SecondPassSettings(SettingsGroup):
-    """The gated second diagnostic opinion."""
-
-    model_config = group_config("secondpass")
-
-    enabled: bool = setting(
-        False,
-        "KIRA_SECONDPASS__ENABLED",
-        "MEMORY_SECOND_OPINION_ENABLED",
-        description="Allow a second diagnostic run informed by retrieved precedent.",
-    )
-    gate: Literal["quality", "nominator", "always"] = setting(
-        "quality",
-        "KIRA_SECONDPASS__GATE",
-        "MEMORY_SECOND_OPINION_GATE",
-        description="What decides whether a second pass is warranted.",
-    )
-    delivery: SecondPassDelivery = setting(
-        "context",
-        "KIRA_SECONDPASS__DELIVERY",
-        "MEMORY_SECOND_OPINION_MODE",
-        description=(
-            "What the second run receives: precedent text, a fault-family assignment "
-            "with no text, or nothing at all, which is the resampling control."
-        ),
-    )
-    force: bool = setting(
-        False,
-        "KIRA_SECONDPASS__FORCE",
-        "MEMORY_SECOND_OPINION_FORCE",
-        description=(
-            "Deliver an assignment even when the nominator finds no differing family, "
-            "turning the second run into a blind verification pass. Lifts the "
-            "nominator's veto only; it does not override the quality gate."
-        ),
-    )
-    max_precedents: int = setting(
-        6,
-        "KIRA_SECONDPASS__MAX_PRECEDENTS",
-        description=(
-            "Ceiling on the merged union of the two observation-keyed queries. Six "
-            "reproduces the measured configuration: the campaign ran three hits per "
-            "query with 0.51 mean overlap, for a merged mean of 5.49, so a cap of "
-            "three would deliver roughly half the dose the published cells received."
-        ),
-    )
-    gate_max_tokens: int = setting(
-        600,
-        "KIRA_SECONDPASS__GATE_MAX_TOKENS",
-        "MEMORY_SECOND_OPINION_QUALITY_MAX_TOKENS",
-        description="Generation cap for the quality gate call.",
-    )
-    nominator_max_tokens: int = setting(
-        900,
-        "KIRA_SECONDPASS__NOMINATOR_MAX_TOKENS",
-        "MEMORY_SECOND_OPINION_NOMINATOR_MAX_TOKENS",
-        description="Generation cap for the nominator call.",
-    )
-    selector_max_tokens: int = setting(
-        1600,
-        "KIRA_SECONDPASS__SELECTOR_MAX_TOKENS",
-        "MEMORY_COUNTERFACTUAL_SELECTOR_MAX_TOKENS",
-        description=(
-            "Generation cap for the selector call. Deliberately well under the "
-            "run-wide cap: an unbounded reasoning budget under a frequency penalty "
-            "degenerates rather than deciding better."
-        ),
-    )
-    selector_timeout_s: int = setting(
-        180,
-        "KIRA_SECONDPASS__SELECTOR_TIMEOUT_S",
-        "MEMORY_COUNTERFACTUAL_SELECTOR_TIMEOUT",
-        description=("Wall-clock bound on the selector; a timeout falls back to the first answer."),
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_legacy_delivery_names(cls, data: object) -> object:
-        """Translate the prototype's delivery vocabulary.
-
-        The old names actively misled: ``memory`` and ``context`` were both about
-        memory, and ``resample`` named a mode that deliberately used none. Both old
-        values are still accepted.
-
-        Args:
-            data: The raw input mapping.
-
-        Returns:
-            The input with any legacy delivery value translated.
-        """
-        if not isinstance(data, dict):
-            return data
-        renamed = {"memory": "assignment", "resample": "none"}
-        for key in ("delivery", "MEMORY_SECOND_OPINION_MODE", "KIRA_SECONDPASS__DELIVERY"):
-            value = data.get(key)
-            if not isinstance(value, str):
-                continue
-            lowered = value.lower()
-            if lowered == "critique":
-                raise ValueError(
-                    "secondpass.delivery='critique' is not a shipped mechanism: it "
-                    "passed precedent text to the second pass verbatim, which breaks "
-                    "the invariant the published second-pass configurations rest on. "
-                    "Use 'context' for precedent text, 'assignment' for a fault-family "
-                    "assignment, or 'none' for the resampling control."
-                )
-            if lowered in renamed:
-                data[key] = renamed[lowered]
-        return data
 
 
 class KafkaSettings(SettingsGroup):

@@ -22,7 +22,6 @@ from kira.settings.groups import (
     ObservabilitySettings,
     PipelineSettings,
     RuntimeSettings,
-    SecondPassSettings,
     ServerSettings,
     ToolSettings,
     TransportSettings,
@@ -90,7 +89,6 @@ class Settings(SettingsGroup):
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     verify: VerifySettings = Field(default_factory=VerifySettings)
-    secondpass: SecondPassSettings = Field(default_factory=SecondPassSettings)
     authority: AuthoritySettings = Field(default_factory=AuthoritySettings)
     intake: IntakeSettings = Field(default_factory=IntakeSettings)
     tools: ToolSettings = Field(default_factory=ToolSettings)
@@ -147,22 +145,6 @@ class Settings(SettingsGroup):
         Raises:
             ValueError: When two groups are configured inconsistently.
         """
-        if (
-            self.secondpass.enabled
-            and self.secondpass.delivery != "none"
-            and not self.memory.enabled
-        ):
-            raise ValueError(
-                "secondpass.enabled with delivery != 'none' requires memory.enabled: the "
-                "second pass has no precedent to deliver. Use delivery='none' for the "
-                "resampling control, which is the configuration that deliberately uses "
-                "no memory."
-            )
-        if self.memory.learning_enabled and not self.memory.enabled:
-            raise ValueError(
-                "memory.learning_enabled requires memory.enabled: distilling records "
-                "that nothing can retrieve is work with no consumer."
-            )
         if self.intake.kafka.enabled:
             # The group is configurable because the intake is designed; nothing consumes
             # from it yet. Accepting the flag let it satisfy the check below, so a

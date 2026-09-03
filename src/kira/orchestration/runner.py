@@ -302,7 +302,7 @@ def _nodes(
     second-guessed would be a different role in the arm that does it.
     """
     nodes = {name: make_node(get_role(name), deps) for name in GRAPH_ROLES}
-    policy = policy_for(deployment.settings.secondpass, deployment.settings.memory)
+    policy = policy_for(deployment.settings.memory.second_pass, deployment.settings.memory)
     if policy is not None:
         nodes["rca"] = _second_pass_node(deployment, deps, resources, policy)
     return nodes

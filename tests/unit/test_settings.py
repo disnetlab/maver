@@ -150,6 +150,42 @@ def _apply_companions(field: AliasedField, monkeypatch: pytest.MonkeyPatch) -> N
         monkeypatch.setenv(name, value)
 
 
+class TestExperienceAdoption:
+    """A past incident reaches a present one two ways, and they share one store."""
+
+    def test_both_adoption_paths_live_in_one_group(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A role calling a retrieval tool and the gated second opinion are the two
+        paths, and they were split across two top-level groups — which made a pair that
+        draws on one store, and whose invariants are joint, look independent.
+        """
+        monkeypatch.setenv("KIRA_MEMORY__ROLE_RETRIEVAL", "false")
+        monkeypatch.setenv("KIRA_MEMORY__SECOND_PASS__ENABLED", "true")
+        monkeypatch.setenv("KIRA_MEMORY__SECOND_PASS__GATE", "nominator")
+        memory = load_settings().memory
+        assert (memory.role_retrieval, memory.second_pass.enabled) == (False, True)
+        assert memory.second_pass.gate == "nominator"
+        assert not hasattr(load_settings(), "secondpass")
+
+    def test_the_prototype_names_still_reach_the_nested_field(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regrouping is ours to do; the run scripts are not."""
+        monkeypatch.setenv("MEMORY_SECOND_OPINION_ENABLED", "true")
+        monkeypatch.setenv("MEMORY_SECOND_OPINION_QUALITY_MAX_TOKENS", "1200")
+        second_pass = load_settings().memory.second_pass
+        assert (second_pass.enabled, second_pass.gate_max_tokens) == (True, 1200)
+
+    def test_a_path_with_no_readable_store_behind_it_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Checked by the group that holds both, since both draw on the same store."""
+        monkeypatch.setenv("KIRA_MEMORY__ENABLED", "false")
+        monkeypatch.setenv("KIRA_MEMORY__SECOND_PASS__ENABLED", "true")
+        monkeypatch.setenv("KIRA_MEMORY__SECOND_PASS__DELIVERY", "context")
+        with pytest.raises(ValidationError, match="has no precedent to deliver"):
+            load_settings()
+
+
 class TestValidation:
     def test_postgres_backend_without_a_dsn_fails_at_startup(
         self, monkeypatch: pytest.MonkeyPatch
@@ -203,7 +239,7 @@ class TestValidation:
         monkeypatch.setenv("MEMORY_SECOND_OPINION_MODE", "resample")
         monkeypatch.setenv("MEMORY_ENABLED", "false")
         monkeypatch.setenv("LEARNING_ENABLED", "false")
-        assert load_settings().secondpass.delivery == "none"
+        assert load_settings().memory.second_pass.delivery == "none"
 
     def test_a_service_with_no_intake_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HTTP_INTAKE_ENABLED", "false")
@@ -251,7 +287,7 @@ class TestArmFiles:
         monkeypatch.setenv("KIRA_ARM", "ma-s")
         s = load_settings()
         assert (s.arm, s.pipeline.mode) == ("ma-s", "multi")
-        assert (s.secondpass.enabled, s.secondpass.gate) == (True, "quality")
+        assert (s.memory.second_pass.enabled, s.memory.second_pass.gate) == (True, "quality")
         assert (s.memory.top_k, s.memory.role_retrieval) == (3, False)
 
     def test_the_environment_outranks_the_arm_file(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -266,7 +302,7 @@ class TestArmFiles:
         monkeypatch.setenv("KIRA_MEMORY__TOP_K", "9")
         s = load_settings()
         assert s.memory.top_k == 9
-        assert s.secondpass.gate == "quality", "the rest of the arm still applies"
+        assert s.memory.second_pass.gate == "quality", "the rest of the arm still applies"
 
     def test_a_legacy_name_outranks_the_arm_file(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Required, not incidental: the evaluation run scripts export the flat names.
@@ -319,7 +355,7 @@ class TestLegacyVocabulary:
     ) -> None:
         """`memory` and `context` were both about memory; `resample` used none."""
         monkeypatch.setenv("MEMORY_SECOND_OPINION_MODE", "memory")
-        assert load_settings().secondpass.delivery == "assignment"
+        assert load_settings().memory.second_pass.delivery == "assignment"
 
     def test_legacy_names_in_use_is_derived_from_the_aliases(
         self, monkeypatch: pytest.MonkeyPatch
@@ -478,7 +514,7 @@ class TestRetiredDeliveryMode:
         self, value: str, expected: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("MEMORY_SECOND_OPINION_MODE", value)
-        assert load_settings().secondpass.delivery == expected
+        assert load_settings().memory.second_pass.delivery == expected
 
 
 def test_verification_blindness_is_structural_not_configurable() -> None:
