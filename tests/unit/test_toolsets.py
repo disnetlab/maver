@@ -1,10 +1,12 @@
 import ast
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from kira.audit.journal import Journal
+from kira.settings.groups import ToolSettings
 from kira.tools.allowlists import ROLE_TOOLSETS
 from kira.tools.context import ToolContext
 from kira.tools.toolsets import build_toolset
@@ -29,7 +31,7 @@ class FakeTransport:
 
 
 ALL = frozenset(
-    {"kubernetes", "kubernetes.write", "kubernetes.rollback", "metrics", "logs", "traces", "host"}
+    {"kubernetes", "kubernetes.write", "kubernetes.rollback", "metrics", "logs", "traces"}
 )
 
 
@@ -165,3 +167,24 @@ def test_a_role_offers_what_the_prototype_offered_in_the_order_it_offered_it(rol
     """
     prototype = _prototype_toolsets()[role]
     assert tuple(t for t in prototype if t not in DROPPED[role]) == tuple(ROLE_TOOLSETS[role])
+
+
+def test_node_recovery_is_withheld_when_there_is_no_node_to_reach(tmp_path: Path) -> None:
+    """Every other tool that cannot work is dropped before the run, with the reason
+    recorded, because a tool that errors reads to a model as a fault to work around.
+    Node recovery was the exception: its host allowlist is empty by default and was empty
+    across every measured campaign, so the remediating role was offered a tool that
+    refused every call, and a fault repairable only on the node was recorded as one the
+    agent failed to fix.
+    """
+    withheld = build_toolset("execution", context(tmp_path))
+    assert "ssh_exec" not in {tool.name for tool in withheld.definitions}
+    assert withheld.dropped["ssh_exec"] == "no host-recovery node is configured"
+
+    reachable = context(tmp_path)
+    reachable = replace(
+        reachable, settings=ToolSettings(host_recovery_nodes=frozenset({"worker-1"}))
+    )
+    offered = build_toolset("execution", reachable)
+    assert "ssh_exec" in {tool.name for tool in offered.definitions}
+    assert "ssh_exec" not in offered.dropped

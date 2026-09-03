@@ -546,13 +546,7 @@ def load_settings() -> Settings:
 
 
 def _warn_if_no_node_can_be_recovered(settings: Settings) -> None:
-    """Say out loud that host-level recovery is configured to refuse everything.
-
-    The allowlist is empty by default and nothing else mentions it. The host tool is
-    still offered to the remediating role and its definition is still in that role's
-    prompt, so a fault that can only be repaired on the node itself routes straight to a
-    tool that refuses every call — and the run then ends with the fault still there,
-    recorded as remediation the agent failed at. A whole campaign was measured that way.
+    """Say out loud that this deployment cannot repair anything on a node.
 
     A warning rather than a refusal: most deployments have no worker they can reach over
     SSH, and for them declining node-level recovery is the correct configuration. The
@@ -562,9 +556,9 @@ def _warn_if_no_node_can_be_recovered(settings: Settings) -> None:
     if settings.tools.host_recovery_nodes:
         return
     _log.warning(
-        "no host-recovery node is configured, so ssh_exec will refuse every call and a "
-        "fault that can only be repaired on the node itself will be recorded as one "
-        "this agent failed to fix. Set KIRA_TOOLS__HOST_RECOVERY_NODES to the SSH "
+        "no host-recovery node is configured, so ssh_exec is withheld from the "
+        "remediating role and a fault that can only be repaired on the node itself will "
+        "end the incident unfixed. Set KIRA_TOOLS__HOST_RECOVERY_NODES to the SSH "
         "aliases of the nodes this deployment may act on."
     )
 

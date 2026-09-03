@@ -25,13 +25,18 @@ Capability = Literal[
     "metrics",
     "logs",
     "traces",
-    "host",
 ]
 """What a transport can serve.
 
 Split finely enough that a real gap is expressible. ``kubernetes.rollback`` is separate
 from ``kubernetes.write`` because replaying an inverse command needs a journal of what
 was applied, which a transport talking straight to an API server does not keep.
+
+There is no word here for reaching a node. Host recovery runs a command over SSH from
+this process rather than through a transport, so what decides whether it is available is
+the deployment's node allowlist and not the bound environment. A vocabulary word no
+transport serves and no tool requires is a gap that cannot be expressed, dressed as one
+that can.
 """
 
 CAPABILITIES: frozenset[str] = frozenset(
@@ -42,7 +47,6 @@ CAPABILITIES: frozenset[str] = frozenset(
         "metrics",
         "logs",
         "traces",
-        "host",
     }
 )
 """The declared vocabulary, used to reject a typo in a tool's ``requires`` at import.
