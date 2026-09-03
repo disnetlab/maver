@@ -1,5 +1,6 @@
 import pytest
 
+from kira.settings.groups import ToolSettings
 from kira.tools.kubernetes import (
     KubernetesPolicy,
     _append_delete_wait_false,
@@ -160,6 +161,41 @@ def test_cluster_wide_reads_are_scoping_not_safety_and_can_be_turned_off() -> No
     assert classify(tokenize("kubectl get pods -A"), POLICY) == "blocked"
     open_policy = KubernetesPolicy(deny_all_namespaces=False)
     assert classify(tokenize("kubectl get pods -A"), open_policy) == "read"
+
+
+def test_the_argument_screen_is_a_knob_and_says_which_kind_it_is() -> None:
+    """It refuses reads and writes alike, before the verb is read, so a real cluster
+    with a namespace matching it cannot be operated through this agent at all.
+
+    That makes it an evaluation-integrity setting rather than a safety rule, and the
+    prototype hard-coded it with no way to clear it. The default is the pattern every
+    published measurement was taken under.
+    """
+    assert KubernetesPolicy.from_settings(ToolSettings()).denies_argument("chaos-mesh")
+
+    lifted = KubernetesPolicy.from_settings(ToolSettings(kubectl_denied_argument_pattern=""))
+    assert not lifted.denies_argument("chaos-mesh")
+
+    renamed = KubernetesPolicy.from_settings(
+        ToolSettings(kubectl_denied_argument_pattern="fault-injector")
+    )
+    assert renamed.denies_argument("FAULT-INJECTOR-0") and not renamed.denies_argument("chaos-mesh")
+
+
+def test_the_gate_classifies_under_the_screens_this_deployment_actually_runs() -> None:
+    """A classifier reading the shipped screens while the dispatch reads the
+    deployment's disagree the moment an operator changes one — and disagree in the
+    dangerous direction. A screen the deployment had lifted still classified as
+    `blocked`, which is the one class the gate passes straight through on the grounds
+    that the tool will refuse it. The tool no longer would.
+    """
+    write = {"cmd": "kubectl delete deployment chaos-controller -n chaos-mesh"}
+    assert kubectl_authority(write, ToolSettings()) == "blocked"
+    assert kubectl_authority(write, ToolSettings(kubectl_denied_argument_pattern="")) == "write"
+
+    read = {"cmd": "kubectl get pods -A"}
+    assert kubectl_authority(read, ToolSettings()) == "blocked"
+    assert kubectl_authority(read, ToolSettings(kubectl_deny_all_namespaces=False)) == "read"
 
 
 @pytest.mark.parametrize("arguments", [{}, {"cmd": ""}, {"cmd": "   "}, {"cmd": None}])

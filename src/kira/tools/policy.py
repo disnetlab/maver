@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from kira.settings.groups import ToolSettings
+
 __all__ = ["ActionClass", "ToolPolicy", "policy_for", "register_policy"]
 
 
@@ -52,7 +54,16 @@ def _default_stage_refusal(stage: str) -> str:
 class ToolPolicy:
     """How the gate reasons about one tool."""
 
-    classify: Callable[[Mapping[str, Any]], ActionClass]
+    classify: Callable[[Mapping[str, Any], ToolSettings], ActionClass]
+    """Says what one call is asking for, under this deployment's tool settings.
+
+    The settings are a parameter rather than a module default because some of what a
+    tool refuses is configurable. A classifier reading the shipped default while the
+    dispatch reads the deployment's would disagree the moment an operator changed one:
+    a screen the deployment had lifted still classified as ``BLOCKED``, the gate passed
+    it through expecting the tool to refuse it, and the tool ran it with no authority
+    decision anywhere.
+    """
     write_stages: frozenset[str] = field(default_factory=frozenset)
     summarise: Callable[[Mapping[str, Any]], str] = repr
     selectors: Callable[[Mapping[str, Any]], tuple[str, ...]] = _no_selectors
@@ -99,7 +110,7 @@ def read_only(tool_name: str) -> None:
     Args:
         tool_name: The tool.
     """
-    register_policy(tool_name, ToolPolicy(classify=lambda _: ActionClass.READ))
+    register_policy(tool_name, ToolPolicy(classify=lambda _args, _tools: ActionClass.READ))
 
 
 def always_writes(tool_name: str, *, stages: frozenset[str], refusal: Callable[[str], str]) -> None:
@@ -113,7 +124,7 @@ def always_writes(tool_name: str, *, stages: frozenset[str], refusal: Callable[[
     register_policy(
         tool_name,
         ToolPolicy(
-            classify=lambda _: ActionClass.WRITE,
+            classify=lambda _args, _tools: ActionClass.WRITE,
             write_stages=stages,
             summarise=lambda args: " ".join(f"{k}={v}" for k, v in sorted(args.items())),
             stage_refusal=refusal,

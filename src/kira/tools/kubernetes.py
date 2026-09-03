@@ -14,8 +14,10 @@ import re
 import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any
 
+from kira.settings.groups import ToolSettings
 from kira.tools.context import ToolContext, deliver, redact
 from kira.tools.errors import OUTPUT_LIMIT, tool_error
 from kira.tools.policy import ActionClass, ToolPolicy, register_policy
@@ -97,8 +99,23 @@ class KubernetesPolicy:
     """Arguments the model may not name.
 
     A benchmark that injects faults with a named controller leaks the answer to anyone
-    who can query that controller's resources, which turns diagnosis into a lookup.
+    who can query that controller's resources, which turns diagnosis into a lookup. An
+    integrity knob, then, not a safety rule — and it refuses reads and writes alike, so
+    a real cluster whose own namespaces match it cannot be operated through this agent
+    until the pattern is cleared.
     """
+
+    @classmethod
+    def from_settings(cls, tools: ToolSettings) -> "KubernetesPolicy":
+        """Read the deployment's screens.
+
+        Args:
+            tools: The tool-layer settings this run carries.
+
+        Returns:
+            The policy this deployment refuses under.
+        """
+        return _policy(tools.kubectl_deny_all_namespaces, tools.kubectl_denied_argument_pattern)
 
     def denies_flag(self, arg: str) -> bool:
         """Report whether a flag is refused outright.
@@ -128,7 +145,18 @@ class KubernetesPolicy:
         return bool(self.denied_argument_pattern.search(arg))
 
 
+@lru_cache(maxsize=8)
+def _policy(deny_all_namespaces: bool, pattern: str | None) -> KubernetesPolicy:
+    """Build one policy per distinct configuration, since it is read on every call."""
+    return KubernetesPolicy(
+        deny_all_namespaces=deny_all_namespaces,
+        denied_argument_pattern=re.compile(pattern, re.IGNORECASE) if pattern else None,
+    )
+
+
 DEFAULT_POLICY = KubernetesPolicy()
+"""The shipped screens, for a caller with no settings to read. Every call site inside
+the package reads the deployment's instead."""
 
 
 def tokenize(cmd: str) -> list[str]:
@@ -221,11 +249,13 @@ def classify(argv: Sequence[str], policy: KubernetesPolicy = DEFAULT_POLICY) -> 
     return "write"  # unknown verb fails closed
 
 
-def kubectl_authority(arguments: Mapping[str, Any]) -> Authority:
+def kubectl_authority(arguments: Mapping[str, Any], tools: ToolSettings | None = None) -> Authority:
     """Classify a pending call for the approval gate.
 
     Args:
         arguments: The model's arguments.
+        tools: The deployment's tool settings, so this reads the same screens the
+            dispatch will. None falls back to the shipped ones.
 
     Returns:
         What the call is asking for. A call carrying no readable command is classified
@@ -237,7 +267,8 @@ def kubectl_authority(arguments: Mapping[str, Any]) -> Authority:
     command = str(arguments.get("cmd") or "").strip()
     if not command:
         return "write"
-    return classify(tokenize(command))
+    policy = KubernetesPolicy.from_settings(tools) if tools is not None else DEFAULT_POLICY
+    return classify(tokenize(command), policy)
 
 
 def _bare_shell_operator(argv: Sequence[str]) -> str | None:
@@ -373,7 +404,7 @@ async def exec_kubectl_cmd_safely(ctx: ToolContext, cmd: str, save_as: str | Non
         The command's output, or a refusal beginning with ``error:``.
     """
     argv = tokenize(cmd)
-    refusal = _reject(argv, DEFAULT_POLICY)
+    refusal = _reject(argv, KubernetesPolicy.from_settings(ctx.settings))
     if refusal is not None:
         return refusal
 
@@ -403,7 +434,7 @@ async def read_kubectl(ctx: ToolContext, cmd: str) -> str:
     argv = tokenize(cmd)
     if not argv:
         return tool_error("unsupported kubectl command shape for read-only snapshot")
-    if classify(argv, DEFAULT_POLICY) != "read":
+    if classify(argv, KubernetesPolicy.from_settings(ctx.settings)) != "read":
         return tool_error("read_kubectl only runs read-only kubectl")
     return redact(ctx.evidence, await ctx.transport.kubectl(argv))
 
@@ -510,7 +541,7 @@ def _targets(arguments: Mapping[str, Any]) -> tuple[str, ...]:
 register_policy(
     "exec_kubectl_cmd_safely",
     ToolPolicy(
-        classify=lambda args: _ACTION_BY_AUTHORITY[kubectl_authority(args)],
+        classify=lambda args, tools: _ACTION_BY_AUTHORITY[kubectl_authority(args, tools)],
         write_stages=frozenset({"execution", "single.mitigation"}),
         # The whole command, not a preview. An operator who cannot see the patch body
         # is not reviewing anything.

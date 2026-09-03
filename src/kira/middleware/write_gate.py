@@ -22,13 +22,14 @@ from kira.middleware.authority import ActionRequest, ApprovalPending, Authority
 from kira.middleware.base import ToolHandler, ToolRequest
 from kira.middleware.human_approval import take_grant
 from kira.settings.authority import AuthoritySettings, Mode
+from kira.settings.groups import ToolSettings
 from kira.tools.policy import ActionClass, ToolPolicy, policy_for
 
 __all__ = ["WriteGate"]
 
 _log = logging.getLogger(__name__)
 
-_UNCLASSIFIED = ToolPolicy(classify=lambda _: ActionClass.WRITE)
+_UNCLASSIFIED = ToolPolicy(classify=lambda _args, _tools: ActionClass.WRITE)
 """What an unregistered tool gets. A tool nobody classified is a tool nobody vouched for."""
 
 
@@ -42,6 +43,7 @@ class WriteGate:
         *,
         authorities: Mapping[Mode, Authority],
         settings: AuthoritySettings,
+        tools: ToolSettings,
         journal: Journal,
     ) -> None:
         """Build the gate.
@@ -53,10 +55,15 @@ class WriteGate:
                 to ``prompt``, which is the whole point of having rules, has to reach a
                 different decider than the global mode chose.
             settings: The policy rules and the stages allowed to write.
+            tools: The tool-layer settings, so a classifier reads the same screens the
+                dispatch will. Some of what a tool refuses is configurable, and a gate
+                classifying against the shipped default would pass a call through as
+                already-refused that the deployment had in fact permitted.
             journal: Where decisions are recorded.
         """
         self._authorities = dict(authorities)
         self._settings = settings
+        self._tools = tools
         self._journal = journal
 
     def _record(
@@ -105,7 +112,7 @@ class WriteGate:
         arguments: Mapping[str, Any] = request.arguments
 
         try:
-            action = policy.classify(arguments)
+            action = policy.classify(arguments, self._tools)
         except Exception as exc:  # a classifier that cannot answer has not said "yes"
             _log.warning("policy for %s failed to classify and was denied", request.name)
             self._record(

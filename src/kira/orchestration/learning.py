@@ -119,6 +119,7 @@ async def run_learning(
                         WriteGate(
                             authorities=deployment.authorities,
                             settings=deployment.settings.authority,
+                            tools=deployment.settings.tools,
                             journal=journal,
                         ),
                         *deployment.hooks,

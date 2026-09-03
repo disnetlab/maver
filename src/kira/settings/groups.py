@@ -10,6 +10,7 @@ prototype used, so the existing evaluation run scripts keep working unchanged. D
 fail closed.
 """
 
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -763,6 +764,52 @@ class ToolSettings(SettingsGroup):
         "HOST_RECOVERY_ALLOWED_NODES",
         description="Nodes reachable for host-level recovery. Empty disables it.",
     )
+    kubectl_deny_all_namespaces: bool = setting(
+        True,
+        "KIRA_TOOLS__KUBECTL_DENY_ALL_NAMESPACES",
+        description=(
+            "Refuse cluster-wide kubectl reads. This is incident scoping and not a "
+            "safety property — a cluster-wide read is routine for a real operator — so "
+            "it defaults to the behaviour every published measurement was taken under "
+            "and an operator can turn it off."
+        ),
+    )
+    kubectl_denied_argument_pattern: str | None = setting(
+        "chaos",
+        "KIRA_TOOLS__KUBECTL_DENIED_ARGUMENT_PATTERN",
+        description=(
+            "Case-insensitive regular expression searched in every argument of every "
+            "kubectl call, before the verb is read. An evaluation-integrity knob, not a "
+            "safety rule: a benchmark that injects faults with a named controller leaks "
+            "the answer to anyone who can query that controller's resources, which "
+            "turns diagnosis into a lookup. It refuses reads and writes alike, so a "
+            "cluster whose own namespaces match it cannot be operated through this "
+            "agent at all — set it empty there. The default is the pattern every "
+            "published measurement was taken under."
+        ),
+    )
+
+    @field_validator("kubectl_denied_argument_pattern", mode="after")
+    @classmethod
+    def _pattern_compiles(cls, value: str | None) -> str | None:
+        """Reject an unusable expression at startup rather than at the first kubectl.
+
+        Args:
+            value: The configured pattern.
+
+        Returns:
+            The pattern, or None where it is empty.
+
+        Raises:
+            ValueError: When the expression will not compile.
+        """
+        if not value:
+            return None
+        try:
+            re.compile(value)
+        except re.error as exc:
+            raise ValueError(f"kubectl_denied_argument_pattern is not a regexp: {exc}") from exc
+        return value
 
 
 class TransportSettings(SettingsGroup):

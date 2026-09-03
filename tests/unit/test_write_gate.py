@@ -14,6 +14,7 @@ from kira.middleware.authority import (
 from kira.middleware.base import ToolRequest
 from kira.middleware.write_gate import WriteGate
 from kira.settings.authority import AuthorityRule, AuthoritySettings
+from kira.settings.groups import ToolSettings
 from kira.tools import kubernetes  # noqa: F401 - registers the kubectl policy
 from kira.tools.policy import policy_for
 
@@ -50,10 +51,16 @@ class NeverAnswers:
         )
 
 
-def gate(settings: AuthoritySettings, sink: ListSink, human: Authority | None = None) -> WriteGate:
+def gate(
+    settings: AuthoritySettings,
+    sink: ListSink,
+    human: Authority | None = None,
+    tools: ToolSettings | None = None,
+) -> WriteGate:
     return WriteGate(
         authorities={"auto": AutoApprove(), "deny": DenyAll(), "prompt": human or NeverAnswers()},
         settings=settings,
+        tools=tools or ToolSettings(),
         journal=Journal(sink, session_id="s1", stage="execution"),
     )
 
@@ -276,6 +283,34 @@ async def test_the_first_matching_rule_wins() -> None:
         call("kubectl delete pod x -n shop"), handler
     )
     assert result.content == DISPATCHED
+
+
+async def test_a_screen_the_deployment_lifted_does_not_send_a_write_past_the_gate() -> None:
+    """`blocked` is the one class the gate passes straight through, on the grounds that
+    the tool refuses it in its own wording. That reasoning holds only while the gate and
+    the tool read the same screens.
+
+    The kubectl argument screen is configurable — it is an evaluation-integrity knob and
+    a real cluster may have to clear it — and a gate classifying against the shipped
+    pattern would call this `blocked`, pass it through, and hand a cluster write to a
+    tool that no longer refuses it, with no authority decision anywhere.
+    """
+    lifted = ToolSettings(kubectl_denied_argument_pattern="")
+    sink = ListSink()
+    result = await gate(AuthoritySettings(mode="deny"), sink, tools=lifted).wrap_tool_call(
+        call("kubectl delete deployment chaos-controller -n chaos-mesh"), handler
+    )
+    assert result.content == "denied by HITL gate: writes are disabled"
+    assert [d.decision for d in decisions(sink)] == ["denied"]
+
+    # With the shipped pattern the tool still refuses it, in its own wording, and the
+    # gate still stays out of the way.
+    sink = ListSink()
+    result = await gate(AuthoritySettings(mode="deny"), sink).wrap_tool_call(
+        call("kubectl delete deployment chaos-controller -n chaos-mesh"), handler
+    )
+    assert result.content == DISPATCHED  # passed through to the tool, which refuses it
+    assert decisions(sink) == []
 
 
 # --- failing closed ---------------------------------------------------------------

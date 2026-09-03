@@ -463,6 +463,7 @@ def _context_builder(
                     WriteGate(
                         authorities=deployment.authorities,
                         settings=deployment.settings.authority,
+                        tools=deployment.settings.tools,
                         journal=journal,
                     ),
                     *deployment.hooks,
@@ -823,6 +824,7 @@ async def _replay(
             WriteGate(
                 authorities=deployment.authorities,
                 settings=deployment.settings.authority,
+                tools=deployment.settings.tools,
                 journal=journal,
             ),
             *deployment.hooks,
