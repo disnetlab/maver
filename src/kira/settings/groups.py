@@ -585,6 +585,29 @@ class MemorySettings(SettingsGroup):
             "zero here rather than inheriting a floor that would cut its dose."
         ),
     )
+    mask_identifiers: bool = setting(
+        False,
+        "KIRA_MEMORY__MASK_IDENTIFIERS",
+        description=(
+            "Replace an incident's own resource and namespace names with type "
+            "placeholders before a record is indexed, so a lesson about one application "
+            "can be retrieved for the same fault on another. Screened over three corpus "
+            "snapshots: recall@5 for cross-application precedents rose 0.455 to 0.475, "
+            "0.433 to 0.448 and 0.417 to 0.500, at a cost of 0.005-0.027 same-family "
+            "recall. Off, because it changes every stored record and no published "
+            "measurement was taken with it on."
+        ),
+    )
+    mask_namespaces: NameSet = setting(
+        frozenset(),
+        "KIRA_MEMORY__MASK_NAMESPACES",
+        description=(
+            "Further namespaces masked alongside the incident's own, for a deployment "
+            "running more than one application. Only read when mask_identifiers is on. "
+            "Supplied rather than known: the prototype carried its benchmark's three "
+            "namespaces as a constant inside the memory layer."
+        ),
+    )
     ranker: str = setting(
         "bm25",
         "KIRA_MEMORY__RANKER",

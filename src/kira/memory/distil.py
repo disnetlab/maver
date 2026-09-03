@@ -18,6 +18,7 @@ from typing import Any
 from kira.contracts.artifacts import LearningPacket, LearningResult
 from kira.memory.ports import SessionMemory, SessionStore, TextSearch
 from kira.memory.projections import build_projections
+from kira.settings.groups import MemorySettings
 
 __all__ = ["distil"]
 
@@ -30,6 +31,7 @@ def distil(
     *,
     index: TextSearch,
     sessions: SessionStore,
+    settings: MemorySettings | None = None,
 ) -> SessionMemory:
     """Write one incident's lesson into the corpus and mark the session distilled.
 
@@ -39,10 +41,14 @@ def distil(
         index: The corpus. Which campaign's corpus it is was decided when the store
             was opened, so nothing here has to carry it.
         sessions: Where the session lives, so it can be marked distilled.
+        settings: The memory group, which decides whether this record is indexed under
+            its own identifiers or under placeholders. None uses the shipped defaults,
+            which is what a caller with nothing to say about it has.
 
     Returns:
         The record that was written.
     """
+    memory = settings if settings is not None else MemorySettings()
     alert = dict(packet.alert)
     root_cause = packet.root_cause or {}
     projections = build_projections(
@@ -50,9 +56,11 @@ def distil(
         alert=alert,
         external_feedback=packet.external_feedback,
         evidence_observations=_pre_feedback_observations(packet),
+        mask_identifiers=memory.mask_identifiers,
+        mask_namespaces=sorted(memory.mask_namespaces),
         affected_resource=str(root_cause.get("affected_resource") or ""),
     )
-    memory = SessionMemory(
+    record = SessionMemory(
         session_id=packet.session_id,
         evidence_text=projections.evidence_text,
         lesson_text=projections.lesson_text,
@@ -69,10 +77,10 @@ def distil(
         corrected_cause=projections.corrected_cause,
         **_evaluation(packet.external_feedback),
     )
-    index.upsert_summary(memory)
+    index.upsert_summary(record)
     sessions.mark_distilled(packet.session_id)
     _log.info("distilled session %s into the corpus", packet.session_id)
-    return memory
+    return record
 
 
 def _verdict(result: LearningResult, packet: LearningPacket) -> str:

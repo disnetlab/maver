@@ -325,3 +325,31 @@ def test_evidence_text_uses_the_observations_the_caller_supplies() -> None:
 
     fallback = build_projections(LearningResult(**result()), evidence_observations=None, **args)
     assert "model-written observation" in fallback.evidence_text
+
+
+def test_the_namespaces_masked_beside_the_incident_s_own_are_supplied_not_known() -> None:
+    """The prototype carried its benchmark's three namespaces as a constant inside the
+    memory layer, so a deployment could not name its own applications and the core knew
+    a benchmark's vocabulary. Which applications exist is not something this layer can
+    be told at import."""
+    result = LearningResult(
+        **{
+            **CASES[0]["result"],
+            "discriminator": "checkout in astronomy-shop stayed Ready=False.",
+        }
+    )
+    kwargs: dict[str, Any] = {
+        "alert": ALERT,
+        "external_feedback": None,
+        "evidence_observations": OBSERVATIONS,
+        "mask_identifiers": True,
+    }
+
+    unnamed = build_projections(result, **kwargs)
+    assert "astronomy-shop" in unnamed.lesson_text
+
+    named = build_projections(result, mask_namespaces=("astronomy-shop",), **kwargs)
+    assert "astronomy-shop" not in named.lesson_text
+    assert "<namespace>" in named.lesson_text
+    # The incident's own namespace is masked either way; naming others only adds to it.
+    assert "social-network" not in unnamed.lesson_text

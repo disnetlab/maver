@@ -145,6 +145,7 @@ async def run_learning(
         outcome.artifact,
         index=deployment.storage.index,
         sessions=deployment.storage.sessions,
+        settings=deployment.settings.memory,
     )
     return "distilled"
 

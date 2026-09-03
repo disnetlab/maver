@@ -29,13 +29,6 @@ __all__ = ["FeedbackDepth", "MemoryProjections", "build_projections"]
 FeedbackDepth = Literal["none", "scores", "details"]
 """How much external evaluation the session's feedback carried."""
 
-# Namespaces of the benchmark applications. A memory written about one app is only
-# reusable on another if the app's own names do not dominate its tokens.
-_APP_NAMESPACES = (
-    "astronomy-shop", "hotel-reservation", "social-network",
-    "astronomy_shop", "hotel_reservation", "social_network",
-)  # fmt: skip
-
 
 @dataclass(frozen=True, slots=True)
 class MemoryProjections:
@@ -51,6 +44,14 @@ class MemoryProjections:
             verdicts alone (``scores``), or was absent (``none``).
         authoritative_correction: Whether ``corrected_cause`` came from an external
             source rather than from the model's own account of the session.
+
+    The last two are the working values behind the two above them and are returned
+    rather than stored, because the stored record already answers the question they
+    exist for: a correction is authoritative exactly when ``corrected_cause`` is set and
+    ``evaluation_source`` is not empty. A grader that sends a reference cause for a cell
+    it graded *correct* leaves no trace of having done so, which is the one distinction
+    the record cannot recover and the one nothing reads: that correction is discarded
+    here, so it never reaches the corpus either way.
     """
 
     evidence_text: str
@@ -79,7 +80,9 @@ def _feedback_components(feedback: Mapping[str, Any] | None) -> tuple[bool | Non
     )
 
 
-def _mask_identifiers(text: str, alert: Mapping[str, Any], resource: str) -> str:
+def _mask_identifiers(
+    text: str, alert: Mapping[str, Any], resource: str, also: Sequence[str] = ()
+) -> str:
     """Replace this incident's own identifiers with type placeholders.
 
     A lesson phrased around `user-service` in `social-network` shares almost no tokens
@@ -98,7 +101,9 @@ def _mask_identifiers(text: str, alert: Mapping[str, Any], resource: str) -> str
     same-application (often same-problem) matches which a split removes anyway.
 
     Deliberately uses only the row's own fields — no corpus-wide statistics — so it runs
-    at write time.
+    at write time. ``also`` is the exception, and it is supplied rather than known:
+    the prototype carried the three benchmark namespaces as a constant here, which is a
+    benchmark's vocabulary sitting in the layer that must not know one.
     """
     if not text:
         return text
@@ -114,8 +119,10 @@ def _mask_identifiers(text: str, alert: Mapping[str, Any], resource: str) -> str
     namespace = " ".join(str(alert.get("namespace") or "").split())
     if len(namespace) > 2:
         out = re.sub(rf"\b{re.escape(namespace)}\b", "<namespace>", out)
-    for ns in _APP_NAMESPACES:
-        out = re.sub(rf"\b{re.escape(ns)}\b", "<namespace>", out)
+    for other in also:
+        cleaned = " ".join(str(other).split())
+        if len(cleaned) > 2:
+            out = re.sub(rf"\b{re.escape(cleaned)}\b", "<namespace>", out)
     return out
 
 
@@ -126,6 +133,7 @@ def build_projections(
     external_feedback: Mapping[str, Any] | None,
     evidence_observations: Sequence[str] | None = None,
     mask_identifiers: bool = False,
+    mask_namespaces: Sequence[str] = (),
     affected_resource: str = "",
 ) -> MemoryProjections:
     """Render the two searchable documents without generative role ambiguity.
@@ -151,6 +159,9 @@ def build_projections(
         mask_identifiers: Whether to replace this incident's own resource and namespace
             names with type placeholders. Off in every published measurement; it changes
             every stored record, so it is a deliberate arm rather than a default.
+        mask_namespaces: Other namespaces to replace as well, for a deployment running
+            more than one application. Supplied rather than known, because which
+            applications exist is not something the memory layer can be told at import.
         affected_resource: The resource this incident was localised to, used only when
             masking. Empty falls back to the alert's service.
 
@@ -269,8 +280,8 @@ def build_projections(
     lesson_text = "\n".join(lesson_lines).strip()
     if mask_identifiers:
         resource = _clean(affected_resource) or _clean(alert.get("service"))
-        evidence_text = _mask_identifiers(evidence_text, alert, resource)
-        lesson_text = _mask_identifiers(lesson_text, alert, resource)
+        evidence_text = _mask_identifiers(evidence_text, alert, resource, mask_namespaces)
+        lesson_text = _mask_identifiers(lesson_text, alert, resource, mask_namespaces)
 
     return MemoryProjections(
         evidence_text=evidence_text,
