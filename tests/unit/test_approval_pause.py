@@ -8,6 +8,7 @@ measured run. These are the tests that make it a mechanism rather than a claim.
 import json
 import pathlib
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -640,6 +641,49 @@ async def test_a_decision_recorded_in_the_store_is_noticed(
 
         assert await jobs.sweep_decided_approvals() == "resumed 1"
         assert scheduled == [request_id]
+    finally:
+        jobs.unbind_deployment()
+    deploy.storage.close()
+
+
+async def test_a_request_whose_timeout_was_never_armed_still_expires(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Arming the expiry job can fail, and the pause deliberately survives it: losing the
+    write would be worse than a request with no expiry. Nothing then ever looked at that
+    request again — not the expiry job, which was never scheduled, and not the sweep,
+    which read only requests already decided. The session waited for a person forever,
+    which is the outcome the timeout's own default exists to prevent.
+
+    The deadline is on the record, so the sweep reads it.
+    """
+    deploy, _, _ = await park(tmp_path)
+    approvals, sessions = deploy.storage.approvals, deploy.storage.sessions
+
+    session = sessions.create_session({"alertname": "Overdue", "namespace": "shop"})
+    approvals.create_request(
+        ApprovalRecord(
+            request_id="never-armed",
+            session_id=session.session_id,
+            kind="tool_call",
+            stage="execution",
+            status="pending",
+            summary="kubectl delete pod checkout-0 -n shop",
+            payload={},
+            expires_at=(datetime.now(UTC) - timedelta(hours=2)).isoformat(),
+        )
+    )
+    sessions.set_run_status(
+        session.session_id, RunStatus.AWAITING_HUMAN, awaiting_request_id="never-armed"
+    )
+
+    scheduled: list[str] = []
+    monkeypatch.setattr(jobs, "schedule_approval_resume", scheduled.append)
+    jobs.bind_deployment(deploy)
+    try:
+        assert await jobs.sweep_decided_approvals() == "resumed 1"
+        assert scheduled == ["never-armed"]
+        assert approvals.get_request("never-armed").status == "timed_out"
     finally:
         jobs.unbind_deployment()
     deploy.storage.close()

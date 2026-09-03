@@ -198,15 +198,21 @@ async def _release_abandoned(session_id: str, adapter_name: str, deployment: Dep
 
 
 async def sweep_decided_approvals(**_: Any) -> str:
-    """Continue any incident whose decision was recorded somewhere this process saw.
+    """Continue any incident whose request has been settled, however it was settled.
 
     Three ways to decide were offered, and only one of them worked. The API route
     schedules the continuation itself, but the CLI's default path writes to the store
     directly — deliberately, because that is what works from inside a pod with no port
     open — and a webhook could do the same. Those decisions were durable, correct, and
     inert: the operator saw the approval recorded, and the incident stayed parked with
-    nothing left to wake it. Not even the expiry sweep, which passes over a request that
-    has already been decided.
+    nothing left to wake it.
+
+    Expiry is settled here too, rather than only by the job armed when the request was
+    raised. Arming that job can fail — the pause deliberately survives it, because losing
+    the write would be worse than a request with no expiry — and nothing else ever looked
+    at a pending request again. The deadline is on the record, so the sweep reads it, and
+    the timeout becomes a property of what is stored rather than of a job having been
+    successfully scheduled.
 
     So the store is the source of truth for a decision, and this is what notices one. The
     setting that says how often has existed since the beginning, describing exactly this.
@@ -220,6 +226,11 @@ async def sweep_decided_approvals(**_: Any) -> str:
     deployment = bound_deployment()
     sessions = deployment.storage.sessions
     resumed = 0
+    for record in deployment.storage.approvals.expire_due(now=datetime.now(UTC).isoformat()):
+        _log.info(
+            "approval %s passed its deadline with no decision and no armed timeout",
+            record.request_id,
+        )
     for status in ("approved", "denied", "timed_out"):
         for record in deployment.storage.approvals.list_requests(status=status):
             session = sessions.get_session(record.session_id)
