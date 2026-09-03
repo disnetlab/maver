@@ -25,6 +25,7 @@ import pytest
 
 from kira.api.app import build_deployment, create_app
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from kira.orchestration import jobs
 from kira.settings.root import load_settings, reset_settings
 
 # Deliberately unmarked. The `integration` marker means a live cluster, database or
@@ -69,8 +70,11 @@ EXECUTION: dict[str, Any] = {
 }
 
 FAKE_KUBECTL = """#!/bin/sh
-# Answers every read the same way. What matters here is that a real binary was found,
-# invoked with the argv the tool built, and its stdout came back through the transport.
+# Answers every read the same way, and records the fact that it ran. What matters here
+# is that a real binary was found, invoked with the argv the tool built, its stdout came
+# back through the transport — and, for the approval drill, that it ran exactly as often
+# as a person allowed.
+echo "$@" >> "$TEST_KUBECTL_LOG"
 echo "NAME   TYPE        CLUSTER-IP   PORT(S)"
 echo "user   ClusterIP   10.0.0.1     80/TCP"
 """
@@ -112,7 +116,13 @@ class ScriptedModel:
             )
         if first and caller in {"rca", "execution"}:
             name: str = "exec_kubectl_cmd_safely"
-            arguments: dict[str, Any] = {"cmd": "kubectl get svc user -n shop"}
+            # A read while diagnosing and a write while remediating, which is what makes
+            # the approval gate fire in exactly one place.
+            arguments: dict[str, Any] = {
+                "cmd": "kubectl get svc user -n shop"
+                if caller == "rca"
+                else 'kubectl patch svc user -n shop -p \'{"spec":{"ports":[{"targetPort":8080}]}}\''
+            }
         else:
             name, arguments = submissions[caller]
         return ModelResponse(
@@ -141,6 +151,7 @@ def deployment(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     binary.write_text(FAKE_KUBECTL, encoding="utf-8")
     binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{binary.parent}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("TEST_KUBECTL_LOG", str(tmp_path / "kubectl.log"))
 
     monkeypatch.setenv("KIRA_SERVER__WORKDIR", str(tmp_path / "workspace"))
     monkeypatch.setenv("KIRA_MEMORY__ENABLED", "false")
@@ -248,3 +259,69 @@ async def test_every_mechanism_composes_on_the_shipped_transport(every_mechanism
     # Both diagnoses are on the record and tellable apart. They were two rows saying only
     # `rca`, which made the pass's own dose unreadable from the run it produced.
     assert [run.metadata.get("run_label") for run in runs[:2]] == ["rca.first", "rca.second"]
+
+
+@pytest.fixture
+def prompting(deployment: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """The same composition, holding every cluster write for a person."""
+    monkeypatch.setenv("KIRA_AUTHORITY__MODE", "prompt")
+    reset_settings()
+    built = replace(build_deployment(load_settings()), completion=ScriptedModel())
+    jobs.bind_deployment(built)
+    try:
+        yield built
+    finally:
+        jobs.unbind_deployment()
+
+
+def _kubectl_calls(tmp_path: pathlib.Path) -> list[str]:
+    log = tmp_path / "kubectl.log"
+    return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+
+@pytest.mark.parametrize("approve", [True, False])
+async def test_a_write_waits_for_a_person_and_then_does_what_they_said(
+    prompting: Any, tmp_path: pathlib.Path, approve: bool
+) -> None:
+    """The drill the published system never ran: approval was configured and never
+    invoked, so the mechanism requirement R2 rests on was effectively untested.
+
+    Composed, on the shipped transport, with a kubectl that records every invocation:
+    the incident parks with the cluster untouched, a person is shown the whole command
+    rather than a preview of it, and the decision is what decides whether it runs.
+    """
+    resumed: list[str] = []
+    app = create_app(deployment=prompting, schedule_resume=resumed.append)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://kira"
+    ) as http:
+        created = await http.post("/api/v1/incidents", json={"alert": ALERT})
+        session_id = created.json()["session_id"]
+        while pending := {t for t in app.state.service.tasks if not t.done()}:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        parked = (await http.get(f"/api/v1/incidents/{session_id}")).json()
+        request_id = parked["awaiting_request_id"]
+        assert request_id, parked
+        before = _kubectl_calls(tmp_path)
+
+        shown = (await http.get(f"/api/v1/hitl/{request_id}")).json()
+        assert shown["payload"]["arguments"]["cmd"].startswith("kubectl ")
+
+        decided = await http.post(
+            f"/api/v1/hitl/{request_id}/decide",
+            json={"approve": approve, "decided_by": "an operator"},
+        )
+        assert decided.status_code == 200, decided.text
+        assert resumed == [request_id]
+
+        assert await jobs.resume_approval(request_id) == "success"
+        while pending := {t for t in app.state.service.tasks if not t.done()}:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    after = _kubectl_calls(tmp_path)
+    # The write is the only call either role makes that mutates anything, and whether it
+    # ran is exactly the operator's answer. An approved one runs once, not twice: the
+    # resume replays a decided request rather than issuing a second.
+    assert len(after) == len(before) + (1 if approve else 0), (before, after)
