@@ -10,8 +10,15 @@ reports a timeout. That is a startup error here instead.
 import logging
 from collections.abc import Mapping
 from importlib.metadata import entry_points
+from pathlib import Path
 
-from kira.prompts.loader import FILLABLE_MARKERS, PromptError, markers, read_asset
+from kira.prompts.loader import (
+    FILLABLE_MARKERS,
+    PromptError,
+    markers,
+    override_for,
+    read_asset,
+)
 from kira.roles.base import RoleSpec
 from kira.tools.allowlists import ROLE_TOOLSETS
 from kira.tools.registry import registered
@@ -110,11 +117,17 @@ def load_plugin_roles(group: str = "kira.roles") -> list[str]:
     return loaded
 
 
-def validate_roles(*, roles: Mapping[str, RoleSpec] | None = None) -> None:
+def validate_roles(
+    *, roles: Mapping[str, RoleSpec] | None = None, override_dir: Path | None = None
+) -> None:
     """Check every way a role's wiring can be inconsistent with its tools or prompt.
 
     Args:
         roles: The roles to check. Defaults to the live registry.
+        override_dir: A deployment's own prompts, checked here rather than at the
+            incident that first uses one. An override declaring a marker nothing fills
+            is the same failure as a packaged prompt doing so, and it must fail in the
+            same place.
 
     Raises:
         RoleRegistryError: When a role cannot terminate, cannot be prompted, or names a
@@ -148,7 +161,9 @@ def validate_roles(*, roles: Mapping[str, RoleSpec] | None = None) -> None:
             )
 
         try:
-            template = read_asset(f"roles/{spec.prompt}.txt")
+            template = override_for(spec.prompt, override_dir) or read_asset(
+                f"roles/{spec.prompt}.txt"
+            )
         except PromptError as exc:
             raise RoleRegistryError(f"role {name!r} names a missing prompt: {exc}") from exc
         unfillable = markers(template) - FILLABLE_MARKERS

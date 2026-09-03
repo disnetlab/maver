@@ -56,7 +56,11 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
     system = role_system_prompt(
         # No retrieval in this arm by construction: the allowlist carries no memory
         # tools, so the composed prompt must not prescribe them either.
-        compose_role_prompt(ctx.spec.prompt, retrieval_enabled=False)
+        compose_role_prompt(
+            ctx.spec.prompt,
+            retrieval_enabled=False,
+            override_dir=ctx.settings.prompts.override_dir,
+        )
     )
     limits = LoopLimits.from_settings(
         ctx.settings.runtime, max_turns=ctx.settings.pipeline.max_turns

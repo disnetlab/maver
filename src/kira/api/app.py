@@ -81,7 +81,7 @@ def build_deployment(settings: Settings) -> Deployment:
         ValueError: When the configured storage backend is not installed.
     """
     profile = load_profile(settings.model.profile, settings.model.profile_dir)
-    validate_roles()
+    validate_roles(override_dir=settings.prompts.override_dir)
     storage = build_storage(settings)
 
     def transport_for(session_id: str) -> ToolTransport:

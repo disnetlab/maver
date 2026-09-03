@@ -25,6 +25,7 @@ __all__ = [
     "ModelSettings",
     "ObservabilitySettings",
     "PipelineSettings",
+    "PromptSettings",
     "RuntimeSettings",
     "SecondPassDelivery",
     "SecondPassSettings",
@@ -736,6 +737,27 @@ class KafkaSettings(SettingsGroup):
         if self.enabled and not self.bootstrap_servers:
             raise ValueError("intake.kafka.enabled requires intake.kafka.bootstrap_servers")
         return self
+
+
+class PromptSettings(SettingsGroup):
+    """Where a deployment's own role prompts come from, when it has any."""
+
+    model_config = group_config("prompts")
+
+    override_dir: Path | None = setting(
+        None,
+        "KIRA_PROMPTS__OVERRIDE_DIR",
+        description=(
+            "Directory holding replacement role prompts, as `roles/<role>.txt`. A file "
+            "that is not there leaves that role on the packaged prompt, so a deployment "
+            "can replace one role and inherit the rest. This is the supported way to "
+            "change a prompt: editing a file inside the installed package does not "
+            "survive an upgrade and leaves no record of what was run. Overridden roles "
+            "and the digest of each are written into the run's configuration snapshot, "
+            "because a result produced under a prompt nobody recorded is not "
+            "attributable."
+        ),
+    )
 
 
 class IntakeSettings(SettingsGroup):

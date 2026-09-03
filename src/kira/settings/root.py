@@ -12,6 +12,7 @@ from pydantic import AliasChoices, Field, model_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 
+from kira.prompts.loader import overridden_roles
 from kira.settings.arms import Arm, arm_digest, load_arm
 from kira.settings.authority import AuthoritySettings
 from kira.settings.base import ENV_PREFIX, SettingsGroup, setting
@@ -21,6 +22,7 @@ from kira.settings.groups import (
     ModelSettings,
     ObservabilitySettings,
     PipelineSettings,
+    PromptSettings,
     RuntimeSettings,
     ServerSettings,
     ToolSettings,
@@ -91,6 +93,7 @@ class Settings(SettingsGroup):
     verify: VerifySettings = Field(default_factory=VerifySettings)
     authority: AuthoritySettings = Field(default_factory=AuthoritySettings)
     intake: IntakeSettings = Field(default_factory=IntakeSettings)
+    prompts: PromptSettings = Field(default_factory=PromptSettings)
     tools: ToolSettings = Field(default_factory=ToolSettings)
     transport: TransportSettings = Field(default_factory=TransportSettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
@@ -197,6 +200,10 @@ class Settings(SettingsGroup):
             "arm_digest": self._arm_digest(),
             "settings": self.model_dump(mode="json"),
             "sampling_overrides": sorted(self.sampling_overrides()),
+            # Which prompts this deployment replaced, and what was in them. The
+            # directory path alone does not say, and a result produced under a prompt
+            # nobody recorded is not attributable.
+            "prompt_overrides": overridden_roles(self.prompts.override_dir),
             "legacy_env_names": sorted(legacy_names_in_use()),
         }
 

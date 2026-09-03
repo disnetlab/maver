@@ -111,7 +111,11 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         model=ctx.completion,
         role=ctx.spec.name,
         system=role_system_prompt(
-            compose_role_prompt(ctx.spec.prompt, retrieval_enabled=retrieval_enabled(ctx))
+            compose_role_prompt(
+                ctx.spec.prompt,
+                retrieval_enabled=retrieval_enabled(ctx),
+                override_dir=ctx.settings.prompts.override_dir,
+            )
         ),
         tools=ctx.toolset.definitions,
         dispatch=ctx.toolset.dispatch,

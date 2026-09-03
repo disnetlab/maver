@@ -16,12 +16,15 @@ prompt half-wired, which is the failure this strictness exists to prevent.
 import re
 from collections.abc import Mapping
 from functools import cache
+from hashlib import sha256
 from importlib.resources import files
 from pathlib import Path
 
 __all__ = [
     "PromptError",
     "compose_role_prompt",
+    "overridden_roles",
+    "override_for",
     "read_asset",
     "read_override",
     "read_runtime",
@@ -104,6 +107,63 @@ def read_runtime(role: str, name: str) -> str:
         if not part or "/" in part or "\\" in part or part.startswith("."):
             raise PromptError(f"invalid runtime prompt path: {role}/{name}")
     return read_asset(f"runtime/{role}/{name}")
+
+
+def override_for(role: str, directory: Path | None) -> str | None:
+    """Read a deployment's replacement for one role's prompt, if it supplied one.
+
+    A role with no file in the directory keeps the packaged prompt, so a deployment can
+    replace one prompt and inherit the rest rather than having to fork the whole set.
+
+    Args:
+        role: The role whose prompt is being composed.
+        directory: The configured override directory, or None.
+
+    Returns:
+        The replacement template, or None to use the packaged asset.
+
+    Raises:
+        PromptError: When the role name would escape the directory, or the file is
+            there and cannot be read. A file that is absent is not an error; a file
+            that is present and unreadable is, because silently falling back to the
+            packaged prompt would run something other than what the deployment asked
+            for and record no sign of it.
+    """
+    if directory is None:
+        return None
+    if not role or "/" in role or "\\" in role or role.startswith("."):
+        raise PromptError(f"invalid role name for a prompt override: {role!r}")
+    path = directory / "roles" / f"{role}.txt"
+    if not path.exists():
+        return None
+    return read_override(path, root=directory)
+
+
+def overridden_roles(directory: Path | None) -> dict[str, str]:
+    """Digest every role prompt a deployment replaced.
+
+    For the run's configuration snapshot. A result produced under a prompt nobody
+    recorded is not attributable, and the directory path alone does not say what was in
+    it at the time.
+
+    Args:
+        directory: The configured override directory, or None.
+
+    Returns:
+        Role name to the SHA-256 of its replacement, empty when nothing is overridden.
+    """
+    if directory is None:
+        return {}
+    roles = directory.expanduser() / "roles"
+    if not roles.is_dir():
+        return {}
+    digests: dict[str, str] = {}
+    for path in sorted(roles.glob("*.txt")):
+        try:
+            digests[path.stem] = sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise PromptError(f"cannot read prompt override {path}: {exc}") from exc
+    return digests
 
 
 def read_override(path: Path, *, root: Path | None = None) -> str:
@@ -196,7 +256,7 @@ def compose_role_prompt(
     role: str,
     *,
     retrieval_enabled: bool,
-    override: str | None = None,
+    override_dir: Path | None = None,
 ) -> str:
     """Build a role's system prompt from its template and the applicable blocks.
 
@@ -209,7 +269,8 @@ def compose_role_prompt(
             The prototype gated on memory being on **and** the retrieval tool being
             enabled, and the configuration where those disagree is a real one: the
             second-pass control deliberately runs with memory on and no retrieval.
-        override: Replacement template text, supplied by configuration.
+        override_dir: Where a deployment keeps its own role prompts, or None. A role
+            with no file there keeps the packaged one.
 
     Returns:
         The fully rendered system prompt.
@@ -217,6 +278,7 @@ def compose_role_prompt(
     Raises:
         PromptError: When an asset is missing or a marker cannot be filled.
     """
+    override = override_for(role, override_dir)
     template = override if override is not None else read_asset(f"roles/{role}.txt")
     values = {
         marker: _block_for(marker, role, retrieval_enabled=retrieval_enabled)
