@@ -27,7 +27,7 @@ from kira.audit.journal import ListSink
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
 from kira.middleware.authority import ApprovalPending
-from kira.middleware.human_approval import HumanApproval
+from kira.middleware.human_approval import authorities
 from kira.orchestration.runner import Deployment, resume_after_decision, run_incident
 from kira.settings.authority import AuthoritySettings
 from kira.settings.groups import MemorySettings, ServerSettings, VerifySettings
@@ -145,10 +145,10 @@ async def test_an_incident_parks_and_resumes_on_postgres(tmp_path: pathlib.Path)
             completion=FakeModel(),
             profile=PROFILE,
             transport_for=lambda session_id: FakeTransport(),
-            authority=HumanApproval(
-                store=storage.approvals,
-                settings=settings.authority,
-                arm_timeout=lambda request_id, expires_at: None,
+            authorities=authorities(
+                settings.authority,
+                storage.approvals,
+                lambda request_id, expires_at: None,
             ),
             sink=ListSink(),
         )

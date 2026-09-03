@@ -117,7 +117,7 @@ async def run_learning(
                 middleware=MiddlewareStack(
                     [
                         WriteGate(
-                            authority=deployment.authority,
+                            authorities=deployment.authorities,
                             settings=deployment.settings.authority,
                             journal=journal,
                         ),

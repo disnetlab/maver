@@ -34,8 +34,8 @@ from kira.audit.store_sink import StoreSink
 from kira.llm.client import LLMClient
 from kira.memory.factory import build_storage
 from kira.memory.ports import ApprovalStore
-from kira.middleware.authority import Authority, AutoApprove, DenyAll
-from kira.middleware.human_approval import HumanApproval
+from kira.middleware.authority import Authority
+from kira.middleware.human_approval import authorities
 from kira.observability.tracing import configure_tracing
 from kira.orchestration.bootstrap import register_post_incident_hooks
 from kira.orchestration.control import RunRegistry
@@ -49,6 +49,7 @@ from kira.orchestration.jobs import (
 from kira.orchestration.runner import Deployment
 from kira.orchestration.scheduler import shutdown_scheduler
 from kira.roles.registry import validate_roles
+from kira.settings.authority import Mode
 from kira.settings.profiles import load_profile
 from kira.settings.root import Settings, load_settings
 from kira.tools.transport.base import ToolTransport
@@ -101,7 +102,7 @@ def build_deployment(settings: Settings) -> Deployment:
         completion=LLMClient(profile, settings),
         profile=profile,
         transport_for=transport_for,
-        authority=_authority(settings, storage.approvals),
+        authorities=_authorities(settings, storage.approvals),
         # Not the discarding default. Every model call, tool call, submission and
         # authority decision is meant to reach the ordered per-incident log, and a run
         # that built its events and dropped them is a run nobody can audit afterwards.
@@ -254,22 +255,17 @@ def _adapter_routers(deployment: Deployment) -> list[APIRouter]:
     return routers
 
 
-def _authority(settings: Settings, approvals: ApprovalStore) -> Authority:
-    """Choose who rules on a cluster write.
+def _authorities(settings: Settings, approvals: ApprovalStore) -> dict[Mode, Authority]:
+    """Build who rules on a cluster write, one decider per mode.
+
+    All three, not the one the deployment's mode names, because a policy rule names a
+    mode of its own and the gate resolves the governing mode per call.
 
     Args:
         settings: The resolved configuration.
-        approvals: Where pending requests are stored, used only in prompt mode.
+        approvals: Where pending requests are stored, used by the human authority.
 
     Returns:
-        The configured authority.
+        A decider for each mode.
     """
-    if settings.authority.mode == "auto":
-        return AutoApprove()
-    if settings.authority.mode == "deny":
-        return DenyAll()
-    return HumanApproval(
-        store=approvals,
-        settings=settings.authority,
-        arm_timeout=schedule_approval_timeout,
-    )
+    return authorities(settings.authority, approvals, schedule_approval_timeout)

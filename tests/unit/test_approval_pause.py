@@ -18,7 +18,7 @@ from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
 from kira.memory.ports import ApprovalRecord
 from kira.middleware.authority import ApprovalPending
-from kira.middleware.human_approval import HumanApproval, approval_granted, take_grant
+from kira.middleware.human_approval import approval_granted, authorities, take_grant
 from kira.orchestration import jobs
 from kira.orchestration.resume import ApprovalCheckpoint, denial_result, load_checkpoint
 from kira.orchestration.runner import Deployment, resume_after_decision, run_incident
@@ -121,10 +121,10 @@ def deployment(tmp_path: pathlib.Path) -> tuple[Deployment, list[tuple[str, str]
             completion=FakeModel(),
             profile=PROFILE,
             transport_for=lambda session_id: FakeTransport(),
-            authority=HumanApproval(
-                store=storage.approvals,
-                settings=settings.authority,
-                arm_timeout=lambda request_id, expires_at: armed.append((request_id, expires_at)),
+            authorities=authorities(
+                settings.authority,
+                storage.approvals,
+                lambda request_id, expires_at: armed.append((request_id, expires_at)),
             ),
             sink=ListSink(),
         ),
@@ -508,10 +508,10 @@ async def test_a_single_agent_run_parks_and_resumes(tmp_path: pathlib.Path) -> N
         completion=SingleModeModel(),
         profile=PROFILE,
         transport_for=lambda session_id: FakeTransport(),
-        authority=HumanApproval(
-            store=storage.approvals,
-            settings=settings.authority,
-            arm_timeout=lambda request_id, expires_at: None,
+        authorities=authorities(
+            settings.authority,
+            storage.approvals,
+            lambda request_id, expires_at: None,
         ),
         sink=ListSink(),
     )

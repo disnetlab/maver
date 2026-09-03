@@ -26,7 +26,7 @@ from kira.adapters.registry import adapter, clear_adapters
 from kira.audit.journal import ListSink
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
-from kira.middleware.human_approval import HumanApproval
+from kira.middleware.human_approval import authorities
 from kira.orchestration.episode import EpisodeStart, open_episode, run_episode
 from kira.orchestration.inflight import drop_episode
 from kira.orchestration.jobs import bind_deployment, resume_approval, unbind_deployment
@@ -237,10 +237,10 @@ def deployment(tmp_path: pathlib.Path, base: BaseTransport) -> Deployment:
         completion=ParkingModel(),
         profile=PROFILE,
         transport_for=lambda session_id: base,
-        authority=HumanApproval(
-            store=storage.approvals,
-            settings=settings.authority,
-            arm_timeout=lambda request_id, expires_at: None,
+        authorities=authorities(
+            settings.authority,
+            storage.approvals,
+            lambda request_id, expires_at: None,
         ),
         sink=ListSink(),
     )

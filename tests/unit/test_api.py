@@ -21,7 +21,7 @@ from kira.api.incidents import fingerprint, run_incident_task
 from kira.audit.journal import ListSink
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
-from kira.middleware.human_approval import HumanApproval
+from kira.middleware.human_approval import authorities
 from kira.orchestration.runner import Deployment, resume_after_decision
 from kira.settings.authority import AuthoritySettings
 from kira.settings.groups import MemorySettings, PipelineSettings, ServerSettings, VerifySettings
@@ -104,8 +104,13 @@ class ParkingModel:
         )
 
 
-def deployment(tmp_path: pathlib.Path, *, mode: str = "auto") -> Deployment:
-    """Build a deployment over a temporary workspace and a fake cluster."""
+def deployment(tmp_path: pathlib.Path, *, mode: str = "prompt") -> Deployment:
+    """Build a deployment over a temporary workspace and a fake cluster.
+
+    Prompting, because every test here is about the pause. The fixture said `auto` and
+    parked anyway, because it wired the human authority in regardless of the mode — so
+    the mode it declared and the behaviour it produced were unrelated.
+    """
     settings = Settings(
         server=ServerSettings(workdir=tmp_path),
         pipeline=PipelineSettings(),
@@ -120,10 +125,10 @@ def deployment(tmp_path: pathlib.Path, *, mode: str = "auto") -> Deployment:
         completion=ParkingModel(),
         profile=PROFILE,
         transport_for=lambda session_id: FakeTransport(),
-        authority=HumanApproval(
-            store=storage.approvals,
-            settings=settings.authority,
-            arm_timeout=lambda request_id, expires_at: None,
+        authorities=authorities(
+            settings.authority,
+            storage.approvals,
+            lambda request_id, expires_at: None,
         ),
         sink=ListSink(),
     )

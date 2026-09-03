@@ -72,6 +72,7 @@ from kira.secondpass.types import (
     SecondPassPolicy,
     SecondPassResult,
 )
+from kira.settings.authority import Mode
 from kira.settings.profiles import ModelProfile
 from kira.settings.root import Settings
 from kira.tools.context import EvidencePolicy, NullEvidencePolicy, ToolContext
@@ -107,9 +108,14 @@ class Deployment:
     completion: Completion
     profile: ModelProfile
     transport_for: TransportFactory
-    authority: Authority = field(default_factory=AutoApprove)
-    """Who rules on a cluster write. The gate that consults it is built per role run,
-    because it records into that run's journal."""
+    authorities: Mapping[Mode, Authority] = field(default_factory=lambda: {"auto": AutoApprove()})
+    """Who rules on a cluster write, per mode. The gate that consults them is built per
+    role run, because it records into that run's journal.
+
+    One per mode rather than one for the deployment, because a policy rule names a mode
+    of its own. The default carries only the unattended decider, which is the posture a
+    deployment assembled in code without an approval store is in; the served process
+    supplies all three."""
     hooks: Sequence[AgentHook] = ()
     """Extra middleware, composed after the write gate."""
     evidence: EvidencePolicy = field(default_factory=NullEvidencePolicy)
@@ -455,7 +461,7 @@ def _context_builder(
             middleware=MiddlewareStack(
                 [
                     WriteGate(
-                        authority=deployment.authority,
+                        authorities=deployment.authorities,
                         settings=deployment.settings.authority,
                         journal=journal,
                     ),
@@ -815,7 +821,7 @@ async def _replay(
     stack = MiddlewareStack(
         [
             WriteGate(
-                authority=deployment.authority,
+                authorities=deployment.authorities,
                 settings=deployment.settings.authority,
                 journal=journal,
             ),

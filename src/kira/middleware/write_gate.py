@@ -18,10 +18,10 @@ from typing import Any, Literal
 from kira.audit.journal import Journal
 from kira.contracts.events import PolicyDecisionEvent
 from kira.llm.types import ToolResult
-from kira.middleware.authority import ActionRequest, ApprovalPending, Authority, Decision
+from kira.middleware.authority import ActionRequest, ApprovalPending, Authority
 from kira.middleware.base import ToolHandler, ToolRequest
 from kira.middleware.human_approval import take_grant
-from kira.settings.authority import AuthoritySettings
+from kira.settings.authority import AuthoritySettings, Mode
 from kira.tools.policy import ActionClass, ToolPolicy, policy_for
 
 __all__ = ["WriteGate"]
@@ -40,18 +40,22 @@ class WriteGate:
     def __init__(
         self,
         *,
-        authority: Authority,
+        authorities: Mapping[Mode, Authority],
         settings: AuthoritySettings,
         journal: Journal,
     ) -> None:
         """Build the gate.
 
         Args:
-            authority: Who decides.
+            authorities: Who decides, per mode. One object cannot serve, because the
+                mode governing a call is the rule's when a rule matches and the
+                deployment's otherwise — so a rule tightening an unattended deployment
+                to ``prompt``, which is the whole point of having rules, has to reach a
+                different decider than the global mode chose.
             settings: The policy rules and the stages allowed to write.
             journal: Where decisions are recorded.
         """
-        self._authority = authority
+        self._authorities = dict(authorities)
         self._settings = settings
         self._journal = journal
 
@@ -122,11 +126,11 @@ class WriteGate:
         if action in (ActionClass.READ, ActionClass.BLOCKED):
             return await handler(request)
 
-        selectors_now = policy.selectors(arguments)
-        governing = self._settings.rule_for(
-            tool=request.name, stage=request.role, selectors=selectors_now
-        )
-        if action is ActionClass.EXEC and (governing is None or governing.mode == "auto"):
+        selectors = policy.selectors(arguments)
+        rule = self._settings.rule_for(tool=request.name, stage=request.role, selectors=selectors)
+        mode = rule.mode if rule is not None else self._settings.mode
+
+        if action is ActionClass.EXEC and mode == "auto":
             # Permitted for every role, as measured, but never silently: the record is
             # what makes the residual risk auditable rather than merely disclosed.
             self._record(
@@ -137,7 +141,12 @@ class WriteGate:
             )
             return await handler(request)
 
-        if not self._may_write(policy, request.role):
+        # An in-container command is exempt from the stage check, as it was in every
+        # measured run, and exempt from nothing else. Reading that exemption as covering
+        # the authority too is what let `kubectl exec -- rm -rf /data` dispatch under
+        # `prompt` and under `deny`: the class exists so an unprovable action is
+        # recorded as one, not so it can skip the decision.
+        if action is not ActionClass.EXEC and not self._may_write(policy, request.role):
             refusal = policy.stage_refusal(request.role)
             self._record(
                 request,
@@ -146,10 +155,6 @@ class WriteGate:
                 reason=f"stage {request.role} may not write",
             )
             return self._refuse(request, refusal)
-
-        selectors = selectors_now
-        rule = governing
-        mode = rule.mode if rule is not None else self._settings.mode
 
         action_request = ActionRequest(
             session_id=request.session_id,
@@ -191,31 +196,22 @@ class WriteGate:
             )
             return await handler(request)
 
-        if mode == "deny":
-            decision = Decision(
-                outcome="denied",
-                policy="deny",
-                reason=f"denied by rule {rule.name}" if rule else "writes are disabled",
+        try:
+            decision = await self._authorities[mode].authorise(action_request)
+        except ApprovalPending:
+            self._record(request, policy="prompt", decision="pending", reason="awaiting a human")
+            raise
+        except Exception as exc:  # an authority that cannot answer has not said "yes"
+            _log.warning("authority failed for %s and the call was denied", request.name)
+            self._record(
+                request,
+                policy=mode,
+                decision="denied",
+                reason=f"authority unavailable: {type(exc).__name__}",
             )
-        else:
-            try:
-                decision = await self._authority.authorise(action_request)
-            except ApprovalPending:
-                self._record(
-                    request, policy="prompt", decision="pending", reason="awaiting a human"
-                )
-                raise
-            except Exception as exc:  # an authority that cannot answer has not said "yes"
-                _log.warning("authority failed for %s and the call was denied", request.name)
-                self._record(
-                    request,
-                    policy=mode,
-                    decision="denied",
-                    reason=f"authority unavailable: {type(exc).__name__}",
-                )
-                return self._refuse(
-                    request, f"denied by HITL gate: authority unavailable: {type(exc).__name__}"
-                )
+            return self._refuse(
+                request, f"denied by HITL gate: authority unavailable: {type(exc).__name__}"
+            )
 
         self._record(
             request,

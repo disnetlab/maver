@@ -3,7 +3,14 @@ import pytest
 from kira.audit.journal import Journal, ListSink
 from kira.contracts.events import PolicyDecisionEvent
 from kira.llm.types import ToolResult
-from kira.middleware.authority import ActionRequest, ApprovalPending, AutoApprove, Decision
+from kira.middleware.authority import (
+    ActionRequest,
+    ApprovalPending,
+    Authority,
+    AutoApprove,
+    Decision,
+    DenyAll,
+)
 from kira.middleware.base import ToolRequest
 from kira.middleware.write_gate import WriteGate
 from kira.settings.authority import AuthorityRule, AuthoritySettings
@@ -23,9 +30,29 @@ def call(
     return ToolRequest(call_id="c1", name=tool, arguments={"cmd": cmd}, role=role, session_id="s1")
 
 
-def gate(settings: AuthoritySettings, sink: ListSink, authority: object = None) -> WriteGate:
+class NeverAnswers:
+    """Stands in for the person, and never gets round to it.
+
+    Every test here that expects a dispatch under a prompting mode is only meaningful
+    if reaching the human is loud. Wiring one auto-approving object into all three modes
+    made those tests pass while the rules that were supposed to produce the dispatch
+    were doing nothing.
+    """
+
+    async def authorise(self, request: ActionRequest) -> Decision:
+        raise ApprovalPending(
+            request_id="r1",
+            session_id=request.session_id,
+            stage=request.stage,
+            tool_call_id=request.tool_call_id,
+            tool_name=request.tool,
+            tool_arguments=dict(request.arguments),
+        )
+
+
+def gate(settings: AuthoritySettings, sink: ListSink, human: Authority | None = None) -> WriteGate:
     return WriteGate(
-        authority=authority or AutoApprove(),
+        authorities={"auto": AutoApprove(), "deny": DenyAll(), "prompt": human or NeverAnswers()},
         settings=settings,
         journal=Journal(sink, session_id="s1", stage="execution"),
     )
@@ -109,17 +136,51 @@ async def test_a_blocked_command_keeps_the_tool_s_own_refusal() -> None:
 
 
 async def test_an_in_container_command_passes_but_is_recorded() -> None:
-    """Permitted for every role as measured, but never silently.
-
-    Its authority cannot be proven, so the record is what makes the residual risk
-    auditable instead of merely disclosed.
+    """Permitted for every role under an unattended deployment, as measured, but never
+    silently. Its authority cannot be proven, so the record is what makes the residual
+    risk auditable instead of merely disclosed.
     """
     sink = ListSink()
-    result = await gate(AuthoritySettings(mode="prompt"), sink).wrap_tool_call(
+    result = await gate(AuthoritySettings(mode="auto"), sink).wrap_tool_call(
         call("kubectl exec pod -- cat /etc/hosts", role="rca"), handler
     )
     assert result.content == DISPATCHED
     assert [d.reason for d in decisions(sink)] == ["in-container command; authority not provable"]
+
+
+async def test_an_in_container_command_is_not_exempt_from_the_authority() -> None:
+    """`kubectl exec pod -- rm -rf /data` dispatched under `prompt` and under `deny`.
+
+    The exec class exists so an action whose authority cannot be proven is recorded as
+    one, and so a role that may not write can still read from inside a container. It was
+    read as a pass out of the gate altogether, which made the deployment posture that
+    exists to refuse cluster writes unable to refuse the least provable of them.
+    """
+    destructive = "kubectl exec pod/x -n shop -- rm -rf /data"
+
+    sink = ListSink()
+    with pytest.raises(ApprovalPending):
+        await gate(AuthoritySettings(mode="prompt"), sink).wrap_tool_call(
+            call(destructive), handler
+        )
+    assert [d.decision for d in decisions(sink)] == ["pending"]
+
+    sink = ListSink()
+    result = await gate(AuthoritySettings(mode="deny"), sink).wrap_tool_call(
+        call(destructive), handler
+    )
+    assert result.content == "denied by HITL gate: writes are disabled"
+
+
+async def test_an_in_container_command_keeps_its_exemption_from_the_stage_check() -> None:
+    """Only the authority binds it. Reading a file inside a container is how a
+    diagnosing role sees a config the API server never had, and every measured run
+    allowed it from every role."""
+    sink = ListSink()
+    result = await gate(AuthoritySettings(mode="auto"), sink).wrap_tool_call(
+        call("kubectl exec pod -- cat /etc/nginx/nginx.conf", role="rca"), handler
+    )
+    assert result.content == DISPATCHED
 
 
 async def test_a_rule_can_hold_an_in_container_command() -> None:
@@ -139,7 +200,10 @@ async def test_a_rule_can_hold_an_in_container_command() -> None:
 
 
 async def test_a_rule_can_auto_approve_inside_a_prompting_deployment() -> None:
-    """Neither a global mode nor a list of exempt tools can express this."""
+    """Neither a global mode nor a list of exempt tools can express this.
+
+    The human here never answers, so an inert rule raises instead of dispatching.
+    """
     settings = AuthoritySettings(
         mode="prompt",
         rules=(AuthorityRule(name="routine-scaling", selectors=("verb:scale",), mode="auto"),),
@@ -165,6 +229,38 @@ async def test_a_rule_can_deny_a_resource_class_inside_an_auto_deployment() -> N
         call("kubectl delete secret db-creds -n shop"), handler
     )
     assert result.content == "denied by HITL gate: denied by rule never-touch-secrets"
+
+
+async def test_a_rule_can_hold_a_resource_class_for_a_person_inside_an_auto_deployment() -> None:
+    """The mode a rule names has to reach a decider that can honour it.
+
+    One authority object was chosen from the global mode and held for the whole process,
+    so a rule was only ever able to tighten to `deny` — every other mode it named landed
+    on whatever the deployment had already picked. A rule reading `mode: prompt` under a
+    global `auto`, which is the worked example in this project's own specification,
+    auto-approved and recorded the rule's name beside an approval it never made.
+    """
+    settings = AuthoritySettings(
+        mode="auto",
+        rules=(
+            AuthorityRule(
+                name="secrets-need-a-human", selectors=("resource:secret*",), mode="prompt"
+            ),
+        ),
+    )
+    sink = ListSink()
+    with pytest.raises(ApprovalPending):
+        await gate(settings, sink).wrap_tool_call(
+            call("kubectl delete secret db-password -n shop"), handler
+        )
+    assert [d.decision for d in decisions(sink)] == ["pending"]
+
+    # Anything the rule does not match still runs unattended.
+    sink = ListSink()
+    result = await gate(settings, sink).wrap_tool_call(
+        call("kubectl delete pod x -n shop"), handler
+    )
+    assert result.content == DISPATCHED
 
 
 async def test_the_first_matching_rule_wins() -> None:
@@ -197,7 +293,7 @@ async def test_an_authority_that_raises_denies_rather_than_ending_the_run() -> N
             raise RuntimeError("store unreachable")
 
     sink = ListSink()
-    result = await gate(AuthoritySettings(mode="prompt"), sink, Broken()).wrap_tool_call(
+    result = await gate(AuthoritySettings(mode="prompt"), sink, human=Broken()).wrap_tool_call(
         call("kubectl delete pod x -n shop"), handler
     )
     assert result.content == "denied by HITL gate: authority unavailable: RuntimeError"
@@ -220,7 +316,7 @@ async def test_a_pending_approval_unwinds_the_run_and_is_recorded() -> None:
 
     sink = ListSink()
     with pytest.raises(ApprovalPending):
-        await gate(AuthoritySettings(mode="prompt"), sink, Human()).wrap_tool_call(
+        await gate(AuthoritySettings(mode="prompt"), sink, human=Human()).wrap_tool_call(
             call("kubectl delete pod x -n shop"), handler
         )
     assert [d.decision for d in decisions(sink)] == ["pending"]

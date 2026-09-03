@@ -25,14 +25,22 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from kira.memory.ports import ApprovalRecord, ApprovalStore
-from kira.middleware.authority import ActionRequest, ApprovalPending, Decision
-from kira.settings.authority import AuthoritySettings
+from kira.middleware.authority import (
+    ActionRequest,
+    ApprovalPending,
+    Authority,
+    AutoApprove,
+    Decision,
+    DenyAll,
+)
+from kira.settings.authority import AuthoritySettings, Mode
 
 __all__ = [
     "ApprovalGrant",
     "HumanApproval",
     "TimeoutScheduler",
     "approval_granted",
+    "authorities",
     "take_grant",
 ]
 
@@ -196,3 +204,32 @@ class HumanApproval:
             tool_name=request.tool,
             tool_arguments=dict(request.arguments),
         )
+
+
+def authorities(
+    settings: AuthoritySettings,
+    store: ApprovalStore,
+    arm_timeout: TimeoutScheduler,
+) -> dict[Mode, Authority]:
+    """Build one decider per mode.
+
+    All three exist regardless of the deployment's own mode, because a policy rule names
+    a mode of its own and the gate has to be able to honour it. Choosing a single object
+    from the global mode made every rule inert but ``deny``: a rule tightening a routine
+    deployment to ``prompt`` — the worked example in this project's own specification —
+    approved automatically and recorded the rule's name beside the approval it never
+    made.
+
+    Args:
+        settings: The gate's configuration, passed to the human authority.
+        store: Where a pending request is written.
+        arm_timeout: Arms one request's expiry.
+
+    Returns:
+        A decider for each of the three modes.
+    """
+    return {
+        "auto": AutoApprove(),
+        "deny": DenyAll(),
+        "prompt": HumanApproval(store=store, settings=settings, arm_timeout=arm_timeout),
+    }
