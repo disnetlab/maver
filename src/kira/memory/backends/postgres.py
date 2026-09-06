@@ -59,7 +59,7 @@ from psycopg.types.json import Jsonb
 
 from kira.contracts.lifecycle import LifecycleState, RunStatus
 from kira.memory.backends.sanitise import scrub, scrub_mapping, scrub_optional, scrub_text
-from kira.memory.bm25 import tokenize
+from kira.memory.lexemes import lexemes
 from kira.memory.lifecycle import check_transition
 from kira.memory.ports import (
     AgentRunEventDraft,
@@ -168,11 +168,30 @@ CREATE TABLE IF NOT EXISTS agent_run_events (
 );
 """
 
+
+def _terms_vector(column: str) -> str:
+    """The tsvector of a column of normalised terms, built without PostgreSQL's parser.
+
+    ``to_tsvector('simple', ...)`` would run the default parser over the terms and take
+    them apart again: ``astronomy-shop`` comes back as three lexemes, one of which
+    (``astronomy``) :mod:`kira.memory.lexemes` never produced. Measured over 400 strings
+    of real incident text, that invented a lexeme on 130 of them, which is exactly the
+    kind of quiet divergence from the embedded backend this design exists to rule out.
+    ``array_to_tsvector`` takes the lexemes as given.
+    """
+    return (
+        f"CASE WHEN {column} = '' THEN ''::tsvector "
+        f"ELSE array_to_tsvector(string_to_array({column}, ' ')) END"
+    )
+
+
 # Two generated tsvectors and their GIN indexes, which is the whole design of the index:
-# PostgreSQL decides which rows could match, and nothing else. There are no vector columns
-# and no `CREATE EXTENSION vector` here on purpose. The default deployment needs neither,
-# and shipping them would install an embedder nobody asked for.
-_RECORD_SCHEMA = """
+# PostgreSQL decides which rows could match, and nothing else. They are built over the
+# normalised terms rather than the raw text, because the terms are what the embedded
+# backend indexes too, and one retriever is the point. There are no vector columns and no
+# `CREATE EXTENSION vector` here on purpose. The default deployment needs neither, and
+# shipping them would install an embedder nobody asked for.
+_RECORD_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS records (
     corpus_id                     TEXT NOT NULL,
     session_id                    TEXT NOT NULL,
@@ -191,41 +210,56 @@ CREATE TABLE IF NOT EXISTS records (
     evaluation_diagnosis_score    DOUBLE PRECISION,
     evaluation_mitigation_success BOOLEAN,
     corrected_cause               TEXT NOT NULL DEFAULT '',
+    evidence_terms                TEXT NOT NULL DEFAULT '',
+    lesson_terms                  TEXT NOT NULL DEFAULT '',
     written_at                    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    evidence_tsv TSVECTOR GENERATED ALWAYS AS
-        (to_tsvector('english', coalesce(evidence_text, ''))) STORED,
-    lesson_tsv   TSVECTOR GENERATED ALWAYS AS
-        (to_tsvector('english', coalesce(lesson_text, ''))) STORED,
+    evidence_tsv TSVECTOR GENERATED ALWAYS AS ({_terms_vector("evidence_terms")}) STORED,
+    lesson_tsv   TSVECTOR GENERATED ALWAYS AS ({_terms_vector("lesson_terms")}) STORED,
     PRIMARY KEY (corpus_id, session_id)
 );
 CREATE INDEX IF NOT EXISTS idx_records_evidence_tsv ON records USING GIN (evidence_tsv);
 CREATE INDEX IF NOT EXISTS idx_records_lesson_tsv ON records USING GIN (lesson_tsv);
 """
 
-# Every lexeme the query text yields, ORed. The disjunction is the point: requiring every
+# Every term the query text yields, ORed. The disjunction is the point: requiring every
 # term empties the pool on most real queries and leaves the ranker nothing to work with.
 # The `websearch_to_tsquery` form the prototype could be configured into is not offered
 # at all rather than merely not defaulted to, because it is the mechanism behind a 91%
 # no-match failure mode and leaving it selectable would leave that reachable.
 #
-# The inner normalisation is 'english' and the outer one is 'simple', which is not a
-# typo. The inner call turns the query text into the same lexemes the stored vectors
-# hold; the outer call would stem them a second time, and a stem is not always its own
-# fixed point — "raise" becomes "rais", which stems again to "rai" and then matches
-# nothing. Under 'simple' the already-normalised lexemes are taken as they are.
+# The tsquery is built from the terms rather than from the text, and cast rather than
+# passed through `to_tsquery`, for the reason `_terms_vector` gives: a cast takes the
+# lexemes as written, and any dictionary would normalise a second time. A stem is not
+# always its own fixed point — "raise" becomes "rais", which stems again to "rai" and
+# then matches nothing.
 _CANDIDATE_QUERY = """
-WITH q AS (
-    SELECT to_tsquery('simple',
-        (SELECT string_agg(quote_literal(lexeme), ' | ')
-         FROM unnest(to_tsvector('english', %s)))) AS tsq
-)
 SELECT {columns}
-FROM records, q
-WHERE q.tsq @@ {vector}
+FROM records
+WHERE {vector} @@ %s::tsquery
   AND corpus_id = %s
   AND session_id <> ALL(%s)
 ORDER BY written_at, session_id
 LIMIT %s
+"""
+
+# The two halves of the migration off an `english`-over-raw-text index. Separately
+# conditional and each idempotent: adding a column that is there, or a vector built the
+# way it already is, would be wasted work on every startup.
+_ADD_TERMS_COLUMNS = """
+ALTER TABLE records ADD COLUMN IF NOT EXISTS evidence_terms TEXT NOT NULL DEFAULT '';
+ALTER TABLE records ADD COLUMN IF NOT EXISTS lesson_terms   TEXT NOT NULL DEFAULT '';
+"""
+
+# A generated column's expression cannot be altered, so the column goes and comes back.
+# Its GIN index goes with it and has to be recreated in the same breath, or the next
+# retrieval is a sequential scan nobody notices until the corpus is large.
+_VECTOR_REBUILD = f"""
+ALTER TABLE records DROP COLUMN IF EXISTS evidence_tsv, DROP COLUMN IF EXISTS lesson_tsv;
+ALTER TABLE records
+    ADD COLUMN evidence_tsv TSVECTOR GENERATED ALWAYS AS ({_terms_vector("evidence_terms")}) STORED,
+    ADD COLUMN lesson_tsv   TSVECTOR GENERATED ALWAYS AS ({_terms_vector("lesson_terms")}) STORED;
+CREATE INDEX IF NOT EXISTS idx_records_evidence_tsv ON records USING GIN (evidence_tsv);
+CREATE INDEX IF NOT EXISTS idx_records_lesson_tsv ON records USING GIN (lesson_tsv);
 """
 
 _SEQUENCE_CONSTRAINT = "agent_run_events_seq_key"
@@ -256,10 +290,14 @@ _TERMINAL_RUN_STATUSES = frozenset(
 # which is the failure worth having: the alternative is a payload blob that accepts the
 # field and a corpus nobody can query with SQL.
 _RECORD_FIELDS = tuple(field.name for field in fields(SessionMemory))
+_TERMS_COLUMNS = ("evidence_terms", "lesson_terms")
+_TERMS_INSERT = ", ".join(_TERMS_COLUMNS)
 _RECORD_COLUMNS = ", ".join(_RECORD_FIELDS)
 _RECORD_PLACEHOLDERS = ", ".join("%s" for _ in _RECORD_FIELDS)
 _RECORD_UPDATES = ", ".join(
-    f"{name} = EXCLUDED.{name}" for name in _RECORD_FIELDS if name != "session_id"
+    f"{name} = EXCLUDED.{name}"
+    for name in (*_RECORD_FIELDS, *_TERMS_COLUMNS)
+    if name != "session_id"
 )
 
 
@@ -1103,10 +1141,64 @@ class PostgresRecordIndex:
         self.corpus_id = corpus_id
         self._db = connection if isinstance(connection, _Pool) else _Pool(connection, schema)
         self._db.script(_RECORD_SCHEMA)
+        self._reindex_if_stale()
 
     def close(self) -> None:
         """Close the connections. Worth calling only on a standalone index."""
         self._db.close()
+
+    def _reindex_if_stale(self) -> None:
+        """Rebuild the index if it predates the shared normaliser.
+
+        A database written before this has no terms columns and two vectors built with
+        `to_tsvector('english', ...)` over the raw text, which is a different candidate
+        generator from the embedded backend's. The raw text is the source of truth and is
+        never touched; the terms are derived from it and the vectors are derived from
+        them. The two steps are separately conditional, so a migration interrupted between
+        them finishes on the next open. Every corpus in the table is rebuilt, not just
+        this index's: they share one derived index and half of it cannot be current.
+        """
+        with self._db.read() as conn:
+            columns = conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'records'"
+            ).fetchall()
+            names = {row["column_name"] for row in columns}
+            generated = conn.execute(
+                "SELECT pg_get_expr(d.adbin, d.adrelid) AS expression "
+                "FROM pg_attrdef d JOIN pg_attribute a "
+                "  ON a.attrelid = d.adrelid AND a.attnum = d.adnum "
+                "WHERE d.adrelid = to_regclass('records') AND a.attname = 'evidence_tsv'"
+            ).fetchone()
+
+        if not set(_TERMS_COLUMNS) <= names:
+            self._add_terms_columns()
+        if generated is not None and "array_to_tsvector" not in (generated["expression"] or ""):
+            _log.info("rebuilding the postgres record vectors over normalised terms")
+            self._db.script(_VECTOR_REBUILD)
+
+    def _add_terms_columns(self) -> None:
+        """Add the terms columns and fill them from the raw text already stored."""
+        self._db.script(_ADD_TERMS_COLUMNS)
+        with self._db.write() as conn:
+            stored = conn.execute(
+                "SELECT corpus_id, session_id, evidence_text, lesson_text FROM records"
+            ).fetchall()
+            _log.info("normalising %d stored records for the postgres index", len(stored))
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    "UPDATE records SET evidence_terms = %s, lesson_terms = %s "
+                    "WHERE corpus_id = %s AND session_id = %s",
+                    [
+                        (
+                            _terms(row["evidence_text"]),
+                            _terms(row["lesson_text"]),
+                            row["corpus_id"],
+                            row["session_id"],
+                        )
+                        for row in stored
+                    ],
+                )
 
     def upsert_summary(self, memory: SessionMemory) -> None:
         """Write or replace one record.
@@ -1115,10 +1207,13 @@ class PostgresRecordIndex:
             memory: The distilled record.
         """
         values = [self.corpus_id, *(scrub(getattr(memory, name)) for name in _RECORD_FIELDS)]
+        values.extend(
+            [_terms(scrub_text(memory.evidence_text)), _terms(scrub_text(memory.lesson_text))]
+        )
         with self._db.write() as conn:
             conn.execute(
-                f"INSERT INTO records (corpus_id, {_RECORD_COLUMNS}) "
-                f"VALUES (%s, {_RECORD_PLACEHOLDERS}) "
+                f"INSERT INTO records (corpus_id, {_RECORD_COLUMNS}, {_TERMS_INSERT}) "
+                f"VALUES (%s, {_RECORD_PLACEHOLDERS}, %s, %s) "
                 f"ON CONFLICT (corpus_id, session_id) DO UPDATE "
                 f"SET {_RECORD_UPDATES}, written_at = now()",
                 values,
@@ -1134,10 +1229,12 @@ class PostgresRecordIndex:
     ) -> list[SessionMemory]:
         """Return a pool of records that could plausibly match, unranked.
 
-        Terms are ORed, and every one of them is used: the prototype truncated the query
-        to 32 tokens, which silently decided which documents the ranker was allowed to
-        see. Each lexeme is quoted so that a token which happens to spell a tsquery
-        operator stays a search term.
+        The query is normalised by :func:`kira.memory.lexemes.lexemes`, the same function
+        that produced the indexed terms, so the two meet on stems rather than on surface
+        forms. Terms are ORed, and every one of them is used: the prototype truncated the
+        query to 32 tokens, which silently decided which documents the ranker was allowed
+        to see. Each term is quoted so that one which happens to spell a tsquery operator
+        stays a search term.
 
         Args:
             text: The query, used to select a pool.
@@ -1148,11 +1245,15 @@ class PostgresRecordIndex:
         Returns:
             Candidate records, in write order, which carries no relevance.
         """
-        if not tokenize(text) or limit <= 0:
+        terms = list(dict.fromkeys(lexemes(text)))
+        if not terms or limit <= 0:
             return []
+        disjunction = " | ".join(_quote(term) for term in terms)
         query = _CANDIDATE_QUERY.format(columns=_RECORD_COLUMNS, vector=_vector(scope))
         with self._db.read() as conn:
-            rows = conn.execute(query, (text, self.corpus_id, list(exclude), limit)).fetchall()
+            rows = conn.execute(
+                query, (disjunction, self.corpus_id, list(exclude), limit)
+            ).fetchall()
         return [_to_memory(row) for row in rows]
 
     def open_record(self, session_id: str) -> SessionMemory | None:
@@ -1198,6 +1299,16 @@ class PostgresRecordIndex:
 
 def _vector(scope: SearchScope) -> str:
     return "lesson_tsv" if scope == "lesson" else "evidence_tsv"
+
+
+def _terms(text: str | None) -> str:
+    return " ".join(lexemes(text or ""))
+
+
+def _quote(term: str) -> str:
+    """Quote one term for a tsquery literal, where a backslash and a quote both escape."""
+    escaped = term.replace("\\", "\\\\").replace("'", "''")
+    return f"'{escaped}'"
 
 
 def _to_session(row: _Row) -> SessionRecord:

@@ -72,7 +72,9 @@ def test_a_database_written_before_the_normaliser_is_reindexed_on_open(
 ) -> None:
     """An existing corpus has to answer the new query, not be silently left behind."""
     written = a_record(
-        "old", evidence="the checkout pods were crashing", lesson="raised the memory limit"
+        "old",
+        evidence="the checkout pods were crashing, RunContainerError/CrashLoopBackOff",
+        lesson="raised the memory limit",
     )
     payload = {
         field.name: getattr(written, field.name)
@@ -93,6 +95,7 @@ def test_a_database_written_before_the_normaliser_is_reindexed_on_open(
         assert [m.session_id for m in index.candidates("pod crash")] == ["old"]
         assert [m.session_id for m in index.candidates("raising limits", scope="lesson")] == ["old"]
         assert index.candidates("the and of") == []
+        assert [m.session_id for m in index.candidates("crashloopbackoff")] == ["old"]
 
         assert index.open_record("old") == written, "the record itself is carried through"
     finally:
@@ -101,7 +104,9 @@ def test_a_database_written_before_the_normaliser_is_reindexed_on_open(
     # Idempotent: a second open finds the new shape and rebuilds nothing.
     reopened = SqliteRecordIndex(path)
     try:
-        assert reopened.count() == 1
+        reopened.upsert_summary(a_record("new", evidence="coredns resolution failures"))
+        assert reopened.count() == 2
         assert [m.session_id for m in reopened.candidates("pod crash")] == ["old"]
+        assert [m.session_id for m in reopened.candidates("resolve failure")] == ["new"]
     finally:
         reopened.close()

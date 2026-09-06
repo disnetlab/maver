@@ -25,7 +25,14 @@ from contextlib import closing
 from typing import Any
 
 import pytest
-from memory_contract import NUL, MemoryStoreContract, OperationalStore, a_run, an_event
+from memory_contract import (
+    NUL,
+    MemoryStoreContract,
+    OperationalStore,
+    a_record,
+    a_run,
+    an_event,
+)
 
 from kira.contracts.lifecycle import LifecycleState
 from kira.memory.ports import TextSearch
@@ -196,3 +203,74 @@ def _waited_on_the_index(conn: Any, timeout_s: float = 15.0) -> bool:
             return True
         time.sleep(0.05)
     return False
+
+
+# The `records` table as it was before the shared normaliser: two vectors built by the
+# english configuration straight off the raw text. Written out here rather than imported
+# so that changing the current schema cannot quietly change what "the old shape" means.
+_OLD_SCHEMA = """
+CREATE TABLE records (
+    corpus_id      TEXT NOT NULL,
+    session_id     TEXT NOT NULL,
+    evidence_text  TEXT NOT NULL DEFAULT '',
+    lesson_text    TEXT NOT NULL DEFAULT '',
+    incident_summary TEXT NOT NULL DEFAULT '',
+    lifecycle_state  TEXT NOT NULL DEFAULT 'pending',
+    fault_category   TEXT NOT NULL DEFAULT '',
+    alert_name       TEXT NOT NULL DEFAULT '',
+    namespace        TEXT NOT NULL DEFAULT '',
+    affected_resource TEXT NOT NULL DEFAULT '',
+    verification_verdict TEXT NOT NULL DEFAULT '',
+    evaluation_label     TEXT NOT NULL DEFAULT '',
+    evaluation_source    TEXT NOT NULL DEFAULT '',
+    evaluation_diagnosis_success  BOOLEAN,
+    evaluation_diagnosis_score    DOUBLE PRECISION,
+    evaluation_mitigation_success BOOLEAN,
+    corrected_cause  TEXT NOT NULL DEFAULT '',
+    written_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    evidence_tsv TSVECTOR GENERATED ALWAYS AS
+        (to_tsvector('english', coalesce(evidence_text, ''))) STORED,
+    lesson_tsv   TSVECTOR GENERATED ALWAYS AS
+        (to_tsvector('english', coalesce(lesson_text, ''))) STORED,
+    PRIMARY KEY (corpus_id, session_id)
+);
+CREATE INDEX idx_records_evidence_tsv ON records USING GIN (evidence_tsv);
+CREATE INDEX idx_records_lesson_tsv ON records USING GIN (lesson_tsv);
+"""
+
+
+def test_a_database_written_before_the_normaliser_is_reindexed_on_open(schema: str) -> None:
+    """An existing corpus has to answer the new query, not be silently left behind."""
+    with closing(_raw_connection(schema)) as conn:
+        conn.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema)))
+        conn.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema)))
+        conn.execute(_OLD_SCHEMA)
+        conn.execute(
+            "INSERT INTO records (corpus_id, session_id, evidence_text, lesson_text) "
+            "VALUES ('default', 'old', %s, %s)",
+            (
+                "the checkout pods were crashing, RunContainerError/CrashLoopBackOff",
+                "raised the memory limit",
+            ),
+        )
+
+    with closing(PostgresStore(DSN, schema=schema)) as store:
+        records = store.records
+        assert [m.session_id for m in records.candidates("pod crash")] == ["old"]
+        assert [m.session_id for m in records.candidates("raising limits", scope="lesson")] == [
+            "old"
+        ]
+        assert records.candidates("the and of") == []
+        # The old vector held this as one lexeme, because the parser reads a slash-joined
+        # pair as a file name, so the pool it built could only be reached by the pair.
+        assert [m.session_id for m in records.candidates("crashloopbackoff")] == ["old"]
+        stored = records.open_record("old")
+        assert stored is not None
+        assert stored.evidence_text.startswith("the checkout"), "raw text is untouched"
+
+    # Idempotent, and writable: a second open finds the new shape and rebuilds nothing.
+    with closing(PostgresStore(DSN, schema=schema)) as store:
+        store.records.upsert_summary(a_record("new", evidence="coredns resolution failures"))
+        assert store.records.count() == 2
+        assert [m.session_id for m in store.records.candidates("pod crash")] == ["old"]
+        assert [m.session_id for m in store.records.candidates("resolve failure")] == ["new"]
