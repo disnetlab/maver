@@ -38,6 +38,7 @@ from memory_contract import (
 from kira.contracts.lifecycle import LifecycleState
 from kira.memory.backends.schema import STORE_SCHEMA_VERSION
 from kira.memory.backends.sqlite import SqliteStore
+from kira.memory.lexemes import lexemes
 from kira.memory.ports import TextSearch
 
 DSN = os.environ.get("POSTGRES_TEST_DSN", "")
@@ -299,6 +300,84 @@ def test_a_database_written_before_the_normaliser_is_reindexed_on_open(schema: s
         assert store.records.count() == 2
         assert [m.session_id for m in store.records.candidates("pod crash")] == ["old"]
         assert [m.session_id for m in store.records.candidates("resolve failure")] == ["new"]
+
+    assert _stamped_versions(schema) == [STORE_SCHEMA_VERSION], "one row, and it is current"
+    with _temporary_schema() as fresh, closing(PostgresStore(DSN, schema=fresh)):
+        assert _record_layout(schema) == _record_layout(fresh), (
+            "a migrated table is the current layout, not a shape of its own"
+        )
+
+
+# The `records` table as it was before the environment's labels: the vectors are over the
+# normalised terms already, and there is no labels column. Written out here for the reason
+# the shape above is.
+_SCHEMA_WITHOUT_LABELS = """
+CREATE TABLE records (
+    corpus_id      TEXT NOT NULL,
+    session_id     TEXT NOT NULL,
+    evidence_text  TEXT NOT NULL DEFAULT '',
+    lesson_text    TEXT NOT NULL DEFAULT '',
+    incident_summary TEXT NOT NULL DEFAULT '',
+    lifecycle_state  TEXT NOT NULL DEFAULT 'pending',
+    fault_category   TEXT NOT NULL DEFAULT '',
+    alert_name       TEXT NOT NULL DEFAULT '',
+    namespace        TEXT NOT NULL DEFAULT '',
+    affected_resource TEXT NOT NULL DEFAULT '',
+    verification_verdict TEXT NOT NULL DEFAULT '',
+    evaluation_label     TEXT NOT NULL DEFAULT '',
+    evaluation_source    TEXT NOT NULL DEFAULT '',
+    evaluation_diagnosis_success  BOOLEAN,
+    evaluation_diagnosis_score    DOUBLE PRECISION,
+    evaluation_mitigation_success BOOLEAN,
+    corrected_cause  TEXT NOT NULL DEFAULT '',
+    evidence_terms   TEXT NOT NULL DEFAULT '',
+    lesson_terms     TEXT NOT NULL DEFAULT '',
+    written_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    evidence_tsv TSVECTOR GENERATED ALWAYS AS
+        (CASE WHEN evidence_terms = '' THEN ''::tsvector
+              ELSE array_to_tsvector(string_to_array(evidence_terms, ' ')) END) STORED,
+    lesson_tsv   TSVECTOR GENERATED ALWAYS AS
+        (CASE WHEN lesson_terms = '' THEN ''::tsvector
+              ELSE array_to_tsvector(string_to_array(lesson_terms, ' ')) END) STORED,
+    PRIMARY KEY (corpus_id, session_id)
+);
+CREATE INDEX idx_records_evidence_tsv ON records USING GIN (evidence_tsv);
+CREATE INDEX idx_records_lesson_tsv ON records USING GIN (lesson_tsv);
+CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TIMESTAMPTZ NOT NULL);
+INSERT INTO schema_version VALUES (2, now());
+"""
+
+
+def test_a_database_written_before_labels_gains_them_empty_on_open(schema: str) -> None:
+    """A corpus from the previous layout keeps its records and answers the same queries.
+
+    The step adds a column and nothing else, so what the records say must be untouched:
+    an unlabelled record is one no adapter has claimed, not one that has been rewritten.
+    """
+    with closing(_raw_connection(schema)) as conn:
+        conn.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema)))
+        conn.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema)))
+        conn.execute(_SCHEMA_WITHOUT_LABELS)
+        conn.execute(
+            "INSERT INTO records (corpus_id, session_id, evidence_text, evidence_terms) "
+            "VALUES ('default', 'old', %s, %s)",
+            (
+                "the checkout pods were crashing",
+                " ".join(lexemes("the checkout pods were crashing")),
+            ),
+        )
+
+    with closing(PostgresStore(DSN, schema=schema)) as store:
+        assert store.schema_version == STORE_SCHEMA_VERSION
+        records = store.records
+        assert [m.session_id for m in records.candidates("pod crash")] == ["old"]
+        stored = records.open_record("old")
+        assert stored is not None
+        assert stored.labels == {}
+        assert records.session_ids_with_label("external_key", "anything") == []
+
+        records.upsert_summary(a_record("new", labels={"external_key": "k1"}))
+        assert records.session_ids_with_label("external_key", "k1") == ["new"]
 
     assert _stamped_versions(schema) == [STORE_SCHEMA_VERSION], "one row, and it is current"
     with _temporary_schema() as fresh, closing(PostgresStore(DSN, schema=fresh)):

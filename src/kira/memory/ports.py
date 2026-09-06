@@ -211,6 +211,19 @@ class SessionMemory:
     the answer, so putting it in the text that retrieval returns would let a later
     incident read a conclusion it had not reached.
     """
+    labels: dict[str, str] = field(default_factory=dict)
+    """The environment's own keys for this record, for the environment's own use.
+
+    Written from the underscore-prefixed keys of the session's stored signal, which are
+    the ones every prompt builder drops. They are not part of what a record *says*:
+    nothing renders them into a projection, a prompt or a tool result, and no backend
+    indexes them, so a value that is a ground-truth label under an evaluation harness
+    cannot reach a model through them.
+
+    They exist so that an adapter can ask which records came from one of its own
+    episodes — :meth:`TextSearch.session_ids_with_label` is the only read — without the
+    core having to know what the key means.
+    """
 
 
 @runtime_checkable
@@ -581,6 +594,24 @@ class TextSearch(Protocol):
 
         Returns:
             Candidate records, in no meaningful order.
+        """
+        ...
+
+    def session_ids_with_label(self, name: str, value: str) -> list[str]:
+        """Find every record carrying one of the environment's own labels.
+
+        A read over :attr:`SessionMemory.labels`, and the only one. An evaluation adapter
+        uses it to name the records an episode may not retrieve; nothing about what a
+        record says is reachable through it.
+
+        Args:
+            name: The label, as :func:`kira.memory.distil.signal_labels` names it.
+            value: The value it must hold. An empty value matches nothing rather than
+                every record that lacks the label, because the answer decides what is
+                withheld and a wildcard there fails open.
+
+        Returns:
+            The session ids, in the order the backend stores them.
         """
         ...
 

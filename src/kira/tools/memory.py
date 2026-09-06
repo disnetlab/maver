@@ -208,6 +208,9 @@ async def open_memory(
     # The handle is what the model can reproduce, so that is what it gets back. The
     # real identifier stays in the audit metadata.
     payload["session_id"] = reference
+    # The environment's own keys, and the only place a whole record is rendered for a
+    # model. Under an evaluation harness one of them is the ground-truth fault label.
+    payload.pop("labels", None)
 
     if not payload.get("verification_verdict"):
         payload.pop("verification_verdict", None)

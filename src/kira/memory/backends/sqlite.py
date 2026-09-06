@@ -152,6 +152,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_run_events_run ON agent_run_events(agent_ru
 # only the terms decide the pool. Foreign keys are deliberately absent throughout: the
 # four ports are separate so that a deployment can implement one without the others, and
 # a constraint here would silently make that impossible.
+# The labels ride in a column of their own rather than in the payload, and unindexed
+# like the rest: they are the environment's own keys, they must never widen a candidate
+# pool, and a column is what lets a label be read back without parsing every record.
 _RECORD_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
     session_id UNINDEXED,
@@ -160,22 +163,32 @@ CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
     evidence_terms,
     lesson_terms,
     payload_json UNINDEXED,
+    labels_json UNINDEXED,
     tokenize = "unicode61 tokenchars '-.' remove_diacritics 0"
 );
 """
 
-_RECORD_COLUMNS = "session_id, evidence_text, lesson_text, payload_json"
+_RECORD_COLUMNS = "session_id, evidence_text, lesson_text, payload_json, labels_json"
 _RECORD_INSERT = (
     "INSERT INTO records_fts "
-    "(session_id, evidence_text, lesson_text, evidence_terms, lesson_terms, payload_json) "
-    "VALUES (?, ?, ?, ?, ?, ?)"
+    "(session_id, evidence_text, lesson_text, evidence_terms, lesson_terms, payload_json, "
+    "labels_json) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?)"
 )
 
 _TERMINAL_RUN_STATUSES = frozenset(
     {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
 )
 
-_SESSION_MEMORY_FIELDS = frozenset(f.name for f in fields(SessionMemory))
+# What the payload blob carries: every record field that has no column of its own. The
+# labels have one, so a payload written by a build that put them here is read from the
+# column instead of twice.
+_PAYLOAD_FIELDS = frozenset(f.name for f in fields(SessionMemory)) - {
+    "session_id",
+    "evidence_text",
+    "lesson_text",
+    "labels",
+}
 
 
 def _now() -> str:
@@ -288,14 +301,18 @@ class _SqliteSchema(StoreSchema):
         return int(row["tables"]) == 0
 
     def detect_version(self) -> int:
-        """Tell an index over raw text from one over normalised terms, by its columns.
+        """Read an index's layout off its columns, oldest distinguishing one first.
 
         A database with no record index at all is current rather than old: there is
-        nothing here of the layout version 1 described.
+        nothing here of the layout versions below described.
         """
         with self._db.read() as conn:
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(records_fts)")}
-        return 1 if columns and "evidence_terms" not in columns else STORE_SCHEMA_VERSION
+        if not columns:
+            return STORE_SCHEMA_VERSION
+        if "evidence_terms" not in columns:
+            return 1
+        return 2 if "labels_json" not in columns else STORE_SCHEMA_VERSION
 
     def stamp(self, version: int) -> None:
         with self._db.write() as conn:
@@ -303,7 +320,7 @@ class _SqliteSchema(StoreSchema):
 
     @property
     def steps(self) -> Mapping[int, Callable[[], None]]:
-        return {1: self._index_normalised_terms}
+        return {1: self._index_normalised_terms, 2: self._add_labels}
 
     def _index_normalised_terms(self) -> None:
         """Rebuild the record index over normalised terms.
@@ -316,12 +333,27 @@ class _SqliteSchema(StoreSchema):
         whole rather than a half-filled new one.
         """
         with self._db.write() as conn:
-            stored = conn.execute(f"SELECT {_RECORD_COLUMNS} FROM records_fts").fetchall()
+            stored = conn.execute(
+                "SELECT session_id, evidence_text, lesson_text, payload_json FROM records_fts"
+            ).fetchall()
             _log.info("rebuilding the sqlite record index: %d rows", len(stored))
             conn.execute("DROP TABLE records_fts")
-            conn.execute(_RECORD_SCHEMA)
+            conn.execute(
+                """
+                CREATE VIRTUAL TABLE records_fts USING fts5(
+                    session_id UNINDEXED,
+                    evidence_text UNINDEXED,
+                    lesson_text UNINDEXED,
+                    evidence_terms,
+                    lesson_terms,
+                    payload_json UNINDEXED,
+                    tokenize = "unicode61 tokenchars '-.' remove_diacritics 0"
+                );
+                """
+            )
             conn.executemany(
-                _RECORD_INSERT,
+                "INSERT INTO records_fts (session_id, evidence_text, lesson_text, "
+                "evidence_terms, lesson_terms, payload_json) VALUES (?, ?, ?, ?, ?, ?)",
                 [
                     (
                         row["session_id"],
@@ -335,6 +367,53 @@ class _SqliteSchema(StoreSchema):
                 ],
             )
             _stamp(conn, 2)
+
+    def _add_labels(self) -> None:
+        """Give every stored record an empty set of the environment's own labels.
+
+        FTS5 cannot add a column, so the table is rebuilt from its own rows the way the
+        step before this one does. Written against the layout it produces rather than
+        against the current DDL, which is why the statements are spelled out here.
+        """
+        with self._db.write() as conn:
+            stored = conn.execute(
+                "SELECT session_id, evidence_text, lesson_text, evidence_terms, lesson_terms, "
+                "payload_json FROM records_fts"
+            ).fetchall()
+            _log.info("rebuilding the sqlite record index for labels: %d rows", len(stored))
+            conn.execute("DROP TABLE records_fts")
+            conn.execute(
+                """
+                CREATE VIRTUAL TABLE records_fts USING fts5(
+                    session_id UNINDEXED,
+                    evidence_text UNINDEXED,
+                    lesson_text UNINDEXED,
+                    evidence_terms,
+                    lesson_terms,
+                    payload_json UNINDEXED,
+                    labels_json UNINDEXED,
+                    tokenize = "unicode61 tokenchars '-.' remove_diacritics 0"
+                );
+                """
+            )
+            conn.executemany(
+                "INSERT INTO records_fts (session_id, evidence_text, lesson_text, "
+                "evidence_terms, lesson_terms, payload_json, labels_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        row["session_id"],
+                        row["evidence_text"] or "",
+                        row["lesson_text"] or "",
+                        row["evidence_terms"] or "",
+                        row["lesson_terms"] or "",
+                        row["payload_json"],
+                        "{}",
+                    )
+                    for row in stored
+                ],
+            )
+            _stamp(conn, 3)
 
 
 class SqliteStore:
@@ -951,11 +1030,7 @@ class SqliteRecordIndex:
         Args:
             memory: The distilled record.
         """
-        payload = {
-            field.name: getattr(memory, field.name)
-            for field in fields(memory)
-            if field.name not in ("session_id", "evidence_text", "lesson_text")
-        }
+        payload = {name: getattr(memory, name) for name in sorted(_PAYLOAD_FIELDS)}
         evidence = scrub_text(memory.evidence_text)
         lesson = scrub_text(memory.lesson_text)
         with self._db.write() as conn:
@@ -970,6 +1045,7 @@ class SqliteRecordIndex:
                     _terms(evidence),
                     _terms(lesson),
                     _dumps(payload),
+                    _dumps(dict(memory.labels)),
                 ),
             )
 
@@ -1037,6 +1113,32 @@ class SqliteRecordIndex:
                 (session_id,),
             ).fetchone()
         return None if row is None else _to_memory(row)
+
+    def session_ids_with_label(self, name: str, value: str) -> list[str]:
+        """Find every record carrying one of the environment's own labels.
+
+        Args:
+            name: The label.
+            value: The value it must hold.
+
+        Returns:
+            The session ids, in insertion order.
+        """
+        if not name or not value:
+            return []
+        with self._db.read() as conn:
+            rows = conn.execute(
+                # A scan and a decode per row, like every other read of an unindexed
+                # column here: the corpus is hundreds of records, and an index over a
+                # label would have to be maintained for one caller that runs once per
+                # episode.
+                "SELECT session_id, labels_json FROM records_fts ORDER BY rowid"
+            ).fetchall()
+        return [
+            row["session_id"]
+            for row in rows
+            if _loads_or_empty(row["labels_json"]).get(name) == value
+        ]
 
     def delete_summary(self, session_id: str) -> None:
         """Remove one record.
@@ -1144,12 +1246,13 @@ def _to_memory(row: sqlite3.Row) -> SessionMemory:
     payload = {
         key: value
         for key, value in _loads_or_empty(row["payload_json"]).items()
-        if key in _SESSION_MEMORY_FIELDS
+        if key in _PAYLOAD_FIELDS
     }
     return SessionMemory(
         session_id=row["session_id"],
         evidence_text=row["evidence_text"] or "",
         lesson_text=row["lesson_text"] or "",
+        labels={str(k): str(v) for k, v in _loads_or_empty(row["labels_json"]).items()},
         **payload,
     )
 

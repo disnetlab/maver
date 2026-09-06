@@ -17,7 +17,12 @@ from memory_contract import MemoryStoreContract, OperationalStore, a_record
 
 from kira.memory.backends.schema import STORE_SCHEMA_VERSION
 from kira.memory.backends.sqlite import SqliteRecordIndex, SqliteStore
+from kira.memory.lexemes import lexemes
 from kira.memory.ports import TextSearch
+
+_VERSION_TABLE = """
+CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL);
+"""
 
 
 class TestSqliteBackend(MemoryStoreContract):
@@ -133,6 +138,79 @@ def test_a_database_written_before_the_normaliser_is_reindexed_on_open(
 
     assert _stamped_versions(path) == [STORE_SCHEMA_VERSION], "one row, and it is current"
     fresh = tmp_path / "fresh.db"
+    with contextlib.closing(SqliteRecordIndex(fresh)):
+        pass
+    assert _index_columns(path) == _index_columns(fresh), (
+        "a migrated index is the current layout, not a shape of its own"
+    )
+
+
+# The FTS5 table as it was before the environment's labels: the normalised terms are
+# there, the labels column is not. Written out here for the reason the shape above is.
+_SCHEMA_WITHOUT_LABELS = """
+CREATE VIRTUAL TABLE records_fts USING fts5(
+    session_id UNINDEXED,
+    evidence_text UNINDEXED,
+    lesson_text UNINDEXED,
+    evidence_terms,
+    lesson_terms,
+    payload_json UNINDEXED,
+    tokenize = "unicode61 tokenchars '-.' remove_diacritics 0"
+);
+"""
+
+
+def test_a_database_written_before_labels_gains_them_empty_on_open(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A corpus from the previous layout keeps its records and answers the same queries.
+
+    The step adds a column and nothing else, so what the records say must be untouched:
+    an unlabelled record is one no adapter has claimed, not one that has been rewritten.
+    """
+    written = a_record(
+        "old",
+        evidence="the checkout pods were crashing, RunContainerError/CrashLoopBackOff",
+        lesson="raised the memory limit",
+    )
+    payload = {
+        field.name: getattr(written, field.name)
+        for field in dataclasses.fields(written)
+        if field.name not in ("session_id", "evidence_text", "lesson_text", "labels")
+    }
+    path = tmp_path / "unlabelled.db"
+    with contextlib.closing(sqlite3.connect(path)) as conn:
+        conn.executescript(_VERSION_TABLE)
+        conn.executescript(_SCHEMA_WITHOUT_LABELS)
+        conn.execute(
+            "INSERT INTO records_fts VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                written.session_id,
+                written.evidence_text,
+                written.lesson_text,
+                " ".join(lexemes(written.evidence_text)),
+                " ".join(lexemes(written.lesson_text)),
+                json.dumps(payload),
+            ),
+        )
+        conn.execute("INSERT INTO schema_version VALUES (2, '2026-01-01T00:00:00Z')")
+        conn.commit()
+
+    index = SqliteRecordIndex(path)
+    try:
+        assert index.schema_version == STORE_SCHEMA_VERSION
+        assert index.open_record("old") == written, "the record itself is carried through"
+        assert index.open_record("old").labels == {}
+        assert [m.session_id for m in index.candidates("pod crash")] == ["old"]
+        assert index.session_ids_with_label("external_key", "anything") == []
+
+        index.upsert_summary(a_record("new", labels={"external_key": "k1"}))
+        assert index.session_ids_with_label("external_key", "k1") == ["new"]
+    finally:
+        index.close()
+
+    assert _stamped_versions(path) == [STORE_SCHEMA_VERSION], "one row, and it is current"
+    fresh = tmp_path / "fresh-labels.db"
     with contextlib.closing(SqliteRecordIndex(fresh)):
         pass
     assert _index_columns(path) == _index_columns(fresh), (

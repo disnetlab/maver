@@ -229,6 +229,7 @@ CREATE TABLE IF NOT EXISTS records (
     evaluation_diagnosis_score    DOUBLE PRECISION,
     evaluation_mitigation_success BOOLEAN,
     corrected_cause               TEXT NOT NULL DEFAULT '',
+    labels                        JSONB NOT NULL DEFAULT '{{}}'::jsonb,
     evidence_terms                TEXT NOT NULL DEFAULT '',
     lesson_terms                  TEXT NOT NULL DEFAULT '',
     written_at                    TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -278,6 +279,12 @@ ALTER TABLE records
     ADD COLUMN lesson_tsv   TSVECTOR GENERATED ALWAYS AS ({_terms_vector("lesson_terms")}) STORED;
 CREATE INDEX IF NOT EXISTS idx_records_evidence_tsv ON records USING GIN (evidence_tsv);
 CREATE INDEX IF NOT EXISTS idx_records_lesson_tsv ON records USING GIN (lesson_tsv);
+"""
+
+# The environment's own labels, added to a table written before they existed. Empty
+# rather than null, so nothing downstream has to tell one from an unlabelled record.
+_ADD_LABELS_COLUMN = """
+ALTER TABLE records ADD COLUMN IF NOT EXISTS labels JSONB NOT NULL DEFAULT '{}'::jsonb;
 """
 
 _SEQUENCE_CONSTRAINT = "agent_run_events_seq_key"
@@ -559,7 +566,18 @@ class _PostgresSchema(StoreSchema):
         if generated is None:
             return STORE_SCHEMA_VERSION
         expression = generated["expression"] or ""
-        return STORE_SCHEMA_VERSION if "array_to_tsvector" in expression else 1
+        if "array_to_tsvector" not in expression:
+            return 1
+        return STORE_SCHEMA_VERSION if self._has_labels() else 2
+
+    def _has_labels(self) -> bool:
+        """Whether the record table carries the environment's own labels."""
+        with self._db.read() as conn:
+            found = conn.execute(
+                "SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('records') "
+                "AND attname = 'labels' AND NOT attisdropped"
+            ).fetchone()
+        return found is not None
 
     def stamp(self, version: int) -> None:
         with self._db.write() as conn:
@@ -567,7 +585,7 @@ class _PostgresSchema(StoreSchema):
 
     @property
     def steps(self) -> Mapping[int, Callable[[], None]]:
-        return {1: self._index_normalised_terms}
+        return {1: self._index_normalised_terms, 2: self._add_labels}
 
     def _index_normalised_terms(self) -> None:
         """Rebuild the record vectors over normalised terms.
@@ -602,6 +620,12 @@ class _PostgresSchema(StoreSchema):
                 )
             conn.execute(_VECTOR_REBUILD)
             _stamp(conn, 2)
+
+    def _add_labels(self) -> None:
+        """Add the labels column to a table written before records carried them."""
+        with self._db.write() as conn:
+            conn.execute(_ADD_LABELS_COLUMN)
+            _stamp(conn, 3)
 
 
 class PostgresStore:
@@ -1293,7 +1317,7 @@ class PostgresRecordIndex:
         Args:
             memory: The distilled record.
         """
-        values = [self.corpus_id, *(scrub(getattr(memory, name)) for name in _RECORD_FIELDS)]
+        values = [self.corpus_id, *(_bind(name, getattr(memory, name)) for name in _RECORD_FIELDS)]
         values.extend(
             [_terms(scrub_text(memory.evidence_text)), _terms(scrub_text(memory.lesson_text))]
         )
@@ -1359,6 +1383,29 @@ class PostgresRecordIndex:
             ).fetchone()
         return None if row is None else _to_memory(row)
 
+    def session_ids_with_label(self, name: str, value: str) -> list[str]:
+        """Find every record carrying one of the environment's own labels.
+
+        Args:
+            name: The label.
+            value: The value it must hold.
+
+        Returns:
+            The session ids, in write order.
+        """
+        if not name or not value:
+            return []
+        with self._db.read() as conn:
+            rows = conn.execute(
+                # `->>` reads the value as text, so a label written as a number or a
+                # boolean still compares against the string the caller asked for.
+                "SELECT session_id FROM records "
+                "WHERE corpus_id = %s AND labels ->> %s = %s "
+                "ORDER BY written_at, session_id",
+                (self.corpus_id, name, value),
+            ).fetchall()
+        return [row["session_id"] for row in rows]
+
     def delete_summary(self, session_id: str) -> None:
         """Remove one record.
 
@@ -1386,6 +1433,16 @@ class PostgresRecordIndex:
 
 def _vector(scope: SearchScope) -> str:
     return "lesson_tsv" if scope == "lesson" else "evidence_tsv"
+
+
+def _bind(name: str, value: Any) -> Any:
+    """Scrub one record field on its way to its column, JSON columns included.
+
+    psycopg dumps a bare mapping as ``jsonb`` on its own, but naming the adapter here
+    keeps the record's one non-scalar column from depending on that default.
+    """
+    scrubbed = scrub(value)
+    return Jsonb(scrubbed) if isinstance(scrubbed, dict) else scrubbed
 
 
 def _terms(text: str | None) -> str:
@@ -1471,7 +1528,11 @@ def _to_event(row: _Row) -> AgentRunEventRecord:
 
 
 def _to_memory(row: _Row) -> SessionMemory:
-    return SessionMemory(**{name: row[name] for name in _RECORD_FIELDS})
+    record = SessionMemory(**{name: row[name] for name in _RECORD_FIELDS})
+    # Read back as whatever JSON held, so a label written by an older build as a number
+    # is the string the embedded backend would have returned for it.
+    record.labels = {str(key): str(value) for key, value in record.labels.items()}
+    return record
 
 
 if TYPE_CHECKING:

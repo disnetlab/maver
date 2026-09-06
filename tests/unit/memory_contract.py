@@ -677,6 +677,55 @@ class MemoryStoreContract:
         withheld = records.candidates("checkout", exclude=["s0", "s1"])
         assert {m.session_id for m in withheld} == {"s2", "s3", "s4"}
 
+    def test_a_label_is_stored_beside_a_record_and_never_widens_a_pool(
+        self, records: TextSearch
+    ) -> None:
+        """The environment's own keys are carried, and are not part of what a query sees.
+
+        A label under an evaluation harness is the ground-truth fault label, so a backend
+        that indexed it would let a query for the answer find the record that holds it.
+        """
+        records.upsert_summary(
+            a_record("s1", evidence="checkout restarting", labels={"external_key": "zebrafault"})
+        )
+        records.upsert_summary(a_record("s2", evidence="checkout restarting"))
+
+        stored = records.open_record("s1")
+        assert stored is not None
+        assert stored.labels == {"external_key": "zebrafault"}
+        unlabelled = records.open_record("s2")
+        assert unlabelled is not None
+        assert unlabelled.labels == {}
+        assert records.candidates("zebrafault") == []
+        assert records.candidates("zebrafault", scope="lesson") == []
+
+    def test_records_are_findable_by_one_of_the_environment_s_own_labels(
+        self, records: TextSearch
+    ) -> None:
+        """The one read over a label, and the seam a per-episode exclusion is built on."""
+        records.upsert_summary(a_record("s1", labels={"external_key": "k1", "run": "a"}))
+        records.upsert_summary(a_record("s2", labels={"external_key": "k1", "run": "b"}))
+        records.upsert_summary(a_record("s3", labels={"external_key": "k2"}))
+        records.upsert_summary(a_record("s4"))
+
+        assert set(records.session_ids_with_label("external_key", "k1")) == {"s1", "s2"}
+        assert records.session_ids_with_label("external_key", "k2") == ["s3"]
+        assert records.session_ids_with_label("external_key", "k3") == []
+        assert records.session_ids_with_label("run", "a") == ["s1"]
+        # An empty value withholds nothing rather than everything unlabelled: the answer
+        # decides what a run may not retrieve, and a wildcard there fails open.
+        assert records.session_ids_with_label("external_key", "") == []
+        assert records.session_ids_with_label("", "k1") == []
+
+    def test_a_relabelled_record_keeps_only_the_labels_it_was_last_written_with(
+        self, records: TextSearch
+    ) -> None:
+        records.upsert_summary(a_record("s1", labels={"external_key": "k1"}))
+        records.upsert_summary(a_record("s1", labels={"external_key": "k2"}))
+
+        assert records.session_ids_with_label("external_key", "k1") == []
+        assert records.session_ids_with_label("external_key", "k2") == ["s1"]
+
     def test_the_ranker_over_the_pool_finds_the_right_precedent(self, records: TextSearch) -> None:
         """The pool is only useful if the measured ranker can still pick out of it.
 

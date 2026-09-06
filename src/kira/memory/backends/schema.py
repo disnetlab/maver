@@ -20,7 +20,7 @@ __all__ = ["STORE_SCHEMA_VERSION", "StoreSchema", "StoreSchemaTooNew"]
 
 _log = logging.getLogger(__name__)
 
-STORE_SCHEMA_VERSION = 2
+STORE_SCHEMA_VERSION = 3
 """Version of the store *layout*: which tables, columns and indexes a database holds.
 
 Not :data:`kira.contracts.SCHEMA_VERSION`, which versions the submission schemas and the
@@ -31,6 +31,7 @@ module moves, and the two are free to differ.
 
 Version 1 is the layout up to the shared normaliser, whose record index was over raw
 text. Version 2 indexes the normalised terms of :mod:`kira.memory.lexemes` instead.
+Version 3 carries the environment's own labels beside each record, unindexed.
 """
 
 

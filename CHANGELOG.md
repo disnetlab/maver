@@ -111,3 +111,14 @@ versions the submission schemas and the event contract.
   both numbers. An older binary cannot be told what a newer layout means, and one that
   wrote past it would corrupt the corpus quietly rather than fail; the deployment runs
   the newer build, or points the older one at another database.
+
+- **A record carries the environment's own labels, and the store layout is 3.** Step
+  2 → 3 adds one column to the record index of both backends — an unindexed
+  `labels_json` in SQLite, a `labels JSONB` in PostgreSQL — defaulting to empty, so an
+  existing corpus opens, gains the column and says exactly what it said before. The
+  labels are written from the underscore-prefixed keys of the session's stored signal,
+  which are the keys every prompt builder already drops, and they are never rendered
+  into a projection, a prompt or a tool result and never indexed for search: what a
+  record says to a model does not change. They exist for one read,
+  `TextSearch.session_ids_with_label`, so that an evaluation adapter can ask which
+  records came from one of its own episodes without the core knowing what the key means.
