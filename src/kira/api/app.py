@@ -48,11 +48,13 @@ from kira.orchestration.jobs import (
 )
 from kira.orchestration.runner import Deployment
 from kira.orchestration.scheduler import shutdown_scheduler
-from kira.roles.registry import validate_roles
+from kira.roles.registry import load_plugin_roles, validate_roles
 from kira.secondpass.strategies import policy_for
 from kira.settings.authority import Mode
 from kira.settings.profiles import load_profile
 from kira.settings.root import Settings, load_settings
+from kira.tools.allowlists import ROLE_TOOLSETS
+from kira.tools.registry import load_descriptions, load_entry_point_tools, validate_registry
 from kira.tools.transport.base import ToolTransport
 from kira.tools.transport.direct import direct_transport
 
@@ -92,9 +94,17 @@ def validate_deployment(settings: Settings) -> None:
         RoleRegistryError: When a role cannot terminate or cannot be prompted.
         SecondPassConfigError: When the configured gate and delivery name no
             composition.
+        ToolRegistryError: When a tool and its description disagree.
         ValueError: When the configured storage backend or ranker is not installed.
     """
     load_profile(settings.model.profile, settings.model.profile_dir)
+    # An out-of-tree role or tool is registered by importing the distribution that
+    # declares it, and nothing else imports it. Loaded here rather than at package
+    # import so that the checks below see the whole deployment: a plugin was invisible
+    # to every one of them, and naming it in an arm file failed as an unknown role.
+    load_plugin_roles()
+    load_entry_point_tools()
+    validate_registry(descriptions=load_descriptions(), allowlists=ROLE_TOOLSETS)
     validate_roles(override_dir=settings.prompts.override_dir)
     policy_for(settings.memory.second_pass, settings.memory)
     build_storage(settings).close()

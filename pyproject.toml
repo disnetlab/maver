@@ -71,13 +71,22 @@ kira = "kira.cli:app"
 # deployed harness already names keeps working.
 kira-sregym-driver = "kira.adapters.sregym.driver:main"
 
-# Extension seams. A third party ships a role, tool, transport, ranker or environment
-# adapter by declaring an entry point in these groups; no fork required.
+# Extension seams. A third party ships a role, tool, ranker or environment adapter by
+# declaring an entry point in these groups; no fork required. The module named by the
+# entry point registers on import, and `validate_deployment` imports all of them before
+# it checks anything, so a plugin is validated with the rest of the deployment.
+#
+# A role and a tool still need an allowlist entry to be reachable, and the allowlist is
+# core: `kira.tools.allowlists.ROLE_TOOLSETS` is the mutable table a plugin module adds
+# its own row to, or splices its tool name into, in the same import. A tool shipped this
+# way carries its own `descriptions` rather than appearing in the packaged catalogue.
+#
+# There is no transports group: a transport is not selected by name anywhere. The core
+# uses the direct one and an environment adapter supplies its own, so the adapter group
+# below is the seam a third-party transport arrives through.
 [project.entry-points."kira.roles"]
 
 [project.entry-points."kira.tools"]
-
-[project.entry-points."kira.transports"]
 
 [project.entry-points."kira.rankers"]
 

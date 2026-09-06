@@ -115,7 +115,11 @@ class ToolSpec:
     mid-incident and tries to work around.
     """
     descriptions: Mapping[str, Any] | None = None
-    """Descriptions for an out-of-tree tool. Built-ins use the shipped YAML instead."""
+    """Descriptions for an out-of-tree tool, keyed by tool name as the YAML is.
+
+    A built-in leaves this None and is described in the shipped catalogue. Carrying its
+    own is what lets a tool arrive from a distribution that cannot edit that file.
+    """
 
 
 _REGISTRY: dict[str, ToolSpec] = {}
@@ -311,7 +315,12 @@ def validate_registry(
     """
     specs = dict(registry if registry is not None else _REGISTRY)
 
-    missing = sorted(set(specs) - set(descriptions))
+    # A tool shipped outside this package carries its own descriptions and is not in the
+    # catalogue, so the bijection is over the built-ins only. It is still required to
+    # describe itself for every role that can reach it, which the allowlist pass below
+    # enforces against the same field ``build_toolset`` resolves from.
+    catalogued = {name for name, spec in specs.items() if spec.descriptions is None}
+    missing = sorted(catalogued - set(descriptions))
     undeclared = sorted(set(descriptions) - set(specs))
     if missing or undeclared:
         raise ToolRegistryError(
@@ -349,7 +358,7 @@ def validate_registry(
                 raise ToolRegistryError(f"role {role!r} allows unregistered tool {name!r}")
             if spec.safety != "submit" and spec.dispatch is None:
                 raise ToolRegistryError(f"tool {name!r} is allowlisted but has no implementation")
-            description_for(name, role, descriptions=descriptions)
+            description_for(name, role, descriptions=spec.descriptions or descriptions)
 
     for name, spec in specs.items():
         unknown_caps = sorted(spec.requires - CAPABILITIES)

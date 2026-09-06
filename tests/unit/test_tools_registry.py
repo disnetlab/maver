@@ -151,3 +151,33 @@ def test_a_per_role_description_replaces_the_default_outright() -> None:
     descriptions = {"get_logs": {"default": "generic", "agents": {"rca": "for rca"}}}
     assert description_for("get_logs", "rca", descriptions=descriptions) == "for rca"
     assert description_for("get_logs", "verify", descriptions=descriptions) == "generic"
+
+
+def test_an_out_of_tree_tool_describes_itself_instead_of_the_shipped_catalogue() -> None:
+    """The bijection rule is over the built-ins, not over every registered tool.
+
+    A tool shipped by a third party carries its own descriptions — the field toolset
+    resolution already reads — and is absent from the packaged YAML by construction.
+    Comparing the whole registry against the YAML refused it, so the process that loaded
+    an entry-point tool could not start.
+    """
+    spec = read_only(
+        "third_party_probe",
+        descriptions={"third_party_probe": {"default": "A probe shipped out of tree."}},
+    )
+    validate_registry(
+        descriptions={"get_logs": {"default": "read logs"}},
+        allowlists={"rca": ("get_logs", "third_party_probe")},
+        registry={"get_logs": read_only("get_logs"), "third_party_probe": spec},
+    )
+
+
+def test_an_out_of_tree_tool_still_owes_every_role_that_reaches_it_a_description() -> None:
+    """Describing itself is the alternative to the catalogue, not an exemption."""
+    spec = read_only("third_party_probe", descriptions={"unrelated": {"default": "x"}})
+    with pytest.raises(ToolRegistryError, match="missing description entry"):
+        validate_registry(
+            descriptions={},
+            allowlists={"rca": ("third_party_probe",)},
+            registry={"third_party_probe": spec},
+        )

@@ -8,6 +8,7 @@ a run crashes rather than finishes.
 
 import asyncio
 import dataclasses
+import importlib
 import json
 import pathlib
 from typing import Any
@@ -16,7 +17,7 @@ import httpx
 import pytest
 import yaml
 
-from kira.api.app import _drain, create_app
+from kira.api.app import _drain, create_app, validate_deployment
 from kira.api.deps import Service
 from kira.api.incidents import fingerprint, run_incident_task
 from kira.audit.journal import ListSink
@@ -25,10 +26,16 @@ from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
 from kira.middleware.human_approval import authorities
 from kira.orchestration.runner import Deployment, resume_after_decision
+from kira.roles import registry as role_registry
+from kira.roles.registry import registered_roles
 from kira.settings.authority import AuthoritySettings
 from kira.settings.groups import MemorySettings, PipelineSettings, ServerSettings, VerifySettings
 from kira.settings.profiles import load_profile
 from kira.settings.root import Settings
+from kira.tools import allowlists
+from kira.tools import policy as tool_policy
+from kira.tools import registry as tool_registry
+from kira.tools.registry import registered
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 
@@ -526,3 +533,112 @@ async def test_polling_an_incident_does_not_stall_the_incident(tmp_path: pathlib
         assert polled.status_code == 200
         await settle(app.state.service)
     deploy.storage.close()
+
+
+# --- the extension seams pyproject advertises ---------------------------------------
+
+_PLUGIN_ROLE = """
+from kira.contracts.artifacts import RootCause
+from kira.roles.base import RoleSpec
+from kira.roles.registry import role
+from kira.tools.allowlists import ROLE_TOOLSETS
+
+
+async def _run(ctx):
+    raise NotImplementedError
+
+
+ROLE_TOOLSETS["demo_plugin_role"] = ("get_metrics", "submit_root_cause")
+role(
+    RoleSpec(
+        name="demo_plugin_role",
+        submit_tool="submit_root_cause",
+        submit_model=RootCause,
+        state_slot="root_cause",
+        prompt="rca",
+        run=_run,
+    )
+)
+"""
+
+_PLUGIN_TOOL = """
+from kira.tools.allowlists import ROLE_TOOLSETS
+from kira.tools.policy import read_only
+from kira.tools.registry import tool
+
+
+@tool(
+    name="third_party_probe",
+    safety="read_only",
+    parameters={"type": "object", "properties": {}},
+    descriptions={"third_party_probe": {"default": "A probe shipped out of tree."}},
+)
+async def third_party_probe(ctx):
+    return "ok"
+
+
+read_only("third_party_probe")
+ROLE_TOOLSETS["rca"] = (*ROLE_TOOLSETS["rca"][:-1], "third_party_probe", ROLE_TOOLSETS["rca"][-1])
+"""
+
+
+@pytest.fixture
+def plugin_registries() -> Any:
+    """Put the process-wide registries back, so a plugin cannot leak into another test."""
+    live_registries = (
+        role_registry._ROLES,
+        tool_registry._REGISTRY,
+        allowlists.ROLE_TOOLSETS,
+        tool_policy._POLICIES,
+    )
+    saved = [dict(live) for live in live_registries]
+    yield
+    for live, original in zip(live_registries, saved, strict=True):
+        live.clear()
+        live.update(original)
+
+
+def _install_plugin(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, module: str, source: str, group: str
+) -> None:
+    """Put a real installed distribution on the path, as an adopter's package would be."""
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / f"{module}.py").write_text(source, encoding="utf-8")
+    dist = site / "kira_demo-0.1.dist-info"
+    dist.mkdir()
+    (dist / "METADATA").write_text("Metadata-Version: 2.1\nName: kira-demo\nVersion: 0.1\n")
+    (dist / "entry_points.txt").write_text(f"[{group}]\ndemo = {module}\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(site))
+    importlib.invalidate_caches()
+
+
+@pytest.mark.parametrize(
+    ("group", "module", "source", "registered_as"),
+    [
+        ("kira.roles", "kira_demo_role", _PLUGIN_ROLE, "demo_plugin_role"),
+        ("kira.tools", "kira_demo_tool", _PLUGIN_TOOL, "third_party_probe"),
+    ],
+    ids=["roles", "tools"],
+)
+def test_a_plugin_distribution_is_loaded_at_the_composition_root(
+    group: str,
+    module: str,
+    source: str,
+    registered_as: str,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    plugin_registries: None,
+) -> None:
+    """pyproject tells an adopter these groups need no fork, and nothing imported them.
+
+    The distribution was on the path and invisible: the role was never registered, so
+    naming it in an arm file failed as an unknown role, with nothing to connect that to
+    the entry point the adopter had declared.
+    """
+    _install_plugin(tmp_path, monkeypatch, module, source, group)
+    monkeypatch.setenv("KIRA_SERVER__WORKDIR", str(tmp_path / "workspace"))
+
+    validate_deployment(Settings())
+
+    assert registered_as in (registered_roles() if group == "kira.roles" else registered())
