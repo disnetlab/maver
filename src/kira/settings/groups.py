@@ -544,7 +544,16 @@ class MemorySettings(SettingsGroup):
         "embedded",
         "KIRA_MEMORY__BACKEND",
         "MEMORY_MODE",
-        description="Embedded SQLite, or a PostgreSQL server.",
+        description=(
+            "Embedded SQLite, or a PostgreSQL server. The two are one retriever: both "
+            "index and query the terms of the same Python normaliser, so the same "
+            "corpus and query produce the same candidate pool on either. That is a "
+            "reproducibility requirement rather than a convenience — the published "
+            "numbers were measured on the server backend, and an adopter who will not "
+            "run PostgreSQL has to be able to reproduce them. Choose on operational "
+            "grounds: a server for concurrent writes and a durable campaign, the "
+            "embedded file for a single process and no service to run."
+        ),
     )
     postgres_dsn: Credential = setting(
         None,

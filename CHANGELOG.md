@@ -56,3 +56,36 @@ recorded here rather than left to the commit log.
   entries now state the one behaviour: no credentials, kubectl rejected, use
   `exec_kubectl_cmd_safely`. `exec_kubectl_cmd_safely` also drops "via the kubectl MCP
   server", which named one adapter's transport in a core description.
+
+## Retrieval
+
+The candidate pool a query is ranked over is an input to every published retrieval
+number, so a change to how it is built belongs here rather than in the commit log.
+
+- **PostgreSQL's candidate stage moved from `english`-on-raw-text to a vector over
+  normalised terms, so that the embedded backend can be identical to it.** The campaign
+  was measured on PostgreSQL, whose `to_tsvector('english', ...)` applied its parser, its
+  127-word stopword list and Snowball English stemming before BM25 scored the pool in
+  Python. SQLite's FTS5 index applied none of that: on a 120-record corpus five of six
+  queries were served a different top five, `pod crash` reached a record reading "the
+  pods were crashing" on PostgreSQL and nothing on SQLite, and a query of nothing but
+  stopwords matched the whole SQLite corpus and none of the PostgreSQL one. An adopter
+  who will not run PostgreSQL still has to be able to reproduce the retriever that was
+  measured, so both backends now index and query the output of one Python normaliser
+  (`kira.memory.lexemes`) and their pools are equal by construction. On the campaign's
+  116-record corpus the two return identical candidate sets for all 30 queries tried.
+
+  Against the pool the old PostgreSQL path built, 15 of those 30 queries are unchanged
+  and every one of the 118 record-level differences is one of two documented classes:
+  115 are compound tokens PostgreSQL's parser keeps whole — `RunContainerError/`
+  `CrashLoopBackOff` was one lexeme there and is two terms here, so a query naming either
+  half now reaches the record — and 3 come from five words in 4,413 where the vendored
+  Snowball stemmer is a later revision than PostgreSQL 17's. Verified against a live
+  server over 400 strings of real incident text: 52.5% of strings normalise to exactly
+  PostgreSQL's lexemes, 91.5% of distinct lexemes agree, and 100% of the differences fall
+  in those classes. Retrieval numbers produced before this change and after it are
+  therefore comparable but not identical.
+
+  BM25 scoring is unchanged: it still tokenises the raw text, because raw tokens are what
+  was scored. Both backends migrate an existing database on open, deriving the terms from
+  the raw text they already hold.
