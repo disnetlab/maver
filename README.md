@@ -63,6 +63,15 @@ person.** What is demonstrated above is that the mechanism works — it parks, p
 and resumes the same incident on a decision, and that path is tested. It is not a claim
 that a human approved anything during the measurements.
 
+**No measured campaign has been run on this code.** Every number in the manuscript was
+produced by the research prototype and is recomputed from the data archive that
+accompanies the paper, not from anything here. What this repository reproduces is the
+mechanisms behind those numbers, and its parity checks pin them against the prototype's
+behaviour one mechanism at a time (`make test-parity`). A paired parity run on the
+benchmark is the gate before this code is used to measure anything, and it has not been
+run. The limitations section below repeats this where a reader looking for caveats will
+find it.
+
 ## Running it
 
 ```
@@ -119,6 +128,55 @@ the driver it loads is pinned by a test.
 `STYLE_GUIDE.md` carries the conventions a linter cannot express: the layer boundaries,
 the tool-allowlist rule, the write-gate invariant, the artifact-schema freeze, and the
 rule that keeps the graph library replaceable.
+
+## Limitations and known issues
+
+The provenance statement above is the first of these: no number reported anywhere was
+measured on this code.
+
+**Deferred deliberately.** Each of these is tracked, and what stands in for it today is
+named so an adopter can judge the risk themselves.
+
+- **No authentication or authorisation on the API.** Anyone who can reach the port can
+  approve a cluster write. The shipped NetworkPolicy and no ingress are the interim
+  posture, and a decision's `decided_by` is recorded as a claim rather than a verified
+  identity.
+- **Single tenant.** `memory.corpus_id` partitions the retrieval corpus, but nothing
+  authenticates the caller who chose it. It is a research partition, not a security
+  boundary; the supported deployment is one Kira per tenant.
+- **No rate limiting** beyond the intake concurrency bound. A burst of alerts is queued,
+  not throttled. The turn budgets, the generation cap and the repeat breaker bound what
+  one incident can consume, not what a client can ask for.
+- **Single process. No scale-out and no leader election.** The execution lock is
+  in-process, so `replicas: 1`, the `Recreate` strategy and a ReadWriteOnce volume are
+  load-bearing together rather than defaults.
+- **No backup or restore automation.** The state is one volume with a documented layout
+  and one namespaced PostgreSQL schema, so both are addressable by hand. What is missing
+  is a schedule and a tested restore.
+- **No prompt-injection hardening.** Telemetry the agent reads is an untrusted channel,
+  and the paper scopes this out by name. What contains an injected instruction is
+  structural — per-role allowlists, namespace-scoped RBAC, the write gate — and not
+  anything in the prompt.
+
+**Behaviour a reader should not be surprised by.**
+
+- An execution submission with no command behind it is refused for the submit guard's
+  budget of two rejections and the third is accepted, recorded as a bypass on the run row
+  and in the event log. That row is in the table above; the bypass is deliberate, so that
+  a guard cannot end a run by refusing it forever.
+- The host-recovery tool is withheld from the toolset unless recovery nodes are
+  configured. The node allowlist is empty by default, and a tool that refuses every call
+  reads in a result as a model that could not use it.
+- Retrieval is one retriever across both backends by construction, and the normalisation
+  both index and query with is a documented approximation of PostgreSQL's text parser,
+  not a copy of it. `src/kira/memory/lexemes.py` states what it reproduces and what it
+  does not, measured against a live server.
+- The store layout is versioned. A build that opens a store written by a later build
+  refuses it and names both versions rather than writing past columns it does not know.
+
+**Evaluation posture.** The approval gate ran in automatic mode in every measured
+campaign. The paragraph under the claims table above says what that does and does not
+imply.
 
 ## Citing
 
