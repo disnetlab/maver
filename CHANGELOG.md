@@ -23,6 +23,19 @@ frozen".
   two are not interchangeable on a run that produced such a submission.
   See `refactor/PARITY-CHECKLIST.md` P57.
 
+## Safety
+
+- **`ssh_exec` runs only the host binaries it exists for.** The tool hands its argument
+  to the node's login shell, which on a k3s host holds a cluster-admin kubeconfig, and
+  the kubectl guard screened by position only: `xargs kubectl`, `sh -c 'kubectl …'`,
+  `eval`, `timeout 5 kubectl` and a script wrapping any of them all reached the cluster
+  outside the kubectl tool's screen, the approval gate's selectors and the
+  ServiceAccount's RBAC. Every simple command in the line must now start with one of the
+  host binaries named in `src/kira/tools/host.py`, and the tool's description says so.
+  The refusal surface is wider than the archive's, and no measured run enabled the tool:
+  `KIRA_TOOLS__HOST_RECOVERY_NODES` was empty in every campaign, so every call returned
+  the "not an allowed recovery node" refusal before reaching a command.
+
 ## Model-facing text
 
 Prompts and tool descriptions are held-constant inputs to every published measurement,

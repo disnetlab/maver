@@ -33,12 +33,18 @@ from kira.tools.policy import read_only
 from kira.tools.registry import tool
 from kira.tools.sandbox import SANDBOX_ERROR_PREFIX, sandboxed_command
 
-__all__ = ["bash_exec", "code_exec", "runs_kubectl"]
+__all__ = ["bash_exec", "code_exec", "command_segments", "runs_kubectl"]
+
+# What ends one command and begins the next, defined once. The guard below and the host
+# tool's segmentation both read it, because two screens disagreeing about what a
+# separator is is exactly how the host tool came to see neither a newline nor a subshell.
+_SEPARATORS = r"\n;&|(`"
 
 # Command position only: the start of the command, or after a separator, a pipe or the
 # opening of a subshell. So `foo && kubectl get pods`, a second line, and
 # `echo $(kubectl get secret)` are all caught, and `grep kubectl notes.txt` is not.
-_AT_COMMAND_POSITION = r"(?:^|[\n;&|(`])\s*"
+_AT_COMMAND_POSITION = rf"(?:^|[{_SEPARATORS}])\s*"
+_SEGMENT = re.compile(rf"[{_SEPARATORS}]")
 _KUBECTL_COMMAND = re.compile(_AT_COMMAND_POSITION + r"(?:sudo\s+)?(?:k3s\s+)?kubectl\b")
 _LEADING_SSH = re.compile(_AT_COMMAND_POSITION + r"(?:sudo\s+)?ssh\b")
 _LEADING_SSH_TOOL = re.compile(_AT_COMMAND_POSITION + r"ssh_exec\b")
@@ -68,6 +74,28 @@ _SSH_FROM_SANDBOX = (
     "do not run ssh from {origin}. Host mutations must use "
     "ssh_exec(node, command), which is execution-only and HITL-gated."
 )
+
+
+def command_segments(command: str) -> list[str]:
+    """Split a command line into the simple commands a shell would run in it.
+
+    The separators are the ones the kubectl guard already recognises, so a caller that
+    screens every segment sees each command the guard sees at a command position, and
+    the ones it does not — a pipeline's right-hand side reached through ``xargs``, a
+    wrapper's argument — as segments of their own.
+
+    Quoting is deliberately not honoured. A separator inside a quoted argument splits
+    the segment anyway, which can only produce more segments to screen and never fewer,
+    so the error is a refusal rather than a command that slipped past. Honouring quotes
+    would mean writing a shell parser, which is the thing this declines to do.
+
+    Args:
+        command: The command line as the model wrote it.
+
+    Returns:
+        Its non-empty segments, in order.
+    """
+    return [segment for segment in _SEGMENT.split(command) if segment.strip()]
 
 
 def runs_kubectl(command: str) -> bool:

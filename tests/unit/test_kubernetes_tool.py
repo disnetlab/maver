@@ -356,3 +356,96 @@ async def test_a_cluster_write_is_refused_inside_the_tool_and_not_only_at_the_ga
     assert "DISPATCHED" in await exec_kubectl_cmd_safely(
         _context(tmp_path, "verify", frozenset({"verify"})), cmd=write
     )
+
+
+# --- what ssh_exec may run at all --------------------------------------------------
+
+
+def _on_a_worker(tmp_path: Path) -> ToolContext:
+    """Execution, with one node reachable: the only shape in which ssh_exec runs."""
+    return ToolContext(
+        transport=_NoCluster(),
+        workspace=SessionWorkspace(tmp_path),
+        role="execution",
+        session_id="s1",
+        journal=Journal(session_id="s1", stage="execution"),
+        settings=ToolSettings(host_recovery_nodes=frozenset({"worker1"})),
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "xargs kubectl get ns",
+        "sh -c 'kubectl get ns'",
+        "bash -lc 'kubectl get ns'",
+        "eval kubectl get ns",
+        "timeout 5 kubectl get ns",
+        "env kubectl get ns",
+        "nohup kubectl get ns",
+        "sudo -u root kubectl get ns",
+        "python3 -c \"import subprocess; subprocess.run(['kubectl', 'get', 'ns'])\"",
+        "/usr/local/bin/collect-node-state.sh",
+        "echo hi | xargs -I{} kubectl delete ns {}",
+    ],
+)
+async def test_ssh_exec_refuses_a_command_that_is_not_a_host_binary(
+    command: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Screening by position cannot close a shell, so the vocabulary is closed instead.
+
+    Every line here was sent to the node: the guard looks for kubectl at a command
+    position, and a wrapper puts it somewhere else. On a k3s host the login shell holds
+    a cluster-admin kubeconfig, so each of these is a cluster call that the kubectl
+    tool's screen, the approval gate's selectors and the ServiceAccount's RBAC never saw.
+    """
+
+    def never_runs(*argv: object, **kwargs: object) -> None:
+        raise AssertionError(f"a subprocess was started: {argv}")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", never_runs)
+
+    result = await ssh_exec(_on_a_worker(tmp_path), node="worker1", command=command)
+
+    assert result.startswith("error:")
+    assert "host-level commands only" in result
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "systemctl restart kubelet",
+        "sudo systemctl start kubelet",
+        "sudo systemctl restart containerd",
+        "journalctl -u kubelet -n 50",
+        "journalctl -u kubelet -n 200 | grep -i error",
+        "df -h",
+        "timeout 20 journalctl -u kubelet -n 50",
+    ],
+)
+async def test_ssh_exec_still_runs_the_host_commands_it_exists_for(
+    command: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The allowlist is a screen on this tool, not a retirement of it.
+
+    `sudo systemctl start kubelet` is what two role prompts prescribe for a stopped
+    kubelet, and a pipeline into `grep` is how its journal gets read.
+    """
+    sent: list[tuple[object, ...]] = []
+
+    class _Ran:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return (b"ok", b"")
+
+    async def spawn(*argv: object, **kwargs: object) -> _Ran:
+        sent.append(argv)
+        return _Ran()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+
+    result = await ssh_exec(_on_a_worker(tmp_path), node="worker1", command=command)
+
+    assert not result.startswith("error:")
+    assert sent and sent[0][-1] == command
