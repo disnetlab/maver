@@ -6,11 +6,16 @@ import pytest
 from pydantic import ValidationError
 
 from kira.audit.journal import Journal, ListSink
-from kira.llm.sampling import sampling_digest
+from kira.llm.sampling import (
+    SamplingResolution,
+    resolve_sampling,
+    sampling_digest,
+    split_sampling,
+)
 from kira.memory.factory import build_storage
 from kira.settings.arms import compare_constants, deep_merge, load_arm
 from kira.settings.profiles import ModelProfile, load_profile
-from kira.settings.root import load_settings, reset_settings
+from kira.settings.root import Settings, load_settings, reset_settings
 from kira.tools.allowlists import RETRIEVAL_TOOLS
 from kira.tools.context import ToolContext
 from kira.tools.toolsets import build_toolset
@@ -22,6 +27,19 @@ SHIPPED_PROFILES = ["qwen3.6-35b-a3b", "qwen3.8-27b", "claude-sonnet-4-6"]
 SHIPPED_ARMS = sorted(path.stem for path in ARMS.glob("*.yaml"))
 """Read from the directory, not listed. A hand-written list is a second place to add an
 arm, and the one it silently omitted was the configuration carrying the interaction."""
+
+
+def _both_splits(profile: ModelProfile) -> list[SamplingResolution]:
+    """Every split the process performs, so a regression in either one shows.
+
+    An agent call resolves the profile against the environment; an auxiliary call
+    supplies its own set. Both route the provider's native knobs, and a test written
+    against only one of them would pass while the other stopped routing.
+    """
+    return [
+        resolve_sampling(profile, Settings()),
+        split_sampling(profile.sampling, profile),
+    ]
 
 
 def _profile_dict(**overrides: object) -> dict[str, object]:
@@ -65,16 +83,15 @@ class TestShippedProfiles:
         assert declared == set(ModelProfile.model_fields["sampling"].annotation.model_fields)
 
     def test_native_knobs_are_routed_away_from_a_hosted_provider(self) -> None:
-        top, extra = (p := load_profile("claude-sonnet-4-6", MODELS)).sampling.request_fields(
-            p.quirks.extra_body_fields
-        )
-        assert extra == {}
-        assert "top_k" not in top
+        profile = load_profile("claude-sonnet-4-6", MODELS)
+        for resolved in _both_splits(profile):
+            assert resolved.extra_body == {}
+            assert "top_k" not in resolved.top_level
 
     def test_self_hosted_native_knobs_travel_in_the_extension(self) -> None:
-        p = load_profile("qwen3.6-35b-a3b", MODELS)
-        _, extra = p.sampling.request_fields(p.quirks.extra_body_fields)
-        assert set(extra) == {"top_k", "min_p", "repetition_penalty"}
+        profile = load_profile("qwen3.6-35b-a3b", MODELS)
+        for resolved in _both_splits(profile):
+            assert set(resolved.extra_body) == {"top_k", "min_p", "repetition_penalty"}
 
     def test_a_missing_profile_names_what_is_available(self) -> None:
         with pytest.raises(FileNotFoundError, match="available"):

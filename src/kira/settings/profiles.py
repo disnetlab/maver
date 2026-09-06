@@ -20,7 +20,7 @@ small allowlist.
 
 import logging
 from pathlib import Path
-from typing import Any, Literal, Self
+from typing import Literal, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -119,26 +119,6 @@ class SamplingSet(_Frozen):
                 "reasoning and stops before it can emit a tool call"
             )
         return self
-
-    def request_fields(
-        self, extra_body_fields: frozenset[str]
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Split the set into top-level request fields and native extension fields.
-
-        Args:
-            extra_body_fields: Knobs this provider accepts only via its extension.
-
-        Returns:
-            The top-level parameters and the extension parameters, each omitting
-            anything set to null.
-        """
-        top: dict[str, Any] = {}
-        extra: dict[str, Any] = {}
-        for name, value in self.model_dump().items():
-            if value is None:
-                continue
-            (extra if name in extra_body_fields else top)[name] = value
-        return top, extra
 
 
 class Quirks(_Frozen):

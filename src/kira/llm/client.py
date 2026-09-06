@@ -600,22 +600,6 @@ class LLMClient:
             )
         )
 
-    def assistant_message(self, response: ModelResponse) -> Message:
-        """Serialise a response for the transcript, applying the profile's quirks.
-
-        Args:
-            response: The normalised response.
-
-        Returns:
-            The assistant message.
-        """
-        message = serialise_assistant(response)
-        if self.profile.quirks.keep_reasoning and message.get("tool_calls"):
-            message = carry_reasoning_forward(
-                message, response.reasoning, self.settings.runtime.keep_reasoning_max_chars
-            )
-        return message
-
 
 def _backoff(attempt: int, error_class: ErrorClass) -> float:
     """Compute the wait before the next attempt.
