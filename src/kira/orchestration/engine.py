@@ -139,6 +139,12 @@ class LangGraphEngine:
                     await on_stage(node_name, cast(IncidentState, accumulated))
             return cast(IncidentState, accumulated)
         except RecursionError as exc:
+            # Only the executor's own overflow, which subclasses the builtin. A node
+            # that genuinely recursed away its stack raises the same class, and
+            # relabelling that as a routing loop sends whoever reads the incident back
+            # to the edge table for a bug that is not there.
+            if type(exc).__name__ != "GraphRecursionError":
+                raise
             _log.error("incident %s exceeded %d role runs", state.get("session_id", ""), STEP_LIMIT)
             raise StepLimitExceeded(f"incident exceeded {STEP_LIMIT} role runs") from exc
 

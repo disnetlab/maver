@@ -311,3 +311,23 @@ async def test_a_consumed_verdict_stops_being_a_pending_instruction() -> None:
     assert final["remediation_retries"] == POLICY.remediation_retries
     assert charged.count("execution") <= POLICY.remediation_retries + 1
     assert final["verify_result"] is None
+
+
+async def test_a_node_that_recursed_away_its_stack_is_not_a_routing_loop() -> None:
+    """The executor's own overflow subclasses the builtin, which is how it is
+    recognised without importing the framework this module is kept free of — but so
+    does a node that genuinely recursed, and relabelling that as "exceeded 25 role
+    runs" sends whoever reads the incident to the edge table for a bug that is not
+    there."""
+
+    async def deep(state: IncidentState) -> dict[str, Any]:
+        def recurse(depth: int) -> int:
+            return recurse(depth + 1)
+
+        return {"error": str(recurse(0))}
+
+    nodes = pipeline_nodes() | {"rca": deep}
+
+    with pytest.raises(RecursionError) as raised:
+        await LangGraphEngine(build_graph(nodes, POLICY)).run(seeded())
+    assert not isinstance(raised.value, StepLimitExceeded)
