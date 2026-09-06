@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 from collections.abc import Iterator, Mapping
 from difflib import get_close_matches
 from functools import lru_cache
@@ -34,6 +35,16 @@ ADAPTER_ENV_NAME = f"{ENV_PREFIX}ADAPTERS"
 """Where an adapter's configuration slice is read from."""
 
 _ADAPTER_SLICE_PREFIX = f"{ADAPTER_ENV_NAME}__"
+
+_SECRET_FIELD_NAME = re.compile(r"(^|_)(key|token|secret|password|dsn)(_|$)", re.IGNORECASE)
+"""What a credential is called, for the one configuration slice with no type to read.
+
+An adapter's slice is untyped on purpose, so nothing there is a ``SecretStr`` and the
+settings layer has only the field's name to go on. Judging by the name is what an
+adapter's own model would do one layer later, and this record is written into every run
+and echoed by a command whose contract is that it is safe to paste.
+"""
+
 
 _DIRECT_ENV_NAMES = frozenset({"REVISION"})
 """Prefixed names read straight from the environment rather than through a field.
@@ -203,9 +214,17 @@ class Settings(SettingsGroup):
         Returns:
             A JSON-safe mapping with every secret rendered as a mask.
         """
+        dumped = self.model_dump(mode="json")
+        dumped["adapters"] = {
+            adapter: {
+                field: ("**********" if _SECRET_FIELD_NAME.search(field) else value)
+                for field, value in slice_.items()
+            }
+            for adapter, slice_ in dumped["adapters"].items()
+        }
         return {
             "arm_digest": self._arm_digest(),
-            "settings": self.model_dump(mode="json"),
+            "settings": dumped,
             "sampling_overrides": sorted(self.sampling_overrides()),
             # Which prompts this deployment replaced, and what was in them. The
             # directory path alone does not say, and a result produced under a prompt
@@ -345,7 +364,10 @@ def _prune(
             # case-sensitive membership test below would miss what it supplied and the
             # arm would displace it.
             below = (
-                {str(name).lower(): value for name, value in raw.items()}
+                {
+                    str(supplied_name).lower(): below_value
+                    for supplied_name, below_value in raw.items()
+                }
                 if isinstance(raw, Mapping)
                 else {}
             )

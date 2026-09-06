@@ -429,6 +429,17 @@ class TestSecretsAndImmutability:
         snapshot = load_settings().snapshot()
         assert "hunter2" not in repr(snapshot)
 
+    def test_an_adapters_credential_is_masked_like_every_other(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The slice is untyped so nothing in it is a SecretStr, and this record goes
+        into every run and is echoed by a command documented as safe to paste."""
+        monkeypatch.setenv("KIRA_ADAPTERS__SREGYM__API_TOKEN", "tok-hunter2")
+        monkeypatch.setenv("KIRA_ADAPTERS__SREGYM__CONDUCTOR_BASE_URL", "http://c:8000")
+        adapters = load_settings().snapshot()["settings"]["adapters"]
+        assert adapters["sregym"]["api_token"] == "**********"
+        assert adapters["sregym"]["conductor_base_url"] == "http://c:8000"
+
     @pytest.mark.parametrize("field", SECRETS, ids=SECRET_IDS)
     def test_a_quoted_secret_is_read_without_its_quotes(
         self, field: AliasedField, monkeypatch: pytest.MonkeyPatch
