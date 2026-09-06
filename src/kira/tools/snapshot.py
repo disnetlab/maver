@@ -36,7 +36,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from kira.tools.context import ToolContext
-from kira.tools.errors import tool_error
+from kira.tools.errors import timed_out, tool_error
 from kira.tools.kubernetes import read_kubectl
 from kira.tools.policy import read_only
 from kira.tools.registry import tool
@@ -650,7 +650,7 @@ async def namespace_snapshot(ctx: ToolContext, namespace: str, since_minutes: in
         try:
             return await asyncio.wait_for(read_kubectl(ctx, cmd), timeout=_READ_TIMEOUT_S)
         except TimeoutError:
-            return tool_error(f"timed out after {_READ_TIMEOUT_S}s")
+            return timed_out("the snapshot read", _READ_TIMEOUT_S)
 
     results = await asyncio.gather(*(bounded(cmds[key]) for key in keys))
     raw = dict(zip(keys, results, strict=True))

@@ -5,14 +5,18 @@ prompts and every published measurement were written against it; and the output 
 because a tool that pre-truncated would hide the pointer to the saved file.
 """
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from kira.audit.journal import Journal
+from kira.settings.groups import ToolSettings
+from kira.tools import host
 from kira.tools.context import ToolContext
-from kira.tools.errors import format_exit_result, tool_error
+from kira.tools.errors import call_timed_out, format_exit_result, timed_out, tool_error
+from kira.tools.host import ssh_exec
 from kira.tools.logs import get_logs
 from kira.tools.metrics import get_metrics
 from kira.tools.workspace import SessionWorkspace
@@ -121,3 +125,42 @@ async def test_the_query_is_blinded_before_it_leaves_the_process(tmp_path: Path)
     await get_logs(ctx, query='{namespace="astronomy-shop"}')
 
     assert transport.log_queries == ['{namespace="astronomy-shop"} !chaos-mesh']
+
+
+async def test_a_bounded_tool_reports_its_timeout_through_the_shared_builder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A timeout is a harness intervention, and the loop finds one by reading the result.
+
+    That is why the marker has one builder. ``ssh_exec`` spelled the sentence out by
+    hand instead, so a wording the loop reads and a wording it does not were the same
+    edit apart, with nothing between them: the interventions of every run would have
+    lost their timeout bucket and no test would have said so.
+    """
+
+    class Hangs:
+        async def communicate(self) -> tuple[bytes, bytes]:
+            await asyncio.sleep(10)
+            raise AssertionError("the bound should have fired")
+
+        def kill(self) -> None:
+            """Nothing was started."""
+
+    async def spawn(*argv: object, **kwargs: object) -> Hangs:
+        return Hangs()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(host, "_TIMEOUT_SECONDS", 0.05)
+    ctx = ToolContext(
+        transport=FakeTransport(),
+        workspace=SessionWorkspace(tmp_path),
+        role="execution",
+        session_id="s1",
+        journal=Journal(session_id="s1", stage="execution"),
+        settings=ToolSettings(host_recovery_nodes=frozenset({"worker1"})),
+    )
+
+    result = await ssh_exec(ctx, node="worker1", command="systemctl start kubelet")
+
+    assert call_timed_out(result)
+    assert result == timed_out("ssh_exec", host._TIMEOUT_SECONDS)

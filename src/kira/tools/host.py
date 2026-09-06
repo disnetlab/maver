@@ -20,7 +20,7 @@ import asyncio
 import re
 
 from kira.tools.context import ToolContext, redact
-from kira.tools.errors import EXEC_OUTPUT_LIMIT, tool_error
+from kira.tools.errors import EXEC_OUTPUT_LIMIT, timed_out, tool_error
 from kira.tools.execution import runs_kubectl
 from kira.tools.policy import always_writes
 from kira.tools.registry import tool
@@ -101,7 +101,7 @@ async def ssh_exec(ctx: ToolContext, node: str, command: str) -> str:
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=_TIMEOUT_SECONDS)
     except TimeoutError:
         process.kill()
-        return tool_error(f"ssh_exec timed out after {_TIMEOUT_SECONDS}s")
+        return timed_out("ssh_exec", _TIMEOUT_SECONDS)
 
     rendered = redact(
         ctx.evidence, f"exit_code={process.returncode}\n{stdout.decode(errors='replace')}"
