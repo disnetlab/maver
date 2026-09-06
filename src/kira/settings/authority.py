@@ -14,7 +14,7 @@ instead of leaving it to be inferred.
 from fnmatch import fnmatch
 from typing import Literal
 
-from pydantic import AnyHttpUrl, Field, model_validator
+from pydantic import AnyHttpUrl, Field, field_validator, model_validator
 from pydantic_settings import SettingsConfigDict
 
 from kira.settings.base import NameSet, SettingsGroup, group_config, setting
@@ -119,6 +119,17 @@ class AuthoritySettings(SettingsGroup):
         "KIRA_AUTHORITY__WEBHOOK_TIMEOUT_S",
         description="How long to wait on the notification before giving up on it.",
     )
+
+    @field_validator("timeout_s")
+    @classmethod
+    def _timeout_is_a_wait(cls, value: int | None) -> int | None:
+        if value is not None and value < 1:
+            raise ValueError(
+                "authority.timeout_s must be at least 1 second; a request that expires "
+                "the instant it is raised is never seen by the human it is raised for. "
+                "Waiting forever is spelled null."
+            )
+        return value
 
     @model_validator(mode="after")
     def _rule_names_are_unique(self) -> "AuthoritySettings":

@@ -609,6 +609,17 @@ def test_a_group_can_be_built_in_code_by_field_name() -> None:
     assert built.timeout_s == 60
 
 
+def test_an_approval_deadline_that_has_already_passed_is_refused() -> None:
+    """A pause exists so a person can answer it. Zero and negative values were accepted,
+    and a request raised under one expires before the notification carrying it lands:
+    every write is denied by timeout, in a deployment configured to ask a human. Waiting
+    forever is spelled null, which is why zero cannot mean it."""
+    with pytest.raises(ValidationError, match="at least 1 second"):
+        AuthoritySettings(timeout_s=0)
+
+    assert AuthoritySettings(timeout_s=None).timeout_s is None
+
+
 def test_a_deployment_that_can_reach_no_node_says_so(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
