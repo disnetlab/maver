@@ -687,6 +687,140 @@ async def test_a_guarded_stage_is_not_rescued_before_it_has_acted() -> None:
     assert rescues == []
 
 
+async def test_a_run_with_nothing_to_convert_is_not_rescued() -> None:
+    """The rescue turns findings into a submission, and a run that produced neither a
+    tool result nor a substantial written conclusion has none.
+
+    Rescued anyway, such a run is handed a submit-only turn and answers it: a confident
+    empty diagnosis that grades as a real attempt. The gate is the difference between a
+    stage that failed visibly and one that filed an answer it had no basis for.
+    """
+    # Under finalizer_min_content_chars, so there is no written conclusion either. More
+    # turns are scripted than the run should need, so a rescue granted here fails the
+    # assertion below rather than exhausting the script.
+    model = FakeModel([turn(text="no idea") for _ in range(6)])
+    sink = ListSink()
+    result = await run_until_submit(
+        model=model,
+        role="rca",
+        system="s",
+        tools=TOOLS,
+        dispatch=DISPATCH,
+        submit_tool=SUBMIT,
+        messages=[{"role": "user", "content": "go"}],
+        journal=Journal(sink, session_id="s1", stage="rca"),
+    )
+
+    assert result.status == "no_tool_calls"
+    assert [
+        e.payload
+        for e in sink.events
+        if isinstance(e.payload, InterventionEvent) and e.payload.control == "finalizer_rescue"
+    ] == []
+
+
+async def test_a_rescue_turn_offers_only_the_submit_tool() -> None:
+    """A rescue is a submit-only turn, and that restriction is the control itself.
+
+    Left offering the full toolset it is an ordinary turn with a stern preamble, so the
+    control the manuscript names as one of four is not the control that ran: the model
+    can carry on investigating on the budget the rescue was granted from.
+    """
+    prose = "x" * 900  # clears the evidence threshold so the rescue is granted
+    model = FakeModel(
+        [
+            turn(call("get_logs", {"q": "a"}, id="t1")),
+            turn(text=prose),
+            turn(text=prose),
+            turn(text=prose),
+            turn(call(SUBMIT, {"ok": True}, id="s")),
+        ]
+    )
+    result = await run_until_submit(
+        model=model,
+        role="rca",
+        system="s",
+        tools=TOOLS,
+        dispatch=DISPATCH,
+        submit_tool=SUBMIT,
+        messages=[{"role": "user", "content": "go"}],
+    )
+
+    assert result.submitted
+    assert [t.name for t in model.requests[-1].tools] == [SUBMIT]
+    # The turns before it were offered everything, so this is the rescue and not the
+    # role's ordinary toolset happening to be one tool wide.
+    assert [t.name for t in model.requests[0].tools] == [t.name for t in TOOLS]
+
+
+async def test_the_hard_repeat_tier_refuses_at_its_own_threshold() -> None:
+    """Three tiers, and the middle one is where a warning becomes a refusal.
+
+    The soft tier suggests; the hard tier tells the model the call will not be run
+    again. Moved by one, a spiral gets an extra turn of encouragement in place of the
+    refusal, and nothing else in the run changes — which is how a breaker's threshold
+    drifts without a symptom.
+    """
+    limits = LoopLimits()
+    turns = [call("get_logs", {"q": "same"}, id=f"c{i}") for i in range(limits.repeat_hard)]
+    sink = ListSink()
+    result = await run_until_submit(
+        model=FakeModel([turn(c) for c in turns] + [turn(call(SUBMIT, {"ok": True}, id="s"))]),
+        role="rca",
+        system="s",
+        tools=TOOLS,
+        dispatch=DISPATCH,
+        submit_tool=SUBMIT,
+        messages=[{"role": "user", "content": "go"}],
+        journal=Journal(sink, session_id="s1", stage="rca"),
+    )
+
+    assert result.submitted
+    actions = [
+        e.payload.action
+        for e in sink.events
+        if isinstance(e.payload, InterventionEvent) and e.payload.control == "repeat_breaker"
+    ]
+    warnings = limits.repeat_hard - limits.repeat_soft
+    assert actions == ["warned"] * warnings + ["refused"]
+
+
+async def test_a_batch_of_exactly_the_cap_runs_and_one_over_is_discarded() -> None:
+    """The cap is the largest batch the archive executed, not the smallest it refused.
+
+    Off by one it silently rejects a legal turn: the model is told its batch was
+    oversized, the calls it asked for never run, and the turn is spent.
+    """
+    executed: list[int] = []
+
+    async def record(**kwargs: object) -> str:
+        executed.append(len(executed))
+        return "ok"
+
+    limits = LoopLimits(max_tool_calls_per_turn=2)
+    model = FakeModel(
+        [
+            turn(*[call("get_logs", {"i": i}, id=f"a{i}") for i in range(2)]),
+            turn(*[call("get_logs", {"i": i}, id=f"b{i}") for i in range(3)]),
+            turn(call(SUBMIT, {"ok": True}, id="s")),
+        ]
+    )
+    result = await run_until_submit(
+        model=model,
+        role="rca",
+        system="s",
+        tools=TOOLS,
+        dispatch={**DISPATCH, "get_logs": record},
+        submit_tool=SUBMIT,
+        messages=[{"role": "user", "content": "go"}],
+        limits=limits,
+    )
+
+    assert result.submitted
+    assert len(executed) == limits.max_tool_calls_per_turn
+    assert any(control("oversized_batch_discarded") == m.get("content") for m in result.transcript)
+
+
 def test_the_turn_budget_leaves_room_for_the_rescue_it_may_grant() -> None:
     """A rescue requested after the last normal turn has to be answerable."""
     limits = LoopLimits(max_turns=20, finalizer_rescues=1, submit_validation_rejections=3)
