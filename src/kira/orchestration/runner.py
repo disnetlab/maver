@@ -28,7 +28,7 @@ from kira.adapters.base import AdapterTool
 from kira.audit.journal import EventSink, Journal, NullSink
 from kira.contracts.events import StageEvent
 from kira.contracts.lifecycle import RunStatus
-from kira.contracts.routing import HandBack
+from kira.contracts.routing import HandBack, Route
 from kira.contracts.state import IncidentState, TargetStage
 from kira.llm.sampling import (
     SamplingResolution,
@@ -59,7 +59,7 @@ from kira.orchestration.resume import (
     resume_events,
     save_checkpoint,
 )
-from kira.orchestration.routing import RoutingPolicy
+from kira.orchestration.routing import RoutingPolicy, pending_handback
 from kira.orchestration.state import initial_state
 from kira.roles.base import RoleContext, RoleSpec, StateDelta, stage_role
 from kira.roles.registry import get_role, registered_roles
@@ -304,7 +304,7 @@ def _nodes(
     nodes = {name: make_node(get_role(name), deps) for name in GRAPH_ROLES}
     policy = policy_for(deployment.settings.memory.second_pass, deployment.settings.memory)
     if policy is not None:
-        nodes["rca"] = _second_pass_node(deployment, deps, resources, policy)
+        nodes["rca"] = _second_pass_node(deployment, deps, resources, policy, nodes["rca"])
     return nodes
 
 
@@ -313,10 +313,23 @@ def _second_pass_node(
     deps: IncidentDeps,
     resources: IncidentResources,
     policy: SecondPassPolicy,
+    plain: NodeFn,
 ) -> NodeFn:
-    """Run the gated second opinion in place of a single diagnosis."""
+    """Run the gated second opinion in place of a first diagnosis.
+
+    A later re-diagnosis runs the plain node instead. Repeating the pass would weigh
+    retrieved precedent against the verification this incident just performed, which is
+    the stronger signal, and would make precedent exposure a function of how the first
+    repair turned out — the confound the mechanism is measured against. It also renders
+    the assignment slot on top of the reassessment block, a combination no prompt is
+    written for.
+    """
 
     async def node(state: IncidentState) -> StateDelta:
+        handback = pending_handback(state)
+        if handback is not None and handback.target is Route.RCA:
+            return await plain(state)
+
         # What the inner runs' own wrappers produced, kept per entry. The mechanism
         # reduces a run to the four fields it arbitrates over; everything else the
         # wrapper decided — the hand-back accounting above all — belongs to the incident

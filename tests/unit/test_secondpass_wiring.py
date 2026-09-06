@@ -334,3 +334,45 @@ async def test_a_hand_back_through_the_composed_node_charges_the_shared_budget(
     assert final["remediation_retries"] == settings.pipeline.remediation_retries
     assert final["reassessment_count"] == 2
     storage.close()
+
+
+async def test_the_second_opinion_runs_on_the_first_diagnosis_only(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A re-diagnosis re-enters plain diagnosis carrying the reassessment context.
+
+    Repeating the pass would weigh retrieved precedent against the verification this
+    incident just performed, which is the stronger signal, and would make precedent
+    exposure a function of how the first repair turned out — the confound the mechanism
+    is measured against. It would also double the dose in the one cell of the factorial
+    that carries the interaction, so the arm's cost accounting would describe a
+    configuration nothing ran.
+    """
+    settings = verifying_settings(tmp_path)
+    storage = build_storage(settings)
+    model = HandingBackModel()
+    deploy = Deployment(
+        settings=settings,
+        storage=storage,
+        completion=model,
+        profile=PROFILE,
+        transport_for=lambda session_id: FakeTransport(),
+        sink=ListSink(),
+    )
+    session = storage.sessions.create_session(ALERT)
+
+    final = await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+
+    assert model.callers.count("secondpass.gate") == 1
+    assert model.callers.count("secondpass.selector") == 1
+
+    # Three diagnosis entries: the composed one, then a plain one per hand-back. Only
+    # the first is a pass, which is what the run labels say.
+    diagnoses = [r for r in storage.runs.runs_for(session.session_id) if r.agent_name == "rca"]
+    assert len(diagnoses) == 4
+    labelled = [r.metadata["run_label"] for r in diagnoses if "run_label" in r.metadata]
+    assert sorted(labelled) == ["rca.first", "rca.second"]
+
+    # And the re-entries were re-diagnoses rather than fresh starts.
+    assert len(final["prior_attempts"]) == 2
+    storage.close()
