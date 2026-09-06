@@ -14,9 +14,10 @@ import pytest
 
 from kira.audit.journal import Journal, ListSink
 from kira.contracts.artifacts import ExecutionResult, Plan, RootCause
+from kira.contracts.events import InterventionEvent
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.middleware.base import MiddlewareStack
-from kira.prompts.loader import markers, read_runtime
+from kira.prompts.loader import markers, read_runtime, render
 from kira.roles import verify
 from kira.roles.base import RoleContext
 from kira.roles.health_gate import HealthGate
@@ -86,17 +87,24 @@ class FakeModel:
         )
 
 
-def context(tmp_path: pathlib.Path, *, health_gate: bool = False) -> tuple[RoleContext, FakeModel]:
-    sink = ListSink()
+def context(
+    tmp_path: pathlib.Path,
+    *,
+    health_gate: bool = False,
+    model: FakeModel | None = None,
+    transport: Any = None,
+    sink: ListSink | None = None,
+) -> tuple[RoleContext, FakeModel]:
+    sink = sink or ListSink()
     journal = Journal(sink, session_id="s1", stage="verify")
     tools = ToolContext(
-        transport=FakeTransport(),
+        transport=transport or FakeTransport(),
         workspace=SessionWorkspace(tmp_path),
         role="verify",
         session_id="s1",
         journal=journal,
     )
-    model = FakeModel(RECOVERED)
+    model = model or FakeModel(RECOVERED)
     ctx = RoleContext(
         spec=verify.VERIFY,
         state={
@@ -170,6 +178,88 @@ def test_the_guard_refuses_a_verdict_it_cannot_stand_behind(
 ) -> None:
     rejection = verify._build_submit_guard(gate)(arguments, calls, [])
     assert rejection is not None and refused in rejection
+
+
+UNHEALTHY_POD = "pod user-1 is Running but container(s) user are not Ready"
+
+UNHEALTHY_NAMESPACE = json.dumps(
+    {
+        "items": [
+            {
+                "metadata": {"name": "user-1"},
+                "status": {
+                    "phase": "Running",
+                    "containerStatuses": [{"name": "user", "ready": False, "restartCount": 7}],
+                },
+            }
+        ]
+    }
+)
+"""One pod the sweep must call unhealthy, in the shape `kubectl get pods -o json` returns."""
+
+
+class UnhealthyTransport(FakeTransport):
+    async def kubectl(self, argv: list[str]) -> str:
+        return UNHEALTHY_NAMESPACE
+
+
+def submit_results(model: FakeModel) -> list[str]:
+    """What the model was told about each of its own submissions, in order."""
+    messages = model.requests[-1].messages
+    answered = {
+        call["id"]
+        for message in messages
+        for call in message.get("tool_calls", [])
+        if call["function"]["name"] == "submit_verify_result"
+    }
+    return [str(m["content"]) for m in messages if m.get("tool_call_id") in answered]
+
+
+async def test_a_recovered_verdict_the_spent_guard_never_saw_is_recorded_as_one(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The health gate is a budget too, and the third `recovered` closes the incident.
+
+    The gate found a broken pod and refused the verdict twice; the third submission is
+    accepted unconsulted, so this run closes a namespace the gate says is unhealthy.
+    That is the measured behaviour and it stands. The gate's own audit entry cannot
+    stand in for the record of it: it says the gate blocked, which is also what it says
+    on a run where the block held and the model revised.
+    """
+    sink = ListSink()
+    ctx, model = context(
+        tmp_path,
+        health_gate=True,
+        model=FakeModel(*[RECOVERED] * 3),
+        transport=UnhealthyTransport(),
+        sink=sink,
+    )
+
+    outcome = await verify.VERIFY.run(ctx)
+
+    assert outcome.artifact is not None and outcome.artifact.recovered is True
+    assert outcome.metadata["gate"]["blocked_recovered"] is True
+    guard = outcome.metadata["submit_guard"]
+    refused = render(read_runtime("verify", "submit_while_unhealthy.txt"), {"FAILURES": ""})
+    assert guard == {
+        "rejections": 2,
+        "bypassed": True,
+        "finding": refused.splitlines()[0],
+    }
+    (bypass,) = [
+        e.payload
+        for e in sink.events
+        if isinstance(e.payload, InterventionEvent) and e.payload.control == "submit_guard"
+    ]
+    assert bypass.action == "bypassed"
+    assert "verify" in bypass.detail
+    assert "2 rejections" in bypass.detail
+    assert guard["finding"] in bypass.detail
+    # The record changed; what the model was told did not.
+    expected = render(
+        read_runtime("verify", "submit_while_unhealthy.txt"), {"FAILURES": f"  - {UNHEALTHY_POD}"}
+    )
+    assert submit_results(model) == [f"error: {expected}"] * 2
 
 
 def test_a_gate_that_could_not_look_does_not_block_recovery() -> None:

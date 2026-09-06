@@ -18,6 +18,7 @@ from kira.contracts.artifacts import Plan, RootCause
 from kira.contracts.events import InterventionEvent
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.middleware.base import MiddlewareStack
+from kira.prompts.loader import read_runtime
 from kira.roles import execution
 from kira.roles.base import RoleContext
 from kira.settings.groups import MemorySettings, PipelineSettings
@@ -253,6 +254,68 @@ def test_the_submit_guard_refuses_a_remediation_that_was_never_attempted(
     calls_made = 0 if not arguments else 1
     rejection = execution._submit_guard(arguments, calls_made, [])
     assert rejection is not None and marker in rejection
+
+
+REFUSAL = read_runtime("execution", "submit_without_command.txt")
+"""What the guard hands back to a model that submitted having run nothing."""
+
+
+def submit_results(model: FakeModel, submit_tool: str) -> list[str]:
+    """What the model was told about each of its own submissions, in order."""
+    messages = model.requests[-1].messages
+    answered = {
+        call["id"]
+        for message in messages
+        for call in message.get("tool_calls", [])
+        if call["function"]["name"] == submit_tool
+    }
+    return [str(m["content"]) for m in messages if m.get("tool_call_id") in answered]
+
+
+async def test_a_submission_the_spent_guard_never_saw_is_recorded_as_one(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The guard is a budget, and a submission that outlasts it is accepted.
+
+    That acceptance is the behaviour every published measurement was taken under, so it
+    is pinned here rather than fixed: this run files a `succeeded` remediation having
+    dispatched no command at all. What it cannot also do is look like a submission the
+    guard approved — the artifact, the submission event and the run status are identical
+    for both — so the run row and the event log carry the bypass and what it overrode.
+    """
+    sink = ListSink()
+    ctx, model = context(
+        tmp_path, model=FakeModel(*[VALID_RESULT] * 3, opening_read=False), sink=sink
+    )
+
+    outcome = await execution.EXECUTION.run(ctx)
+
+    assert outcome.artifact is not None and outcome.artifact.succeeded is True
+    guard = outcome.metadata["submit_guard"]
+    assert guard["rejections"] == 2 and guard["bypassed"] is True
+    assert REFUSAL.startswith(guard["finding"].removesuffix(" ..."))
+    (bypass,) = [
+        e.payload
+        for e in sink.events
+        if isinstance(e.payload, InterventionEvent) and e.payload.control == "submit_guard"
+    ]
+    assert bypass.action == "bypassed"
+    assert "execution" in bypass.detail
+    assert "2 rejections" in bypass.detail
+    assert guard["finding"] in bypass.detail
+    # The record changed; what the model was told did not. These are held-constant
+    # inputs to every published measurement, so the asset is the expectation.
+    assert submit_results(model, "submit_execution_result") == [f"error: {REFUSAL}"] * 2
+
+
+async def test_a_run_the_guard_passed_carries_no_bypass(tmp_path: pathlib.Path) -> None:
+    """The entry only means something if the ordinary run says the opposite."""
+    ctx, _ = context(tmp_path)
+
+    outcome = await execution.EXECUTION.run(ctx)
+
+    assert outcome.artifact is not None
+    assert outcome.metadata["submit_guard"] == {"rejections": 0, "bypassed": False}
 
 
 async def test_an_empty_plan_short_circuits_without_a_model_call(tmp_path: pathlib.Path) -> None:

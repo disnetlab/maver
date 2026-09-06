@@ -413,7 +413,9 @@ async def test_a_guard_that_is_out_of_budget_says_so_before_it_lets_one_through(
     Accepting is deliberate: a run whose guard will never be satisfied still has to
     end. What the log could not say is that the guard was never asked — the trailing
     submission event was byte-identical to one the guard had passed. The guard's dose
-    is a divisor, and a bypass counted as a consultation inflates the denominator.
+    is a divisor, and a bypass counted as a consultation inflates the denominator. So
+    the event names the role, the count and the finding it overrode, and the result
+    carries the same three for the run row.
     """
     consulted = 0
 
@@ -445,6 +447,13 @@ async def test_a_guard_that_is_out_of_budget_says_so_before_it_lets_one_through(
         if isinstance(e.payload, InterventionEvent) and e.payload.control == "submit_guard"
     ]
     assert [b.action for b in bypassed] == ["bypassed"]
+    assert bypassed[0].detail.startswith("rca: guard budget spent after 2 rejections")
+    assert "never good enough" in bypassed[0].detail
+    assert result.guard.metadata() == {
+        "rejections": 2,
+        "bypassed": True,
+        "finding": "never good enough",
+    }
 
 
 @pytest.mark.parametrize("serial", [True, False], ids=["serial", "parallel"])
