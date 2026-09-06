@@ -302,4 +302,8 @@ async def test_a_retried_call_records_what_the_caller_waited(
     recorded = cost_of(sink).payload
     assert recorded.attempt == 3
     assert recorded.last_attempt_ms is not None
-    assert recorded.duration_ms >= 3 * recorded.last_attempt_ms
+    # Two failed attempts each slept at least 50 ms before the one that succeeded, and
+    # a sleep never returns early, so the whole call is at least 100 ms longer than
+    # its last attempt. Comparing the two measurements as a ratio flaked whenever the
+    # scheduler stretched the last attempt more than the earlier ones.
+    assert recorded.duration_ms >= recorded.last_attempt_ms + 95
