@@ -158,17 +158,6 @@ class SettingsGroup(BaseSettings):
 
     model_config = _BASE
 
-    def redacted(self) -> dict[str, Any]:
-        """Dump the group with secret values replaced by a marker.
-
-        Used by the startup config snapshot and by ``kira config show``, both of which
-        are read by people and written to logs.
-
-        Returns:
-            A JSON-safe mapping with secrets rendered as ``"**********"``.
-        """
-        return self.model_dump(mode="json")
-
 
 def alias(modern: str, *legacy: str) -> list[str]:
     """Spell out a field's accepted environment names, modern first.
