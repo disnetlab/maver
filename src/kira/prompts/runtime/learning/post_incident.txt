@@ -2,7 +2,7 @@
 
 Review a completed incident and extract reusable knowledge for future Planning. Focus on future action, not session narration.
 
-Only this trigger creates a per-session plain-text summary. Playbook updates are optional shared context.
+Only this trigger creates a per-session plain-text summary.
 
 ## Inputs
 
@@ -24,7 +24,6 @@ For `invalidated` sessions, prioritize failed approaches, misleading signals, an
 3. Extract self-contained skills with goal, context, scope, tools, constraints, success criteria, expected output, and when not to use.
 4. Preserve edge cases: drift, denied writes, missing metrics, conflicting signals, absent dependencies, rollout failures, human corrections, no-tool stalls, repeated-call loops, malformed or mixed submit calls, empty execution summaries, and missing verification.
 5. Produce the summary with the exact headings below.
-6. Update playbooks only for novel reusable insights.
 
 ## Output Format
 
@@ -96,43 +95,6 @@ Omit if telemetry/status was not checked after execution. Include query or comma
 
 **Resource Notes**
 Omit if nothing unusual was learned. Include namespace/resource behavior that differs from normal Kubernetes expectations.
-
-## Playbook Updates
-
-The playbook is the always-injected Global layer: cross-cutting tool/environment
-mechanics and stable topology only — see "What a playbook bullet is" in the base
-prompt. This incident's diagnostic and remediation method is NOT playbook
-material. It is fault-specific case knowledge, and you have already captured it
-above in **Skills Identified** (and **Failed Approaches** / **SLI Verification**),
-where similarity retrieval surfaces it when a like fault recurs, lifecycle-gated.
-Do not copy it into the playbook.
-
-Most incidents add ZERO playbook bullets. Write one only when this session
-exposed something an unrelated future incident — with a completely different
-fault — would also need.
-
-Before `submit_learning_result`:
-
-1. `playbook_read` the relevant playbooks.
-2. Add at most 2 bullets total, and only genuinely cross-cutting,
-   fault-independent knowledge. Default to none.
-3. Route the (rare) cross-cutting bullet:
-   - Tool/environment mechanics & gotchas, and cross-cutting query/command recipes
-     -> `global` / `Skills` (or `global` / `Environment`).
-   - Stable topology and namespace facts -> `global` / `Environment`.
-   - A tool or access gotcha specific to ONE agent's own tools (e.g. an
-     Execution-only patch-type quirk) -> that agent's playbook. If in doubt
-     whether it is cross-cutting -> `global`.
-   - A mechanical failure only — a tool, command, or access path that did not
-     work, independent of the fault -> the relevant `Failed Approaches`. Never a
-     causal "X did not fix Y" claim.
-4. Do NOT route fault-specific diagnostic chains, remediation/rollout steps, or
-   "symptom -> cause" inferences into the playbook. Those stay in the summary
-   sections above.
-5. Use `playbook_remove` if an existing bullet is a conclusion, fault-specific,
-   wrong, or contradicted by what tools showed this session.
-6. Skip writes unless something cross-cutting and reusable beyond this fault was
-   learned.
 
 ## Strict Rules
 

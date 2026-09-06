@@ -38,8 +38,11 @@ recorded here rather than left to the commit log.
   experience-enabled configuration, where the only two things it could do with it were
   spend turns on a call that does not exist or ignore that part of its instructions.
   The prompt now describes the one artifact Learning produces, the per-session summary.
-  This is a deliberate divergence from the prototype's asset, registered as such in
-  `tests/unit/test_prompt_assets.py`.
+  The trigger's own half of that system prompt (`runtime/learning/post_incident.txt`,
+  appended to it by the role) went the same way: a `## Playbook Updates` chapter whose
+  first instruction was to call `playbook_read` and whose fifth was `playbook_remove`,
+  and two sentences elsewhere. Both are deliberate divergences from the prototype's
+  assets, registered as such in `tests/unit/test_prompt_assets.py`.
 
 ### Tool descriptions
 

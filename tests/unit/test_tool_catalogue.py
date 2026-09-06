@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 import yaml
 
-from kira.prompts.loader import compose_role_prompt
+from kira.prompts.loader import compose_role_prompt, read_runtime
 from kira.settings.root import known_env_names
 from kira.tools.allowlists import RETRIEVAL_TOOLS, ROLE_TOOLSETS
 from kira.tools.registry import ToolSpec, validate_registry
@@ -93,6 +93,8 @@ NOT_A_TOOL = frozenset(
         "affected_resource",
         "attempted_action",
         "attempted_hypothesis",
+        "case_negative_constraints",
+        "corrected_cause",
         "drift_detected",
         "entry_point_status",
         "expected_outcome",
@@ -104,10 +106,24 @@ NOT_A_TOOL = frozenset(
         "reassessment_reason",
         "replan_reason",
         "save_as",
+        # Lifecycle states and verdicts, which a prompt quotes the same way as a field.
+        "human_verified",
+        "not_recovered",
+        "tentative_success",
         # The learning trigger.
         "post_incident",
     }
 )
+
+APPENDED_TO_THE_SYSTEM_PROMPT: dict[str, tuple[str, ...]] = {
+    # Learning's system prompt is its role prompt, the trigger's own half, and — when
+    # the environment is expected to still be up — the live re-check, joined in
+    # roles/learning.py. The trigger's half kept prescribing the playbook tools for a
+    # commit after the role prompt stopped, because this check only read the first of
+    # the three.
+    "learning": ("post_incident.txt", "live_recovery_verification.txt"),
+}
+"""Runtime assets a role appends to its own system prompt, by role."""
 
 NAMED_WITHOUT_BEING_OFFERED = {
     # Planning does not run the command; it writes the step that names it, and
@@ -145,13 +161,19 @@ def test_a_role_prompt_only_names_tools_that_role_is_offered(role: str, retrieva
     the allowlist. The model could only spend turns on a phantom call or ignore the
     instruction.
 
-    This reads the composed system prompt, so it does not see the per-turn runtime
-    assets a role appends to it.
+    This reads the system prompt as the role assembles it, role prompt and appended
+    runtime blocks together. It does not see the runtime blocks a role emits into the
+    conversation as user turns.
     """
     offered = set(ROLE_TOOLSETS[role])
     if not retrieval:
         offered -= RETRIEVAL_TOOLS
-    prompt = compose_role_prompt(role, retrieval_enabled=retrieval)
+    prompt = "\n".join(
+        [
+            compose_role_prompt(role, retrieval_enabled=retrieval),
+            *(read_runtime(role, name) for name in APPENDED_TO_THE_SYSTEM_PROMPT.get(role, ())),
+        ]
+    )
     prescribed = {
         name
         for name in TOOL_SHAPED.findall(prompt)
