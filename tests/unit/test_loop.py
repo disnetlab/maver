@@ -19,7 +19,7 @@ from kira.roles.policy import (
     no_tool_nudge_message,
     repeat_breaker_message,
 )
-from kira.settings.groups import RuntimeSettings
+from kira.settings.groups import PipelineSettings, RuntimeSettings
 from kira.tools.errors import call_failed
 from kira.tools.registry import ToolOutput
 
@@ -677,7 +677,7 @@ def test_a_failed_command_is_recorded_as_one(content: str, failed: bool) -> None
 
 
 MEASURED_LIMITS: dict[str, int] = {
-    "max_turns": 20,
+    "max_turns": 100,
     "no_tool_nudges": 2,
     "submit_guard_rejections": 2,
     "submit_validation_rejections": 3,
@@ -714,5 +714,5 @@ def test_the_settings_default_to_the_same_limits() -> None:
     settings — so the dataclass's defaults could drift into being documentation of a
     configuration nothing produces.
     """
-    resolved = LoopLimits.from_settings(RuntimeSettings(), max_turns=MEASURED_LIMITS["max_turns"])
+    resolved = LoopLimits.from_settings(RuntimeSettings(), max_turns=PipelineSettings().max_turns)
     assert {name: getattr(resolved, name) for name in MEASURED_LIMITS} == MEASURED_LIMITS

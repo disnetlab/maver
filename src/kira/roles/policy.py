@@ -78,7 +78,7 @@ class LoopLimits:
     Defaults match the values every published measurement used.
     """
 
-    max_turns: int = 20
+    max_turns: int = 100
     no_tool_nudges: int = 2
     submit_guard_rejections: int = 2
     submit_validation_rejections: int = 3
