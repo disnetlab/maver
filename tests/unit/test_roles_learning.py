@@ -3,6 +3,7 @@
 import asyncio
 import json
 import pathlib
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -13,7 +14,7 @@ from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.middleware.base import MiddlewareStack
 from kira.roles import learning
 from kira.roles.base import RoleContext
-from kira.settings.groups import MemorySettings, PipelineSettings
+from kira.settings.groups import MemorySettings, PipelineSettings, PromptSettings
 from kira.settings.profiles import load_profile
 from kira.settings.root import Settings
 from kira.tools.context import ToolContext
@@ -115,6 +116,31 @@ def context(
         packet=packet,
     )
     return ctx, model
+
+
+async def test_a_deployments_own_prompt_reaches_the_distilling_pass(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Five roles passed the override directory into their composition and this one did
+    not, while the snapshot digested `learning` and startup validated it. The one role
+    whose output persists into the retrieval corpus was the one that could not be
+    steered, and the run record said otherwise."""
+    overrides = tmp_path / "prompts"
+    (overrides / "roles").mkdir(parents=True)
+    (overrides / "roles" / "learning.txt").write_text(
+        "DEPLOYMENT OVERRIDE FOR LEARNING.\n", encoding="utf-8"
+    )
+    ctx, model = context(tmp_path)
+    ctx = replace(
+        ctx,
+        settings=ctx.settings.model_copy(
+            update={"prompts": PromptSettings(override_dir=overrides)}
+        ),
+    )
+
+    await learning.LEARNING.run(ctx)
+
+    assert "DEPLOYMENT OVERRIDE FOR LEARNING." in model.requests[0].system
 
 
 async def test_the_packet_is_what_the_pass_reads(tmp_path: pathlib.Path) -> None:

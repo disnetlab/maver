@@ -85,7 +85,11 @@ def _system_prompt(ctx: RoleContext, *, verify_live: bool) -> str:
     so the guidance would only spend turns on reads that cannot succeed.
     """
     parts = [
-        compose_role_prompt(ctx.spec.prompt, retrieval_enabled=retrieval_enabled(ctx)),
+        compose_role_prompt(
+            ctx.spec.prompt,
+            retrieval_enabled=retrieval_enabled(ctx),
+            override_dir=ctx.settings.prompts.override_dir,
+        ),
         read_runtime("learning", f"{POST_INCIDENT}.txt"),
     ]
     if verify_live:

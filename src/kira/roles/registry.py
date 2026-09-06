@@ -161,11 +161,10 @@ def validate_roles(
             )
 
         try:
-            template = override_for(spec.prompt, override_dir) or read_asset(
-                f"roles/{spec.prompt}.txt"
-            )
+            override = override_for(spec.prompt, override_dir)
+            template = read_asset(f"roles/{spec.prompt}.txt") if override is None else override
         except PromptError as exc:
-            raise RoleRegistryError(f"role {name!r} names a missing prompt: {exc}") from exc
+            raise RoleRegistryError(f"role {name!r} has no usable prompt: {exc}") from exc
         unfillable = markers(template) - FILLABLE_MARKERS
         if unfillable:
             raise RoleRegistryError(

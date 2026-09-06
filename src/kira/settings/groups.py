@@ -12,9 +12,9 @@ fail closed.
 
 import re
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import AnyHttpUrl, Field, field_validator, model_validator
+from pydantic import AfterValidator, AnyHttpUrl, Field, field_validator, model_validator
 
 from kira.settings.base import Credential, NameSet, SettingsGroup, group_config, setting
 
@@ -767,12 +767,24 @@ class KafkaSettings(SettingsGroup):
         return self
 
 
+def _expanded(value: Path | None) -> Path | None:
+    """Expand a leading ``~``, which pydantic keeps literal.
+
+    Args:
+        value: The configured path.
+
+    Returns:
+        The path with the home directory resolved, or None.
+    """
+    return None if value is None else value.expanduser()
+
+
 class PromptSettings(SettingsGroup):
     """Where a deployment's own role prompts come from, when it has any."""
 
     model_config = group_config("prompts")
 
-    override_dir: Path | None = setting(
+    override_dir: Annotated[Path | None, AfterValidator(_expanded)] = setting(
         None,
         "KIRA_PROMPTS__OVERRIDE_DIR",
         description=(
@@ -783,7 +795,8 @@ class PromptSettings(SettingsGroup):
             "survive an upgrade and leaves no record of what was run. Overridden roles "
             "and the digest of each are written into the run's configuration snapshot, "
             "because a result produced under a prompt nobody recorded is not "
-            "attributable."
+            "attributable. A leading `~` is expanded here, so every reader of it "
+            "resolves the same directory."
         ),
     )
 
@@ -1046,7 +1059,11 @@ class ServerSettings(SettingsGroup):
         "local",
         "KIRA_SERVER__ENVIRONMENT",
         "ENVIRONMENT",
-        description="Selects log formatting and access-log filtering.",
+        description=(
+            "Selects production hardening: the API documentation endpoints are "
+            "withheld, and a deployment that approves its own cluster writes "
+            "(authority.mode='auto') is refused at startup."
+        ),
     )
     drain_timeout_s: float = setting(
         30.0,

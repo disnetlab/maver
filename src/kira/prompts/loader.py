@@ -40,8 +40,8 @@ _ROLE_MARKERS: dict[str, str] = {
 """Marker name to the block family that fills it."""
 
 FILLABLE_MARKERS: frozenset[str] = frozenset(_ROLE_MARKERS)
-"""Markers the loader can fill. A role prompt declaring any other composes to a
-template with a literal ``{{MARKER}}`` still in it, which then reaches the model."""
+"""Markers the loader can fill. A role prompt declaring any other raises ``PromptError``
+at composition, and ``validate_roles`` raises it at startup before any incident."""
 
 # Which kubectl guidance a role receives. Roles absent from this map hold no
 # cluster tools and must not declare the marker.
@@ -109,6 +109,22 @@ def read_runtime(role: str, name: str) -> str:
     return read_asset(f"runtime/{role}/{name}")
 
 
+def _roles_dir(directory: Path) -> Path:
+    """Resolve the override directory the one way every reader of it must.
+
+    A ``~`` is written literally in a ConfigMap and a compose ``environment:`` block,
+    and pydantic keeps it. Expanded by the digester and not by the reader, the snapshot
+    recorded overrides that never ran.
+
+    Args:
+        directory: The configured override directory.
+
+    Returns:
+        The directory holding one file per replaced role.
+    """
+    return directory.expanduser() / "roles"
+
+
 def override_for(role: str, directory: Path | None) -> str | None:
     """Read a deployment's replacement for one role's prompt, if it supplied one.
 
@@ -124,19 +140,26 @@ def override_for(role: str, directory: Path | None) -> str | None:
 
     Raises:
         PromptError: When the role name would escape the directory, or the file is
-            there and cannot be read. A file that is absent is not an error; a file
-            that is present and unreadable is, because silently falling back to the
-            packaged prompt would run something other than what the deployment asked
-            for and record no sign of it.
+            there and cannot be used. A file that is absent is not an error; a file
+            that is present and unreadable, or empty, is, because silently falling back
+            to the packaged prompt would run something other than what the deployment
+            asked for and record no sign of it — and an empty one does not even fall
+            back: it sends the role no system prompt at all.
     """
     if directory is None:
         return None
     if not role or "/" in role or "\\" in role or role.startswith("."):
         raise PromptError(f"invalid role name for a prompt override: {role!r}")
-    path = directory / "roles" / f"{role}.txt"
+    path = _roles_dir(directory) / f"{role}.txt"
     if not path.exists():
         return None
-    return read_override(path, root=directory)
+    template = read_override(path, root=directory)
+    if not template.strip():
+        raise PromptError(
+            f"prompt override {path} is empty; a template rendered to nothing would "
+            "leave the role with no system prompt"
+        )
+    return template
 
 
 def overridden_roles(directory: Path | None) -> dict[str, str]:
@@ -154,7 +177,7 @@ def overridden_roles(directory: Path | None) -> dict[str, str]:
     """
     if directory is None:
         return {}
-    roles = directory.expanduser() / "roles"
+    roles = _roles_dir(directory)
     if not roles.is_dir():
         return {}
     digests: dict[str, str] = {}

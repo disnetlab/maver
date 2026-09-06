@@ -179,18 +179,38 @@ def test_a_replaced_prompt_reaches_the_run_that_used_it(
 ) -> None:
     """The directory path alone does not say what was in it. A result produced under a
     prompt nobody recorded is not attributable, which is the same reason the arm file is
-    digested into the same snapshot."""
-    (tmp_path / "roles").mkdir()
-    override = tmp_path / "roles" / "rca.txt"
+    digested into the same snapshot.
+
+    Written with a `~`, because that is what a ConfigMap or a compose `environment:`
+    block carries literally and pydantic keeps: expanded by the digester and not by the
+    reader, the snapshot recorded a replacement while the packaged prompt ran.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "prompts" / "roles").mkdir(parents=True)
+    override = tmp_path / "prompts" / "roles" / "rca.txt"
     override.write_text("## Goal\n\nDo it my way.\n\n{{KUBECTL_GUIDANCE}}\n", encoding="utf-8")
 
-    monkeypatch.setenv("KIRA_PROMPTS__OVERRIDE_DIR", str(tmp_path))
+    monkeypatch.setenv("KIRA_PROMPTS__OVERRIDE_DIR", "~/prompts")
     reset_settings()
     settings = load_settings()
+
     assert settings.snapshot()["prompt_overrides"] == {
         "rca": sha256(override.read_bytes()).hexdigest()
     }
-    assert load_settings().snapshot()["prompt_overrides"] != {}
+    composed = compose_role_prompt(
+        "rca", retrieval_enabled=False, override_dir=settings.prompts.override_dir
+    )
+    assert "Do it my way." in composed
+
+
+def test_an_empty_override_fails_at_startup_rather_than_silently(tmp_path: Path) -> None:
+    """A Helm template that renders to nothing, or `--from-file` on an empty file, was
+    falsy: startup validated the packaged prompt and passed, and the first incident sent
+    the diagnosing role an empty system prompt with no error anywhere."""
+    (tmp_path / "roles").mkdir()
+    (tmp_path / "roles" / "rca.txt").write_text("", encoding="utf-8")
+    with pytest.raises(RoleRegistryError, match="is empty"):
+        validate_roles(override_dir=tmp_path)
 
 
 def test_an_unfillable_override_fails_at_startup_not_at_the_incident(tmp_path: Path) -> None:
