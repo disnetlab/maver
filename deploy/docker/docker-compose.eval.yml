@@ -57,6 +57,14 @@ services:
       KIRA_ADAPTERS__SREGYM__MCP_BASE_URL: http://host.docker.internal:9954
       # Unattended: nobody is waiting to approve a write during a sweep.
       KIRA_AUTHORITY__MODE: auto
+      # And therefore not a production deployment. The settings layer refuses
+      # environment=production with authority=auto, and the image bakes `production` in,
+      # so without this line the container exits at startup on that invariant and the
+      # harness reads it as a health-check timeout naming nothing. Said here rather than
+      # dropped from the image, because the refusal is the safety property doing its job:
+      # a benchmark host declares that it is not production, and that declaration lands
+      # in every run's configuration snapshot beside the authority it ran under.
+      KIRA_SERVER__ENVIRONMENT: local
     volumes:
       - kira-eval-workspace:/workspace
     healthcheck:
