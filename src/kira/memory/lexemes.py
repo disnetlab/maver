@@ -75,6 +75,14 @@ STOPWORDS = frozenset(_ENGLISH_STOP.split())
 _TOKEN = re.compile(r"\d+(?:\.\d+)+|[^\W_]+", re.UNICODE)
 _LEADING_NUMBER = re.compile(r"\d+(?:\.\d+)*")
 
+_MAX_TERM_BYTES = 2046
+"""PostgreSQL's lexeme ceiling, which it applies by ignoring anything longer.
+
+Dropped here rather than in a backend so that both drop the same thing. A base64 blob or
+a stack trace pasted into tool output produces runs this long, and a term neither backend
+can be queried for is worth nothing to either.
+"""
+
 _stem = snowballstemmer.stemmer("english").stemWord
 
 
@@ -89,8 +97,14 @@ def lexemes(text: str) -> list[str]:
     """
     out: list[str] = []
     for compound in _compounds(text or ""):
-        out.extend(_lexemes_of(compound))
+        out.extend(term for term in _lexemes_of(compound) if not _too_long(term))
     return out
+
+
+def _too_long(term: str) -> bool:
+    # A character is at most four bytes, so a short term cannot exceed the byte ceiling
+    # and does not need encoding to find out.
+    return len(term) * 4 > _MAX_TERM_BYTES and len(term.encode("utf-8")) > _MAX_TERM_BYTES
 
 
 def _compounds(text: str) -> list[list[str]]:

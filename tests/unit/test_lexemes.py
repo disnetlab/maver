@@ -84,3 +84,18 @@ def test_a_query_and_a_record_meet_on_the_same_terms() -> None:
     assert set(lexemes("pod crash")) <= set(record)
     assert set(lexemes("crashes")) <= set(record)
     assert set(lexemes("the of and was")) == set()
+
+
+def test_a_term_postgresql_could_not_index_is_dropped() -> None:
+    """A base64 blob in tool output must not be able to fail a write on one backend.
+
+    PostgreSQL ignores a lexeme over 2046 bytes when it builds a vector and refuses one
+    outright when it is handed an array of them. SQLite would index it happily, so
+    dropping it here is what keeps the two indexes the same.
+    """
+    assert lexemes("x" * 2046) == ["x" * 2046]
+    assert lexemes(f"pod {'x' * 2047} crash") == ["pod", "crash"]
+    # Counted in bytes, as PostgreSQL counts it: two bytes to the character here, so
+    # 1100 characters is over a ceiling that 1100 ASCII characters would be under.
+    assert lexemes("é" * 1100) == []
+    assert lexemes("e" * 1100) == ["e" * 1100]
