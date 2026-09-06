@@ -236,6 +236,29 @@ class MemoryStoreContract:
         assert resumed.checkpoint is None
         assert resumed.awaiting_request_id is None
 
+    def test_a_session_s_end_is_stamped_by_the_first_terminal_status_and_never_moves(
+        self, store: OperationalStore
+    ) -> None:
+        """``ended_at`` is what a reader takes for when this incident stopped, and the
+        incident route reports it. A non-terminal status claiming it would report every
+        parked run as over; a later terminal status moving it would date the incident
+        from whenever someone last cancelled or re-graded it."""
+        session = store.create_session({})
+
+        store.set_run_status(session.session_id, RunStatus.AWAITING_HUMAN, current_stage="rca")
+        parked = store.get_session(session.session_id)
+        assert parked is not None and parked.ended_at is None
+
+        store.set_run_status(session.session_id, RunStatus.COMPLETED)
+        ended = store.get_session(session.session_id)
+        assert ended is not None and ended.ended_at
+
+        store.set_run_status(session.session_id, RunStatus.CANCELLED)
+        again = store.get_session(session.session_id)
+        assert again is not None
+        assert again.run_status == RunStatus.CANCELLED.value
+        assert again.ended_at == ended.ended_at
+
     # ApprovalStore --------------------------------------------------------------
 
     def test_an_approval_round_trips(self, store: OperationalStore) -> None:
@@ -465,6 +488,8 @@ class MemoryStoreContract:
         store.finish_run("run-1", status="failed", error="boom")
         kept = store.get_run("run-1")
         assert kept is not None
+        assert kept.status == "failed", "a run records how it ended, not that it ended"
+        assert kept.error == "boom"
         assert kept.metadata == {"after": "rca", "health_gate": {"ran": False}}
         assert kept.output is None
 
@@ -520,13 +545,26 @@ class MemoryStoreContract:
         self, records: TextSearch
     ) -> None:
         """A backend that ranked would hand back its best few. The retriever's job is
-        to choose, so anything that could plausibly match has to survive to it."""
+        to choose, so anything that could plausibly match has to survive to it.
+
+        The limit binds, because that is the only condition under which a backend's own
+        ranking can show. The last three records are the ones every lexical ranker
+        prefers — short, and the term repeated — so a backend that ordered by relevance
+        would return those and an unranked one returns the three written first.
+        """
         for index in range(12):
-            records.upsert_summary(a_record(f"s{index}", evidence=f"checkout replica {index}"))
+            records.upsert_summary(
+                a_record(f"s{index}", evidence=f"checkout replica {index} " + "filler " * 40)
+            )
         records.upsert_summary(a_record("unrelated", evidence="disk pressure on a node"))
 
         pool = {m.session_id for m in records.candidates("checkout")}
         assert pool == {f"s{index}" for index in range(12)}
+
+        for index in range(12, 15):
+            records.upsert_summary(a_record(f"s{index}", evidence="checkout checkout checkout"))
+        bounded = {m.session_id for m in records.candidates("checkout", limit=3)}
+        assert bounded == {"s0", "s1", "s2"}
 
     def test_candidates_respect_limit_scope_and_exclusion(self, records: TextSearch) -> None:
         for index in range(5):
