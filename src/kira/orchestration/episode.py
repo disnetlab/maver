@@ -25,7 +25,12 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
-from kira.adapters.base import EnvironmentAdapter, EpisodeContext, ExternalFeedback
+from kira.adapters.base import (
+    EXTERNAL_KEY,
+    EnvironmentAdapter,
+    EpisodeContext,
+    ExternalFeedback,
+)
 from kira.audit.journal import Journal
 from kira.contracts.events import EnvironmentEvent
 from kira.contracts.lifecycle import LifecycleState, RunStatus
@@ -38,19 +43,9 @@ from kira.orchestration.resume import stored_state
 from kira.orchestration.runner import Deployment, resume_after_decision, run_incident
 from kira.tools.transport.base import ToolTransport
 
-__all__ = ["EpisodeResult", "EpisodeStart", "open_episode", "run_episode"]
+__all__ = ["EXTERNAL_KEY", "EpisodeResult", "EpisodeStart", "open_episode", "run_episode"]
 
 _log = logging.getLogger(__name__)
-
-EXTERNAL_KEY = "_external_key"
-"""Where the adapter's own episode identifier is stored on the signal.
-
-Underscore-prefixed, and that prefix is the whole mechanism: for an evaluation harness
-this value is the ground-truth fault label, and every prompt builder drops keys that
-start with one. It exists so a session can be joined to the grade it earned, which
-otherwise falls back to a time window — and did, mis-mapping five of six sessions in one
-measured case.
-"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +56,8 @@ class EpisodeStart:
     started_at: str
     context: EpisodeContext
     signal: dict[str, Any]
+    withheld_record_ids: tuple[str, ...] = ()
+    """Corpus records the adapter withheld from this episode, on top of the floor."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +83,9 @@ async def open_episode(adapter: EnvironmentAdapter, deployment: Deployment) -> E
 
     Raises:
         Exception: Whatever the adapter raised. Nothing has started yet, so a failure
-            here is a clean refusal rather than an abandoned environment.
+            here is a clean refusal rather than an abandoned environment. That includes a
+            withheld set the adapter could not compute: an exclusion that fails open is
+            worse than an episode that does not run, because it voids the cell silently.
     """
     ctx = await adapter.acquire()
     signal = adapter.build_signal(ctx)
@@ -98,6 +97,7 @@ async def open_episode(adapter: EnvironmentAdapter, deployment: Deployment) -> E
         started_at=record.started_at,
         context=ctx,
         signal=signal,
+        withheld_record_ids=tuple(adapter.withheld_records(ctx, deployment.storage.index)),
     )
 
 
@@ -125,7 +125,19 @@ async def run_episode(
     journal = _journal(bound, start.session_id)
     journal.record(
         EnvironmentEvent(
-            adapter=adapter.name, action="acquired", detail=start.context.namespace or ""
+            adapter=adapter.name,
+            action="acquired",
+            # Written before the pipeline runs, and as JSON like the release event's own
+            # detail, because a cell's withheld set is otherwise unreconstructible: the
+            # count reaches the second pass's event and the identifiers reach nothing.
+            # A crashed episode has still recorded what it was denied.
+            detail=json.dumps(
+                {
+                    "namespace": start.context.namespace or "",
+                    "withheld": list(start.withheld_record_ids),
+                },
+                sort_keys=True,
+            ),
         )
     )
 
@@ -150,6 +162,7 @@ async def run_episode(
             target_stage=start.context.target_stage,
             fire_post_hooks=False,
             finalize_run_status=False,
+            withheld_record_ids=start.withheld_record_ids,
         )
     except ApprovalPending:
         # The environment belongs to the resume path. Releasing it now would tear down

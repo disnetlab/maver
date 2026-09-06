@@ -498,9 +498,10 @@ class MemorySettings(SettingsGroup):
         "KIRA_MEMORY__EXCLUDE_RECORD_IDS",
         "MEMORY_EXCLUDE_SESSION_IDS",
         description=(
-            "Records withheld from every retrieval, as a process-wide floor. This is "
-            "what keeps a generalisation arm honest, so an evaluation adapter unions "
-            "its own per-incident leave-one-out set on top rather than replacing it."
+            "Records withheld from every retrieval, as a process-wide floor. An "
+            "environment adapter's own per-incident set is unioned with this rather "
+            "than replacing it, so a deployment's promise about the corpus and an "
+            "evaluation protocol's leave-one-out exclusion both hold at once."
         ),
     )
     learning_enabled: bool = setting(

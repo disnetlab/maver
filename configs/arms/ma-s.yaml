@@ -61,9 +61,10 @@ not_reproducible:
   - >
     The corpus. The published cells retrieved from so_gate_corpus_35b, 123 diagnosis
     records confirmed correct by external benchmark feedback and frozen for the campaign,
-    under a per-problem leave-one-out exclusion supplied by the environment adapter. The
-    corpus is not in this repository and the exclusion set is per incident, so this file
-    configures the mechanism and cannot restore what it read.
+    under a per-problem leave-one-out exclusion, which the SREGym adapter derives per
+    episode from the problem it was served (adapters.sregym.leave_one_out, on by
+    default). The corpus is not in this repository, so this file configures the
+    mechanism and cannot restore what it read.
 notes: >
   Learning is off because the corpus is frozen for the campaign, so a test pass would add
   nothing to it. The lifecycle weighting is inherited rather than pinned: two archived

@@ -26,6 +26,7 @@ from kira.adapters.registry import adapter, available_adapters, clear_adapters, 
 from kira.audit.journal import ListSink
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
+from kira.memory.ports import SessionMemory
 from kira.middleware.authority import ApprovalPending
 from kira.orchestration import episode as episode_module
 from kira.orchestration.episode import open_episode, run_episode
@@ -111,8 +112,14 @@ class StubAdapter:
 
     name = "stub"
 
-    def __init__(self, *, ready: frozenset[str] = frozenset({"diagnosis", "mitigation"})) -> None:
+    def __init__(
+        self,
+        *,
+        ready: frozenset[str] = frozenset({"diagnosis", "mitigation"}),
+        withheld: tuple[str, ...] = (),
+    ) -> None:
         self._ready = ready
+        self._withheld = withheld
         self.calls: list[str] = []
         self.submitted: list[tuple[str, Any]] = []
         self.session_id = ""
@@ -163,6 +170,10 @@ class StubAdapter:
         record = self.store.get_session(self.session_id)
         self.run_status_at_release = record.run_status if record else None
 
+    def withheld_records(self, ctx: EpisodeContext, records: Any) -> tuple[str, ...]:
+        self.calls.append("withheld")
+        return self._withheld
+
     def tool_transport(self) -> Any:
         return None
 
@@ -176,11 +187,19 @@ class StubAdapter:
         return None
 
 
-def deployment(tmp_path: pathlib.Path, *, model: Any, learning: bool = False) -> Deployment:
+def deployment(
+    tmp_path: pathlib.Path, *, model: Any, learning: bool = False, memory: bool = False
+) -> Deployment:
     settings = Settings(
         server=ServerSettings(workdir=tmp_path),
         memory=MemorySettings(
-            enabled=learning, learning_enabled=learning, learning_timeout_s=0, backend="embedded"
+            enabled=learning or memory,
+            learning_enabled=learning,
+            learning_timeout_s=0,
+            backend="embedded",
+            # Off, because the corpus below is two records: the floor is calibrated
+            # against hundreds, and on a pair nothing clears it.
+            min_score_per_token=0.0,
         ),
         verify=VerifySettings(enabled=False),
     )
@@ -218,6 +237,9 @@ async def test_answers_go_over_once_at_the_end_and_the_release_comes_last(
 
     assert stub.calls == [
         "acquire",
+        # Before the pipeline, because what a run may not retrieve has to be settled
+        # before the first role can retrieve anything.
+        "withheld",
         "ready:diagnosis",
         "submit:diagnosis",
         "ready:mitigation",
@@ -412,3 +434,143 @@ def _imported_modules(node: ast.AST) -> list[str]:
     ):
         return [node.args[0].value]
     return []
+
+
+PROBE_QUERY = "readiness probe connection refused on the wrong port"
+
+
+class RetrievingModel:
+    """Reads the corpus by every path a role has, then submits."""
+
+    def __init__(self, own: str, twin: str) -> None:
+        self.calls = 0
+        self.transcripts: list[list[dict[str, Any]]] = []
+        self._own = own
+        self._twin = twin
+        self._read = False
+
+    async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
+        self.calls += 1
+        self.transcripts.append([dict(message) for message in request.messages])
+        if caller == "rca" and not self._read:
+            self._read = True
+            return _calls(
+                self.calls,
+                ("memory_search", {"query": PROBE_QUERY, "scope": "evidence"}),
+                ("open_memory", {"session_id": self._own}),
+                ("open_memory", {"session_id": self._twin}),
+                ("session_trace_summary", {"session_id": self._own}),
+                ("session_trace_summary", {"session_id": self._twin}),
+            )
+        name, arguments = {
+            "rca": ("submit_root_cause", ROOT_CAUSE),
+            "planning": ("submit_plan", PLAN),
+            "execution": ("submit_execution_result", EXECUTION),
+        }[caller]
+        return _calls(self.calls, (name, arguments))
+
+
+def _calls(index: int, *wanted: tuple[str, dict[str, Any]]) -> ModelResponse:
+    return ModelResponse(
+        text=None,
+        tool_calls=tuple(
+            ToolCall(
+                id=f"c{index}-{position}",
+                name=name,
+                arguments=arguments,
+                raw_arguments=json.dumps(arguments),
+            )
+            for position, (name, arguments) in enumerate(wanted)
+        ),
+        finish_reason="stop",
+        reasoning=None,
+        usage=Usage(),
+        duration_ms=1,
+        attempts=1,
+    )
+
+
+def _corpus(deploy: Deployment) -> tuple[str, str]:
+    """One record from the episode's own problem, and one from a twin of it.
+
+    Sessions as well as records, because reading a past run's trace goes to the session
+    store: a record whose session is missing is not-found for a reason that has nothing
+    to do with being withheld, and the control has to tell the two apart.
+    """
+    written = []
+    for text in (
+        "readiness probe on payment-service refused on 8080, the container listens on 9090",
+        "readiness probe on checkout-service refused on 8080, the container listens on 9090",
+    ):
+        session_id = deploy.storage.sessions.create_session(
+            {"alertname": "ProbeFailure"}
+        ).session_id
+        deploy.storage.index.upsert_summary(
+            SessionMemory(
+                session_id=session_id,
+                evidence_text=text,
+                lesson_text=text,
+                incident_summary=text,
+                lifecycle_state="human_verified",
+                fault_category="misconfiguration",
+                alert_name="ProbeFailure",
+                namespace="shop",
+                affected_resource="shop/Deployment/payment",
+            )
+        )
+        written.append(session_id)
+    return written[0], written[1]
+
+
+async def test_an_episode_denies_its_withheld_records_by_every_path_a_role_has(
+    tmp_path: pathlib.Path,
+) -> None:
+    """What the adapter withholds, no role can reach, and only what it withheld is gone.
+
+    Search filters the pool, and both tools that take an identifier accept a raw one, so
+    a run that filtered search alone would leave the record one well-formed call away.
+    The twin is the control: an exclusion that also removed the cross-application twin
+    would be measuring a smaller corpus rather than generalisation.
+    """
+    deploy = deployment(tmp_path, model=None, memory=True)
+    own, twin = _corpus(deploy)
+    model = RetrievingModel(own, twin)
+    object.__setattr__(deploy, "completion", model)
+
+    await drive(deploy, StubAdapter(withheld=(own,)))
+
+    answers = {
+        message.get("tool_call_id"): str(message.get("content"))
+        for transcript in model.transcripts
+        for message in transcript
+        if message.get("role") == "tool"
+    }
+    searched, own_record, twin_record, own_trace, twin_trace = (
+        answers[f"c1-{position}"] for position in range(5)
+    )
+    assert "checkout-service" in searched, "the twin is still a precedent"
+    assert "payment-service" not in searched
+    assert json.loads(own_record)["error"] == "not found"
+    assert json.loads(twin_record)["evidence_text"].startswith("readiness probe on checkout")
+    assert json.loads(own_trace)["error"] == "not found"
+    assert json.loads(twin_trace).get("error") is None
+
+
+async def test_the_episode_records_what_it_was_denied(tmp_path: pathlib.Path) -> None:
+    """A cell's withheld set has to be reconstructible from the run's own log.
+
+    The second pass records how many records it was denied and never which, and the
+    archive could not say what any one cell was denied at all.
+    """
+    deploy = deployment(tmp_path, model=SubmittingModel(), memory=True)
+    stub = StubAdapter(withheld=("sess-own", "sess-twin"))
+
+    await drive(deploy, stub)
+
+    acquired = [
+        event.payload
+        for event in deploy.sink.events
+        if event.payload.kind == "environment" and event.payload.action == "acquired"
+    ]
+    assert len(acquired) == 1
+    assert json.loads(acquired[0].detail)["withheld"] == ["sess-own", "sess-twin"]

@@ -19,13 +19,14 @@ oracle no real deployment has.
 import asyncio
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from importlib import import_module
 from typing import Any, Literal
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict
 
 from kira.adapters.base import (
+    EXTERNAL_KEY,
     AdapterTool,
     EnvironmentAdapter,
     EpisodeContext,
@@ -39,6 +40,8 @@ from kira.adapters.sregym.evidence import EvidenceFilter
 from kira.adapters.sregym.signal import build_diagnosis_solution, build_signal, problem_id
 from kira.adapters.sregym.tools import adapter_tools
 from kira.contracts.state import IncidentState
+from kira.memory.distil import label_name
+from kira.memory.ports import TextSearch
 from kira.settings.root import Settings
 from kira.tools.context import EvidencePolicy
 from kira.tools.transport.base import ToolTransport
@@ -80,6 +83,13 @@ class SregymConfig(BaseModel):
     problem_id: str | None = None
     """The runner's own name for this problem, used only when the conductor no longer
     serves one. Storage-only: it is the ground-truth fault label."""
+    leave_one_out: bool = True
+    """Whether an episode withholds the corpus records of its own problem.
+
+    The published protocol, and the default: the exact problem is withheld and its
+    cross-application twins stay retrievable, so a cell is scored on what generalises
+    rather than on having seen this problem before. Off retrieves the whole corpus,
+    which is a measurement of something else."""
 
     @classmethod
     def resolve(cls, settings: Settings, env: Mapping[str, str] | None = None) -> "SregymConfig":
@@ -297,6 +307,42 @@ class SREGymAdapter:
             _log.warning("could not read the conductor's status after release: %s", exc)
             return
         _log.info("episode %s released; conductor reports %s", self._session_id, status)
+
+    def withheld_records(self, ctx: EpisodeContext, records: TextSearch) -> Sequence[str]:
+        """Withhold every record this problem has already produced.
+
+        Leave-one-out, as the campaign pre-registered it: the exact problem is withheld
+        and its cross-application twins are not, so what a cell retrieves is a precedent
+        from a different incident rather than its own answer. The archive applied this
+        per cell from the harness, by handing the process a list of session ids before
+        it started; here it is derived per episode from the problem the conductor served,
+        which is the same set without a list anybody has to keep in step.
+
+        The records name their own problem because the distilling pass copies the
+        signal's underscore-prefixed keys onto them as labels, and the driver writes this
+        episode's key under one of those.
+
+        Args:
+            ctx: What :meth:`acquire` reported.
+            records: The corpus.
+
+        Returns:
+            The session ids of every record from this problem, and nothing else. Empty
+            when the protocol is off or the conductor served no problem to key on.
+        """
+        if not self._config.leave_one_out:
+            return ()
+        if not ctx.external_key:
+            # Nothing to key on and nothing withheld. Loud, because on a generalisation
+            # arm this is the difference between a cell and a void one.
+            _log.error(
+                "leave-one-out is on and this episode has no problem id: nothing can be "
+                "withheld, and a memory arm's cell is void"
+            )
+            return ()
+        withheld = records.session_ids_with_label(label_name(EXTERNAL_KEY), ctx.external_key)
+        _log.info("withholding %d record(s) from this episode's own problem", len(withheld))
+        return withheld
 
     def tool_transport(self) -> ToolTransport | None:
         """Supply the transport built for this episode.

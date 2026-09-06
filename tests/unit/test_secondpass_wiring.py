@@ -14,6 +14,7 @@ from typing import Any
 from kira.audit.journal import ListSink
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
+from kira.memory.ports import SessionMemory
 from kira.orchestration.runner import Deployment, run_incident
 from kira.settings.groups import (
     MemorySettings,
@@ -384,4 +385,74 @@ async def test_the_second_opinion_runs_on_the_first_diagnosis_only(
 
     # And the re-entries were re-diagnoses rather than fresh starts.
     assert len(final["prior_attempts"]) == 2
+    storage.close()
+
+
+async def test_the_harness_query_is_denied_the_incident_s_own_records(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The path that reads the store directly, and the one an arm's exclusion has to hold on.
+
+    No role holds a retrieval tool in this composition, so the second pass is the only
+    reader; a per-episode set that reached the role tools and not this one would serve
+    the evaluated problem its own precedent, silently and in the direction that flatters
+    the result.
+    """
+    settings = Settings(
+        server=ServerSettings(workdir=tmp_path),
+        memory=MemorySettings(
+            enabled=True,
+            learning_enabled=False,
+            role_retrieval=False,
+            # Off: the corpus below is two records and the floor is calibrated against
+            # hundreds, so nothing would clear it and the exclusion would prove nothing.
+            min_score_per_token=0.0,
+            second_pass=SecondPassSettings(enabled=True, gate="quality", delivery="context"),
+        ),
+        verify=VerifySettings(enabled=False),
+    )
+    storage = build_storage(settings)
+    sink = ListSink()
+    deploy = Deployment(
+        settings=settings,
+        storage=storage,
+        completion=FakeModel(),
+        profile=PROFILE,
+        transport_for=lambda session_id: FakeTransport(),
+        sink=sink,
+    )
+    written = []
+    for text in (
+        "the user Service in shop targets a port no container listens on",
+        "the cart Service in warehouse targets a port no container listens on",
+    ):
+        record_id = storage.sessions.create_session(ALERT).session_id
+        storage.index.upsert_summary(
+            SessionMemory(
+                session_id=record_id,
+                evidence_text=text,
+                lesson_text=text,
+                incident_summary=text,
+                lifecycle_state="human_verified",
+                fault_category="misconfiguration",
+                alert_name="HighErrorRate",
+                namespace="shop",
+                affected_resource="shop/Service/user",
+            )
+        )
+        written.append(record_id)
+    own, twin = written
+    session = storage.sessions.create_session(ALERT)
+
+    await run_incident(
+        ALERT, session.session_id, deploy, fire_post_hooks=False, withheld_record_ids=[own]
+    )
+
+    searches = [
+        event.payload
+        for event in sink.events
+        if event.payload.kind == "second_pass" and event.payload.step == "search"
+    ]
+    assert searches and searches[0].precedent_ids == [twin]
+    assert searches[0].withheld_count == 1
     storage.close()

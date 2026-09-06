@@ -90,6 +90,25 @@ number, so a change to how it is built belongs here rather than in the commit lo
   was scored. Both backends migrate an existing database on open, deriving the terms from
   the raw text they already hold.
 
+- **An incident can be denied records that the deployment as a whole is not.** The
+  exclusion setting is a process-wide floor, and its description already said that an
+  evaluation adapter unions a per-incident leave-one-out set on top of it; nothing could,
+  because both places the floor was read went straight to settings. An adapter now names
+  the records one episode may not retrieve, before any role runs, and that set is unioned
+  with the floor at both of them: the gated second pass and every role's tool context.
+  It rides on the incident state, so a run that pauses on a human is denied the same
+  records after the decision as before it, and it is written to the incident's own
+  environment event, so a cell's withheld set is reconstructible rather than merely
+  counted.
+
+  The SREGym adapter supplies the published protocol and owns it: the exact problem is
+  withheld and its cross-application twins stay retrievable
+  (`adapters.sregym.leave_one_out`, on by default). The archive applied the same set per
+  cell from outside, as a list of session ids handed to the process; it is now derived
+  per episode from the problem the conductor served, which is the same set with nothing
+  to keep in step by hand. A deployment with no adapter retrieves exactly what it did
+  before.
+
 ## Storage
 
 Where a record is kept, as opposed to what it says. `STORE_SCHEMA_VERSION` in

@@ -172,6 +172,9 @@ class EpisodeAdapter:
     async def release(self, *, state: Any) -> None:
         self.releases += 1
 
+    def withheld_records(self, ctx: EpisodeContext, records: Any) -> tuple[str, ...]:
+        return ("sess-own",)
+
     def tool_transport(self) -> Any:
         return self.transport
 

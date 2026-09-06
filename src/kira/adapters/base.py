@@ -16,22 +16,38 @@ This module is contract, not implementation. It is the one module under
 is banned from core imports by the ``TID251`` rule in ``pyproject.toml``.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from kira.contracts.state import IncidentState, TargetStage
+from kira.memory.ports import TextSearch
 from kira.tools.context import EvidencePolicy
 from kira.tools.registry import ToolSpec
 from kira.tools.transport.base import ToolTransport
 
 __all__ = [
+    "EXTERNAL_KEY",
     "AdapterTool",
     "EnvironmentAdapter",
     "EpisodeContext",
     "ExternalFeedback",
     "SubmissionRecord",
 ]
+
+
+EXTERNAL_KEY = "_external_key"
+"""Where the adapter's own episode identifier is stored on the signal.
+
+Underscore-prefixed, and that prefix is the whole mechanism: for an evaluation harness
+this value is the ground-truth fault label, and every prompt builder drops keys that
+start with one. It exists so a session can be joined to the grade it earned, which
+otherwise falls back to a time window — and did, mis-mapping five of six sessions in one
+measured case.
+
+The driver writes it; an adapter reads it back to recognise its own records, since the
+distilling pass carries the signal's underscore keys onto the record as labels.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,6 +255,32 @@ class EnvironmentAdapter(Protocol):
 
         Returns:
             The grades, or None when unsupported, ungraded, or timed out.
+        """
+        ...
+
+    def withheld_records(self, ctx: EpisodeContext, records: TextSearch) -> Sequence[str]:
+        """Name the corpus records this episode may not retrieve.
+
+        Called once, before any role runs, and unioned with the deployment's own
+        process-wide floor rather than replacing it. This is where an evaluation
+        protocol that withholds a run's own precedents lives: the core applies a set of
+        identifiers and does not know why any of them is in it.
+
+        The corpus is handed in rather than reached for, so an adapter reads it through
+        the same port everything else does and cannot open a second connection to it.
+
+        Args:
+            ctx: What :meth:`acquire` reported.
+            records: The corpus, for :meth:`~kira.memory.ports.TextSearch.session_ids_with_label`.
+
+        Returns:
+            Session ids to withhold. Empty is normal: an environment with no such
+            protocol withholds nothing.
+
+        Raises:
+            Exception: Refuses the episode. A set that could not be computed must not be
+                silently empty — an exclusion that fails open voids the cell it was
+                measuring, and does so in the direction that flatters the result.
         """
         ...
 

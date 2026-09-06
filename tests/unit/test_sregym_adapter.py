@@ -29,6 +29,7 @@ from kira.api.app import create_app
 from kira.audit.journal import Journal, ListSink
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
+from kira.memory.ports import SessionMemory
 from kira.orchestration.episode import EpisodeStart
 from kira.orchestration.runner import Deployment
 from kira.settings.groups import MemorySettings, ServerSettings, VerifySettings
@@ -555,6 +556,75 @@ async def test_a_deployment_that_never_saw_the_harness_reads_its_defaults() -> N
     config = SregymConfig.resolve(Settings(), {"API_HOSTNAME": "conductor", "API_PORT": "8000"})
     assert str(config.conductor_base_url).rstrip("/") == "http://conductor:8000"
     assert config.feedback_mode == "none"
+
+
+def _labelled_corpus(tmp_path: pathlib.Path) -> Any:
+    """Three records: two from one problem, one from a twin of it in another application."""
+    storage = build_storage(
+        Settings(server=ServerSettings(workdir=tmp_path), memory=MemorySettings())
+    )
+    for session_id, key in (
+        ("first-run", "k8s_target_port-misconfig"),
+        ("second-run", "k8s_target_port-misconfig"),
+        ("twin-run", "k8s_target_port-misconfig_hotel_reservation"),
+        ("unlabelled-run", ""),
+    ):
+        storage.index.upsert_summary(
+            SessionMemory(
+                session_id=session_id,
+                evidence_text="the Service targets a port no container listens on",
+                lesson_text="repoint the Service at the serving port",
+                incident_summary="a port misconfiguration",
+                lifecycle_state="human_verified",
+                fault_category="misconfiguration",
+                alert_name="ServiceHealthDegraded",
+                namespace="shop",
+                affected_resource="shop/Service/user",
+                labels={"external_key": key} if key else {},
+            )
+        )
+    return storage
+
+
+def test_an_episode_withholds_its_own_problem_and_keeps_the_twins(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Leave-one-out as the campaign pre-registered it, derived rather than handed over.
+
+    The exact problem is withheld, however many times it has been run, and a twin of it
+    in another application is not: a cell is scored on what generalises, and withholding
+    the twins too would be measuring a smaller corpus instead.
+    """
+    storage = _labelled_corpus(tmp_path)
+    adapter = SREGymAdapter(SregymConfig())
+    ctx = EpisodeContext(namespace="shop", external_key="k8s_target_port-misconfig")
+
+    withheld = adapter.withheld_records(ctx, storage.index)
+
+    assert sorted(withheld) == ["first-run", "second-run"]
+    storage.close()
+
+
+def test_the_protocol_is_a_switch_and_a_problemless_episode_withholds_nothing(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Off retrieves the whole corpus, which is a measurement of something else.
+
+    And an episode the conductor served no problem for cannot key on anything, so it
+    withholds nothing rather than guessing — loudly, because that makes a memory arm's
+    cell void.
+    """
+    storage = _labelled_corpus(tmp_path)
+    ctx = EpisodeContext(namespace="shop", external_key="k8s_target_port-misconfig")
+
+    off = SREGymAdapter(SregymConfig(leave_one_out=False)).withheld_records(ctx, storage.index)
+    blind = SREGymAdapter(SregymConfig()).withheld_records(
+        EpisodeContext(namespace="shop", external_key=None), storage.index
+    )
+
+    assert list(off) == []
+    assert list(blind) == []
+    storage.close()
 
 
 async def _settle(app: Any) -> None:
