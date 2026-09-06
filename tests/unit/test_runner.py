@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from kira.audit.journal import ListSink
+from kira.contracts import SCHEMA_VERSION
 from kira.contracts.events import InterventionEvent
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
@@ -179,7 +180,11 @@ async def test_the_configuration_is_the_first_thing_written(tmp_path: pathlib.Pa
 
     first = sink.events[0]
     assert first.payload.stage == "pipeline" and first.payload.event == "entered"
-    assert "settings" in json.loads(first.payload.detail)
+    snapshot = json.loads(first.payload.detail)
+    assert "settings" in snapshot
+    # Which schemas produced the result, so a later reader does not infer them from the
+    # date the run happens to carry.
+    assert snapshot["schema_version"] == SCHEMA_VERSION
     deploy.storage.close()
 
 

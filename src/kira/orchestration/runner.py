@@ -26,6 +26,7 @@ from typing import Any, cast
 
 from kira.adapters.base import AdapterTool
 from kira.audit.journal import EventSink, Journal, NullSink, SequenceRegistry
+from kira.contracts import SCHEMA_VERSION
 from kira.contracts.events import InterventionEvent, StageEvent
 from kira.contracts.lifecycle import RunStatus
 from kira.contracts.routing import HandBack, Route
@@ -624,12 +625,16 @@ async def run_incident(
             sequence=deployment.sequences.for_session(session_id),
         )
         # Written before any role runs, and first. A campaign is reconstructible only if
-        # the configuration it ran under is in the record beside its result.
+        # the configuration it ran under is in the record beside its result — including
+        # which schemas produced it, which is otherwise inferred from the date.
         journal.record(
             StageEvent(
                 stage="pipeline",
                 event="entered",
-                detail=json.dumps(deployment.settings.snapshot(), sort_keys=True),
+                detail=json.dumps(
+                    {"schema_version": SCHEMA_VERSION, **deployment.settings.snapshot()},
+                    sort_keys=True,
+                ),
             )
         )
 
