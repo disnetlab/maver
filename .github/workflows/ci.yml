@@ -29,6 +29,21 @@ jobs:
           uv export --format requirements-txt --frozen --no-dev -o /tmp/requirements.txt
           diff <(grep -v '^#' requirements.txt) <(grep -v '^#' /tmp/requirements.txt) \
             || { echo "requirements.txt is stale: run make requirements"; exit 1; }
+      # tests/unit/test_deploy.py renders both deploy overlays with `kubectl kustomize`,
+      # which is local templating and contacts no cluster. Without the binary it would
+      # skip, and a skipped check reports green, so it fails outright when CI is set —
+      # this step is the whole reason it runs instead. Pinned to the version the runtime
+      # image ships and checksummed the same way, so CI renders with the kustomize the
+      # deployed kubectl carries rather than whatever the runner image happens to have.
+      - name: kubectl, for the deploy manifest checks
+        run: |
+          version=$(grep -oP '(?<=^ARG KUBECTL_VERSION=)\S+' deploy/docker/Dockerfile)
+          base="https://dl.k8s.io/release/${version}/bin/linux/amd64"
+          curl -fsSL "${base}/kubectl" -o /tmp/kubectl
+          curl -fsSL "${base}/kubectl.sha256" -o /tmp/kubectl.sha256
+          echo "$(cat /tmp/kubectl.sha256)  /tmp/kubectl" | sha256sum -c -
+          sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+          kubectl version --client
       # Deselects everything needing a live service. What needs a database is the
       # postgres job below; what needs a cluster runs nowhere, and says so.
       - run: uv run pytest -m "not integration" --cov --cov-report=term-missing
