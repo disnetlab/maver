@@ -366,6 +366,44 @@ async def test_a_spiral_that_also_submits_is_still_a_spiral() -> None:
     assert attempts == list(range(1, len(attempts) + 1))
 
 
+async def test_a_bundled_submission_does_not_spend_the_schema_repair_budget() -> None:
+    """A submission emitted beside investigation tools is handed back unread.
+
+    It was charged to the same three-attempt budget the parse and validation rejections
+    spend from, and that branch never checked the cap it was spending. Two bundled
+    submits therefore turned a three-attempt schema repair into a one-attempt one and
+    ended the stage with no artifact on the first fixable slip, where the archive
+    charged a bundled submission nothing at all.
+    """
+    consulted = 0
+
+    def validator(arguments: dict) -> None:
+        nonlocal consulted
+        consulted += 1
+        raise ValueError("confidence must be at most 1")
+
+    # Distinct arguments on every turn, so the repeat breaker stays out of it.
+    turns = [
+        turn(call("get_logs", {"q": i}, id=f"m{i}"), call(SUBMIT, {"n": i}, id=f"b{i}"))
+        for i in range(2)
+    ]
+    turns += [turn(call(SUBMIT, {"n": 10 + i}, id=f"v{i}")) for i in range(3)]
+
+    result = await run_until_submit(
+        model=FakeModel(turns),
+        role="rca",
+        system="s",
+        tools=TOOLS,
+        dispatch=DISPATCH,
+        submit_tool=SUBMIT,
+        messages=[{"role": "user", "content": "go"}],
+        submit_validator=validator,
+    )
+
+    assert result.status == "submit_validation_failed"
+    assert consulted == LoopLimits().submit_validation_rejections
+
+
 async def test_a_guard_that_is_out_of_budget_says_so_before_it_lets_one_through() -> None:
     """An exhausted guard accepts, and the acceptance has to be legible as one.
 

@@ -111,6 +111,7 @@ class _State:
     normal_turns_used: int = 0
     guard_rejections: int = 0
     submit_rejections: int = 0
+    mixed_rejections: int = 0
     rescues_used: int = 0
     rescue_turns_left: int = 0
     rescue: RescueTranscript | None = None
@@ -611,15 +612,17 @@ async def run_until_submit(
                 rescue_ctx.append_results(rendered)
             state.transcript.append({"role": "user", "content": rejection})
             for c in submit_calls:
-                # A handed-back submission, so it spends from the same budget the parse
-                # and validation rejections spend from. Reporting the count without ever
-                # advancing it made every rejection in a spiral read as the first one.
-                state.submit_rejections += 1
+                # Counted on its own, and not against the schema-repair budget. The
+                # submission was never read, so charging it there turned three attempts
+                # at a fixable slip into one — where the archive charged nothing at all.
+                # It still has to advance something, or every rejection in a spiral
+                # reads as the first one.
+                state.mixed_rejections += 1
                 log.record(
                     SubmissionEvent(
                         artifact=c.name,
                         accepted=False,
-                        attempt=state.submit_rejections,
+                        attempt=state.mixed_rejections,
                         validation_error="mixed_tool_calls",
                     )
                 )
