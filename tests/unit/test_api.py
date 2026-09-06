@@ -25,6 +25,8 @@ from kira.contracts.lifecycle import RunStatus
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
 from kira.middleware.human_approval import authorities
+from kira.orchestration import scheduler
+from kira.orchestration.jobs import resume_approval
 from kira.orchestration.runner import Deployment, resume_after_decision
 from kira.roles import registry as role_registry
 from kira.roles.registry import registered_roles
@@ -503,6 +505,61 @@ async def test_an_incident_that_outlasts_the_drain_is_recorded_as_over(
     record = deploy.storage.sessions.get_session(session_id)
     assert record.run_status == RunStatus.CANCELLED.value
     assert [run.status for run in deploy.storage.runs.runs_for(session_id)] == ["cancelled"]
+    deploy.storage.close()
+
+
+async def test_an_approval_that_restarts_an_incident_is_one_the_drain_can_see(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The continuation ran as a scheduler job the process was not tracking.
+
+    So the drain saw an empty live set and returned at once, the scheduler's shutdown
+    cancelled the coroutine, and the single incident a human had just approved a cluster
+    write for — the one whose write has already been replayed — was left at `resuming`
+    with nothing to finish it and nothing reporting it as over.
+    """
+
+    class StallsOnceResumed(ParkingModel):
+        """Parks on the write, then never answers again once it has been replayed."""
+
+        async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
+            if caller == "execution" and self.callers.count("execution") >= 1:
+                await asyncio.sleep(3600)
+            return await super().complete(request, caller=caller)
+
+    # The scheduler is a process-wide singleton, and an earlier test leaves one bound to
+    # an event loop that has since closed. This lifespan starts and stops its own.
+    monkeypatch.setattr(scheduler, "_SCHEDULER", None)
+    deploy = dataclasses.replace(deployment(tmp_path), completion=StallsOnceResumed())
+    object.__setattr__(deploy.settings.server, "drain_timeout_s", 0.0)
+    resumed: list[asyncio.Task[str]] = []
+    app = create_app(
+        deployment=deploy,
+        schedule_resume=lambda request_id: resumed.append(
+            asyncio.create_task(resume_approval(request_id))
+        ),
+    )
+
+    # The real lifespan, because what tells the continuation where this process tracks
+    # its runs is the binding the lifespan does.
+    async with app.router.lifespan_context(app), client(app) as http:
+        session_id = (await http.post("/api/v1/incidents", json={"alert": ALERT})).json()[
+            "session_id"
+        ]
+        await settle(app.state.service)
+        request_id = (await http.get(f"/api/v1/incidents/{session_id}")).json()[
+            "awaiting_request_id"
+        ]
+        await http.post(f"/api/v1/hitl/{request_id}/decide", json={"approve": True})
+        for _ in range(200):  # until the continuation is under way
+            await asyncio.sleep(0.01)
+            if app.state.service.runs.live():
+                break
+        assert app.state.service.runs.live() == [session_id], "the drain waits on this"
+
+    await asyncio.gather(*resumed, return_exceptions=True)
+    record = deploy.storage.sessions.get_session(session_id)
+    assert record.run_status == RunStatus.CANCELLED.value, "a continuation is still over"
     deploy.storage.close()
 
 

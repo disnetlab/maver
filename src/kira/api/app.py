@@ -243,7 +243,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # A restored job arrives with nothing but its keyword arguments, so the process
         # has to tell it which deployment it belongs to.
-        bind_deployment(active)
+        bind_deployment(active, runs=app.state.service.runs)
         register_post_incident_hooks(active.settings)
         # A decision recorded straight into the store — by the CLI from inside the pod,
         # or by anything else holding it — has nothing else to wake the incident it

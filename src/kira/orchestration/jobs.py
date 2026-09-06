@@ -12,6 +12,7 @@ nothing but its keyword arguments, so something has to tell it which deployment 
 belongs to. Everything else takes its dependencies as parameters.
 """
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -22,6 +23,7 @@ from kira.audit.journal import Journal
 from kira.contracts.events import EnvironmentEvent
 from kira.contracts.lifecycle import LifecycleState, RunStatus
 from kira.memory.ports import ApprovalRecord
+from kira.orchestration.control import RunRegistry
 from kira.orchestration.inflight import clear_held_episodes, held_episode
 from kira.orchestration.resume import approves_on_timeout, load_checkpoint
 from kira.orchestration.runner import Deployment, resume_after_decision
@@ -31,6 +33,7 @@ __all__ = [
     "bind_deployment",
     "bound_deployment",
     "expire_approval",
+    "record_cancellation",
     "resume_approval",
     "schedule_approval_resume",
     "schedule_approval_timeout",
@@ -40,16 +43,23 @@ __all__ = [
 _log = logging.getLogger(__name__)
 
 _DEPLOYMENT: "Deployment | None" = None
+_RUNS = RunRegistry()
+
+_UNFINISHED = ("running", "awaiting_human")
 
 
-def bind_deployment(deployment: "Deployment") -> None:
-    """Tell restored jobs which deployment they belong to.
+def bind_deployment(deployment: "Deployment", *, runs: RunRegistry | None = None) -> None:
+    """Tell restored jobs which deployment they belong to, and who tracks its runs.
 
     Args:
         deployment: This process's resources.
+        runs: Where a continuation this module starts is recorded, so that the drain
+            waits for it like any other incident. A registry of its own when the caller
+            has none, so the continuation path has one shape rather than two.
     """
-    global _DEPLOYMENT
+    global _DEPLOYMENT, _RUNS
     _DEPLOYMENT = deployment
+    _RUNS = runs if runs is not None else RunRegistry()
 
 
 def unbind_deployment() -> None:
@@ -58,8 +68,9 @@ def unbind_deployment() -> None:
     An episode parked on a person closes over the deployment it opened under, so one
     that outlives the unbinding is a continuation nothing can serve.
     """
-    global _DEPLOYMENT
+    global _DEPLOYMENT, _RUNS
     _DEPLOYMENT = None
+    _RUNS = RunRegistry()
     clear_held_episodes()
 
 
@@ -169,7 +180,61 @@ async def resume_approval(request_id: str, **_: Any) -> str:
         return await held.finish(request_id)
     if checkpoint.adapter:
         return await _abandon(checkpoint.session_id, checkpoint.adapter, request_id, deployment)
-    return await resume_after_decision(request_id, deployment)
+    return await _resume_tracked(checkpoint.session_id, request_id, deployment)
+
+
+async def _resume_tracked(session_id: str, request_id: str, deployment: Deployment) -> str:
+    """Continue a parked incident as a run this process can see it is carrying.
+
+    A continuation is the rest of an incident — minutes to hours of model calls against
+    a cluster the approved write has already changed — and it ran as a scheduler job in
+    neither the run registry nor the task set. So the drain returned at once and the
+    scheduler's shutdown cancelled the coroutine, and the single incident a human had
+    just approved a write for was the one the drain did not protect. Registering it is
+    what makes the drain wait, and recording the cancellation is what leaves a terminal
+    record when the wait runs out instead of a session saying `resuming` on a process
+    that is gone.
+    """
+    _RUNS.register(session_id)
+    task = asyncio.current_task()
+    if task is not None:
+        _RUNS.attach(session_id, task)
+    try:
+        return await resume_after_decision(request_id, deployment)
+    except asyncio.CancelledError:
+        _log.info("the continuation of session %s was cancelled", session_id)
+        record_cancellation(deployment, session_id)
+        raise
+    finally:
+        _RUNS.unregister(session_id)
+
+
+def record_cancellation(deployment: Deployment, session_id: str) -> None:
+    """Leave a cancelled incident in a state a reader can tell is over.
+
+    Written inline rather than through a thread, because a coroutine being cancelled
+    cannot reliably await anything: the writes are the store's own synchronous calls.
+
+    The lifecycle state is not touched. A cancellation disproves nothing about the claim
+    the incident was making, and the offline pass distils completed sessions only, so a
+    pending record stays pending and out of the corpus.
+
+    Args:
+        deployment: This process's resources.
+        session_id: The incident that was stopped.
+    """
+    try:
+        sessions = deployment.storage.sessions
+        sessions.update_artefacts(session_id, notes="cancelled before it finished")
+        sessions.set_run_status(session_id, RunStatus.CANCELLED)
+        for run in reversed(deployment.storage.runs.runs_for(session_id)):
+            if run.status in _UNFINISHED:
+                deployment.storage.runs.finish_run(
+                    run.agent_run_id, status="cancelled", error="cancelled before it finished"
+                )
+                break
+    except Exception:
+        _log.exception("could not record the cancellation of session %s", session_id)
 
 
 async def _abandon(
