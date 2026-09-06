@@ -1,8 +1,13 @@
+import pathlib
+
 import pytest
 
 from kira.audit.journal import Journal, ListSink
-from kira.contracts.events import PolicyDecisionEvent
+from kira.audit.store_sink import StoreSink
+from kira.contracts.events import PolicyDecisionEvent, ToolCallEvent
 from kira.llm.types import ToolResult
+from kira.memory.factory import build_storage
+from kira.memory.ports import AgentRunRecord
 from kira.middleware.authority import (
     ActionRequest,
     ApprovalPending,
@@ -14,7 +19,8 @@ from kira.middleware.authority import (
 from kira.middleware.base import ToolRequest
 from kira.middleware.write_gate import WriteGate
 from kira.settings.authority import AuthorityRule, AuthoritySettings
-from kira.settings.groups import ToolSettings
+from kira.settings.groups import ServerSettings, ToolSettings
+from kira.settings.root import Settings
 from kira.tools import kubernetes  # noqa: F401 - registers the kubectl policy
 from kira.tools.policy import policy_for
 
@@ -395,3 +401,46 @@ def test_the_operator_sees_the_whole_command_not_a_preview() -> None:
     cmd = 'kubectl patch deployment web -n shop --type merge -p \'{"spec":{"replicas":0}}\''
     assert policy.summarise({"cmd": cmd}) == cmd
     assert "deployment/web" in policy.targets({"cmd": cmd})
+
+
+async def test_a_refusal_joins_to_the_call_it_refused(tmp_path: pathlib.Path) -> None:
+    """The store carries a ``tool_call_id`` column and the sink filled it from an
+    attribute no payload declared, so it was unconditionally NULL: a tool call could
+    not be aligned to its position in the stored transcript, and a refusal could be
+    joined to the call it gated only by adjacency in a log that had no order either."""
+    stack = build_storage(Settings(server=ServerSettings(workdir=tmp_path)))
+    stack.runs.start_run(
+        AgentRunRecord(
+            agent_run_id="r1",
+            pipeline_id="s1",
+            agent_name="rca",
+            attempt=1,
+            status="running",
+            started_at="2026-09-01T00:00:00Z",
+        )
+    )
+    sink = StoreSink(stack.runs)
+    journal = Journal(sink, session_id="s1", stage="rca", run_id="r1")
+    gate = WriteGate(
+        authorities={"auto": AutoApprove()},
+        settings=AuthoritySettings(mode="auto"),
+        tools=ToolSettings(),
+        journal=journal,
+    )
+    request = call("kubectl delete pod x -n shop", role="rca")
+
+    result = await gate.wrap_tool_call(request, handler)
+    journal.record(
+        ToolCallEvent(
+            tool=request.name,
+            call_id=request.call_id,
+            arguments=dict(request.arguments),
+            succeeded=False,
+            result_chars=len(result.content),
+        )
+    )
+    sink.close()
+
+    stored = {record.event_type: record for record in stack.runs.events_for("r1")}
+    assert stored["policy_decision"].tool_call_id == stored["tool_call"].tool_call_id == "c1"
+    stack.close()

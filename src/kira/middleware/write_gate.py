@@ -79,6 +79,7 @@ class WriteGate:
         self._journal.record(
             PolicyDecisionEvent(
                 tool=request.name,
+                call_id=request.call_id,
                 policy=policy,
                 decision=decision,
                 reason=reason,

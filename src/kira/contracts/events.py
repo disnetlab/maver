@@ -148,6 +148,15 @@ class ToolCallEvent(BaseModel):
 
     kind: Literal["tool_call"] = "tool_call"
     tool: str
+    call_id: str | None = Field(
+        default=None,
+        description=(
+            "The provider's identifier for the call this event describes, which is how "
+            "it aligns to a position in the stored transcript and how a refusal joins "
+            "to the call it refused. Null for a call the harness issued rather than "
+            "the model."
+        ),
+    )
     arguments: dict[str, Any]
     rationale: str | None = Field(
         default=None,
@@ -232,6 +241,15 @@ class PolicyDecisionEvent(BaseModel):
 
     kind: Literal["policy_decision"] = "policy_decision"
     tool: str
+    call_id: str | None = Field(
+        default=None,
+        description=(
+            "The provider's identifier for the call this event describes, which is how "
+            "it aligns to a position in the stored transcript and how a refusal joins "
+            "to the call it refused. Null for a call the harness issued rather than "
+            "the model."
+        ),
+    )
     policy: Literal["auto", "prompt", "deny"]
     decision: Literal["approved", "denied", "timed_out", "pending"]
     reason: str = ""

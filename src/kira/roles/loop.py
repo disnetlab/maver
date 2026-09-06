@@ -550,6 +550,7 @@ async def run_until_submit(
             log.record(
                 ToolCallEvent(
                     tool=call_.name,
+                    call_id=call_.id,
                     arguments=arguments,
                     rationale=call_.arguments.get(RATIONALE_ARG),
                     succeeded=not call_failed(result.content),
