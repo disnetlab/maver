@@ -316,33 +316,40 @@ def _second_pass_node(
 ) -> NodeFn:
     """Run the gated second opinion in place of a single diagnosis."""
 
-    async def diagnose(
-        state: IncidentState, *, brief: str | None, retrieval: bool, run_label: str
-    ) -> DiagnosisRun:
-        node = make_node(
-            get_role("rca"),
-            replace(
-                deps,
-                build_context=_context_builder(
-                    deployment,
-                    resources,
-                    None,
-                    assignment=brief or "",
-                    retrieval=retrieval,
-                    run_label=run_label,
-                ),
-            ),
-        )
-        delta = dict(await node(state))
-        run_ids = delta.get("run_ids") or []
-        return DiagnosisRun(
-            artifact=delta.get("root_cause"),
-            run_id=str(run_ids[-1]) if run_ids else None,
-            messages=tuple(delta.get("messages", {}).get("rca", ())),
-            trace_summaries=tuple(delta.get("trace_summaries", ())),
-        )
-
     async def node(state: IncidentState) -> StateDelta:
+        # What the inner runs' own wrappers produced, kept per entry. The mechanism
+        # reduces a run to the four fields it arbitrates over; everything else the
+        # wrapper decided — the hand-back accounting above all — belongs to the incident
+        # and is merged back below.
+        inner: list[Mapping[str, Any]] = []
+
+        async def diagnose(
+            state: IncidentState, *, brief: str | None, retrieval: bool, run_label: str
+        ) -> DiagnosisRun:
+            rca = make_node(
+                get_role("rca"),
+                replace(
+                    deps,
+                    build_context=_context_builder(
+                        deployment,
+                        resources,
+                        None,
+                        assignment=brief or "",
+                        retrieval=retrieval,
+                        run_label=run_label,
+                    ),
+                ),
+            )
+            delta = dict(await rca(state))
+            inner.append(delta)
+            run_ids = delta.get("run_ids") or []
+            return DiagnosisRun(
+                artifact=delta.get("root_cause"),
+                run_id=str(run_ids[-1]) if run_ids else None,
+                messages=tuple(delta.get("messages", {}).get("rca", ())),
+                trace_summaries=tuple(delta.get("trace_summaries", ())),
+            )
+
         journal = Journal(deployment.sink, session_id=state.get("session_id", ""), stage="rca")
         tools = tool_context_for(deployment, resources, "rca", state.get("session_id", ""), journal)
 
@@ -371,31 +378,51 @@ def _second_pass_node(
                 emit=JournalEmitter(journal, policy=policy.name),
             )
         )
-        return _second_pass_delta(state, result)
+        return _second_pass_delta(state, result, inner)
 
     return node
 
 
-def _second_pass_delta(state: IncidentState, result: SecondPassResult) -> StateDelta:
+def _second_pass_delta(
+    state: IncidentState, result: SecondPassResult, inner: Sequence[Mapping[str, Any]]
+) -> StateDelta:
     """Merge both diagnosis runs into the state, not only the winner.
 
     The prototype returned one of the two states, so the losing run's identifier never
     entered the ordered path: both rows existed in the database and the chain that
     linked them did not.
+
+    Built on what the inner wrappers returned rather than assembled from scratch, so a
+    composed diagnosis node returns everything an ordinary one does. Picking four keys
+    off it dropped the rest — the hand-back accounting most of all, which left a spent
+    verdict live in the state and a retry budget that never fell.
+
+    Args:
+        state: The state the node was entered with.
+        result: What the mechanism decided.
+        inner: Each inner diagnosis run's own delta, in the order they ran.
+
+    Returns:
+        The state delta for the whole pass.
     """
     runs = [run for run in (result.first, result.second) if run is not None]
-    delta: dict[str, Any] = {
-        "root_cause": result.chosen,
-        "messages": {**state.get("messages", {}), "rca": list(runs[-1].messages)},
-        "trace_summaries": [
-            *state.get("trace_summaries", []),
-            *(dict(summary) for run in runs for summary in run.trace_summaries),
-        ],
-        "run_ids": [
-            *state.get("run_ids", []),
-            *(run.run_id for run in runs if run.run_id),
-        ],
-    }
+    delta: dict[str, Any] = {}
+    for produced in inner:
+        delta.update(produced)
+    delta.update(
+        {
+            "root_cause": result.chosen,
+            "messages": {**state.get("messages", {}), "rca": list(runs[-1].messages)},
+            "trace_summaries": [
+                *state.get("trace_summaries", []),
+                *(dict(summary) for run in runs for summary in run.trace_summaries),
+            ],
+            "run_ids": [
+                *state.get("run_ids", []),
+                *(run.run_id for run in runs if run.run_id),
+            ],
+        }
+    )
     if result.chosen is None:
         delta["error"] = f"rca failed: {result.skipped or 'no diagnosis'}"
     return delta

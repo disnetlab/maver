@@ -34,6 +34,32 @@ DIAGNOSIS: dict[str, Any] = {
     "evidence": ["endpoints empty for svc/user"],
     "summary": "the user Service targets a port nothing listens on",
 }
+PLAN: dict[str, Any] = {
+    "steps": [
+        {
+            "action": "kubectl patch svc/user",
+            "target": "shop/Service/user",
+            "justification": "point the selector at the serving port",
+        }
+    ],
+    "expected_outcome": "endpoints populate",
+    "confidence": 0.8,
+}
+APPLIED: dict[str, Any] = {
+    "succeeded": True,
+    "steps": [],
+    "final_state_summary": "the patch applied",
+    "confidence": 0.8,
+}
+HANDS_BACK: dict[str, Any] = {
+    "recovered": False,
+    "verdict": "not_recovered",
+    "checks": ["curl http://user.shop/health returned 503"],
+    "summary": "still failing",
+    "confidence": 0.7,
+    "needs_reassessment": True,
+    "reassessment_reason": "the named Service was not the origin",
+}
 
 
 class FakeTransport:
@@ -69,6 +95,27 @@ class FakeModel:
             }
             return _call("submit_plan", plan, len(self.callers))
         return _call("submit_root_cause", DIAGNOSIS, len(self.callers))
+
+
+class HandingBackModel(FakeModel):
+    """Verification never accepts the repair, so every cycle takes the back-edge.
+
+    Everything else answers normally, which makes the diagnosis node the only place the
+    hand-back accounting can be lost.
+    """
+
+    async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
+        if caller in {"planning", "execution", "verify"}:
+            self.callers.append(caller)
+            self.sampling.append(request.sampling)
+            payload = {"planning": PLAN, "execution": APPLIED, "verify": HANDS_BACK}[caller]
+            submit = {
+                "planning": "submit_plan",
+                "execution": "submit_execution_result",
+                "verify": "submit_verify_result",
+            }[caller]
+            return _call(submit, payload, len(self.callers))
+        return await super().complete(request, caller=caller)
 
 
 def _text(content: str) -> ModelResponse:
@@ -223,4 +270,67 @@ async def test_a_diagnosis_only_task_still_gets_its_second_opinion(
     assert model.callers.count("secondpass.gate") == 1
     assert model.callers.count("rca") == 2
     assert final["plan"] is None
+    storage.close()
+
+
+# --- composed with verification ------------------------------------------------------
+
+
+def verifying_settings(tmp_path: pathlib.Path) -> Settings:
+    """The published MA+S+V shape: both mechanisms on, budget of two."""
+    return Settings(
+        server=ServerSettings(workdir=tmp_path),
+        pipeline=PipelineSettings(remediation_retries=2),
+        memory=MemorySettings(
+            enabled=True,
+            learning_enabled=False,
+            role_retrieval=False,
+            second_pass=SecondPassSettings(enabled=True, gate="quality", delivery="context"),
+        ),
+        verify=VerifySettings(enabled=True),
+    )
+
+
+async def test_a_hand_back_through_the_composed_node_charges_the_shared_budget(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The mechanism wraps the diagnosis node, so it inherits that node's obligations.
+
+    Reducing its two runs to the diagnosis they produced dropped the rest of what the
+    wrapper decided: the verdict stayed live in the state and was re-derived at every
+    later entry, so nothing charged the budget and planning, execution and verification
+    cycled until the step limit killed the incident — each cycle another mutation of the
+    cluster, and an exception in place of an outcome.
+    """
+    settings = verifying_settings(tmp_path)
+    storage = build_storage(settings)
+    model = HandingBackModel()
+    deploy = Deployment(
+        settings=settings,
+        storage=storage,
+        completion=model,
+        profile=PROFILE,
+        transport_for=lambda session_id: FakeTransport(),
+        sink=ListSink(),
+    )
+    session = storage.sessions.create_session(ALERT)
+    entries: list[dict[str, Any]] = []
+
+    async def on_stage(name: str, state: Any) -> None:
+        if name == "rca":
+            entries.append(dict(state))
+
+    final = await run_incident(
+        ALERT, session.session_id, deploy, on_stage=on_stage, fire_post_hooks=False
+    )
+
+    # The verdict is consumed as it is acted on, and the re-diagnosis is charged for.
+    assert len(entries) == 3
+    assert entries[1]["verify_result"] is None
+    assert entries[1]["reassessment_count"] == 1
+
+    # And the budget runs out, so the incident ends with a result rather than an
+    # exception the harness records as a crash.
+    assert final["remediation_retries"] == settings.pipeline.remediation_retries
+    assert final["reassessment_count"] == 2
     storage.close()
