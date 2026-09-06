@@ -1,0 +1,1 @@
+- Memory retrieval is enabled. Use only `memory_search`, `open_memory`, and `session_trace_summary`; never inspect memory files directly.

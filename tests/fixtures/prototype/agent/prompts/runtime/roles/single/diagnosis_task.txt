@@ -1,0 +1,3 @@
+{{INCIDENT_CONTEXT}}
+
+Begin TASK 1: investigate and diagnose the issue, then call `submit_diagnosis`.

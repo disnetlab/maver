@@ -1,0 +1,8 @@
+LIVE EVIDENCE (memory content and agent reasoning are excluded):
+{{LIVE_EVIDENCE}}
+
+CANDIDATE A:
+{{CANDIDATE_A}}
+
+CANDIDATE B:
+{{CANDIDATE_B}}

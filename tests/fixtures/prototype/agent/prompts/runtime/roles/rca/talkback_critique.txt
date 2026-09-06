@@ -1,0 +1,35 @@
+## The fix was applied and the incident has not cleared
+
+You submitted the root cause above. Planning built a fix for it and Execution applied
+it cleanly — the change is live on the cluster. Verify then re-checked the system end
+to end and the incident is still present.
+
+What Execution applied: {{REMEDIATION_SUMMARY}}
+
+Verify's hand-back: {{REASSESSMENT_REASON}}
+
+Checks Verify ran:
+{{VERIFY_CHECKS}}
+
+This is evidence, not a verdict on your diagnosis. Exactly one of the following is
+true, and working out which one is the task:
+
+- **The cause was right and the fix was insufficient.** The change addressed the cause
+  only partially, or a second deviation on the same object or the same request path is
+  still in place. If this is the case, say so and name precisely what remains — do not
+  reach for a different cause to explain evidence your original one already explains.
+- **The cause was a real fault, but not this incident's.** Something genuinely broken
+  was found and repaired, yet it never explained the intake symptom. Two checks settle
+  this: does the condition you named predate the incident, and can it mechanically
+  reach the symptom that is still being reported?
+- **The cause was wrong.** The evidence you gathered supports a different origin, and
+  the fix changed something that was never on the failing path.
+
+Before searching further, re-read what you already established in this conversation:
+your tool results, the components you ruled out and the reason each was ruled out, and
+whether the symptom Verify still observes is the one you set out to explain. Then run
+the specific checks that separate the three cases above — a check that could come out
+either way, not one that confirms what you already believe.
+
+Then submit with `submit_root_cause`: the same cause with a corrected scope or
+mechanism, or a different cause. Both are legitimate outcomes of this turn.

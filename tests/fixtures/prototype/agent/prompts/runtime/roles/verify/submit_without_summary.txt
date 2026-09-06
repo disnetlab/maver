@@ -1,0 +1,1 @@
+submit_verify_result requires a non-empty summary of the end-to-end state you observed and why the incident is or is not resolved.

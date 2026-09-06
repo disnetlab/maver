@@ -1,0 +1,5 @@
+## Planning Scope
+
+Build the plan from the RCA and current cluster state.
+
+Do not infer past successful flows or assume precedent. If evidence is incomplete, record uncertainty and still propose your best fix; do not set `halt` because context is incomplete.

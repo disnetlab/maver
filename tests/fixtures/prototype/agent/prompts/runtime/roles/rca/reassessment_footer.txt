@@ -1,0 +1,7 @@
+### The incident is still firing:
+```json
+{{ALERT_JSON}}
+```
+
+Then submit with `submit_root_cause`: the same cause with a corrected scope or
+mechanism, or a different cause. Both are legitimate outcomes of this turn.

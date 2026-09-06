@@ -1,0 +1,20 @@
+## Live Recovery Verification (enabled)
+
+Before submitting, independently verify whether the incident's symptoms are
+actually resolved in the live cluster — do not trust the Execution artefact
+alone. This mirrors an external recovery check and is a safeguard.
+
+1. Re-query the originating alert's condition and the affected resource's
+   current state with your telemetry and read-only kubectl tools (e.g.
+   `get_metrics` for the SLI, kubectl get/endpoints/pods for resource health,
+   `get_logs` for residual errors). Prefer post-remediation evidence: current
+   metric values, endpoint/pod readiness, absence of the original error signature.
+2. You MUST set the structured field `submit_learning_result.verification_verdict`
+   to exactly one of `recovered`, `not_recovered`, or `inconclusive`. This is a
+   required structured field — separate from, and in addition to, the prose SLI
+   Verification section. Set it to match that section's verdict; an empty value
+   discards the safeguard.
+   - `recovered`: live evidence shows the symptom is gone and the resource is healthy.
+   - `not_recovered`: the symptom or an equivalent failure persists.
+   - `inconclusive`: telemetry was unavailable or evidence was insufficient.
+Also record the supporting check in the summary's SLI Verification section.

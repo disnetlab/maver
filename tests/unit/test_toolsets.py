@@ -1,9 +1,9 @@
 import ast
-import os
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from prototype_tree import prototype_root
 
 from kira.audit.journal import Journal
 from kira.settings.groups import ToolSettings
@@ -115,18 +115,7 @@ def test_an_unknown_role_is_an_error_not_an_empty_toolset(tmp_path) -> None:
 
 # --- the allowlists against the prototype that measured them -----------------------
 
-PROTOTYPE_REGISTRY = Path(
-    os.environ.get(
-        "PROTOTYPE_REGISTRY",
-        str(
-            Path(__file__).resolve().parents[2].parent
-            / "k8s-agentic-operator"
-            / "agent"
-            / "tools"
-            / "registry.py"
-        ),
-    )
-)
+PROTOTYPE_REGISTRY = prototype_root() / "agent" / "tools" / "registry.py"
 
 DROPPED: dict[str, frozenset[str]] = {
     "rca": frozenset({"memory_grep"}),
@@ -166,7 +155,6 @@ def _prototype_toolsets() -> dict[str, tuple[str, ...]]:
 
 
 @pytest.mark.parity
-@pytest.mark.skipif(not PROTOTYPE_REGISTRY.exists(), reason="the prototype tree is not beside us")
 @pytest.mark.parametrize("role", sorted(ROLE_TOOLSETS))
 def test_a_role_offers_what_the_prototype_offered_in_the_order_it_offered_it(role: str) -> None:
     """The existing check compares the resolved order against the table it came from.

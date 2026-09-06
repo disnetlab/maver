@@ -1,0 +1,65 @@
+Frozen prototype text
+=====================
+
+The parity checks compare what Kira ships against the research prototype that produced
+the published measurements. That prototype is a private tree: it is not published, and
+it will not sit beside a clone of this repository. Frozen here are exactly the files
+those checks open, byte for byte, in the layout they have there — so the comparison
+runs from this artifact alone rather than skipping on every machine but the author's.
+
+Frozen from
+-----------
+
+source: k8s-agentic-operator (private)
+commit: 30070ee38b5d87327b70280520d219a887f8ff1a
+date: 2026-09-07
+
+Three files were taken from that checkout's working tree rather than from the commit,
+and a refreeze from a clean clone of 30070ee will not reproduce them:
+
+  agent/prompts/verify.txt                                 uncommitted, +2 lines
+  agent/tools/registry.py                                  uncommitted, +59/-3 lines
+  agent/prompts/runtime/roles/verify/submit_without_entry_point.txt   untracked
+
+They are frozen as they were because that working tree is what the shipped assets were
+migrated from and what the checks were passing against. Recording it here is the point:
+the alternative is a copy that says "commit 30070ee" and silently is not.
+
+What is here
+------------
+
+The 69 prompt assets test_prompt_assets.py maps a shipped asset back to, the tool
+registry test_toolsets.py parses AGENT_TOOLSETS out of, and the projection renderer
+test_projections.py re-derives its golden file by running. Nothing else of the
+prototype: tests/unit/test_frozen_prototype.py fails on a file the checks read that is
+missing here, and on a file here that no check reads.
+
+The prototype sources of the assets in test_prompt_assets.DELIBERATELY_DIVERGED are
+absent on purpose. That check skips before reading them, so freezing them would vendor
+text nothing compares — the divergence itself is documented at each entry.
+
+Refreezing
+----------
+
+Point KIRA_PROTOTYPE_ROOT at a prototype checkout and confirm the checks still pass
+against it, which is what says the frozen copy and its source have not drifted apart:
+
+    KIRA_PROTOTYPE_ROOT=<checkout> uv run pytest tests/unit/test_prompt_assets.py \
+        tests/unit/test_projections.py tests/unit/test_toolsets.py
+
+Then copy the same set forward and update commit, date and the exceptions above:
+
+    uv run python - <<'PY'
+    import shutil, sys
+    from pathlib import Path
+    sys.path.insert(0, "tests/unit")
+    from prototype_tree import FROZEN
+    from test_frozen_prototype import COMPARED
+    live = Path("<checkout>")
+    for relative in COMPARED:
+        (FROZEN / relative).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(live / relative, FROZEN / relative)
+    PY
+
+A refreeze that copies part of the set fails test_frozen_prototype rather than passing
+quietly with the checks reading two prototype revisions at once.

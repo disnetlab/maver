@@ -1,0 +1,1 @@
+Stop. You have called {{TOOL_NAMES}} with identical arguments {{COUNT}} times and received the same result every time; calling it again cannot make progress. Do not call {{TOOL_NAMES}} again with these arguments.{{ALTERNATIVES}} Only if you have genuinely exhausted every other option, call `{{SUBMIT_TOOL}}` now with your best current result.

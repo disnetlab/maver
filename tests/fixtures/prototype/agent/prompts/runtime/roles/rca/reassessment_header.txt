@@ -1,0 +1,24 @@
+## Re-diagnosis — the fix was applied and the incident has not cleared
+
+A root cause was diagnosed, Planning built a fix for it, and Execution applied it
+cleanly. Verify then re-checked the system end to end and the incident is still
+present.
+
+This is evidence, not a verdict on the prior diagnosis. Exactly one of the following
+is true, and working out which one is the task:
+
+- **The cause was right and the fix was insufficient.** The change addressed the cause
+  only partially, or a second deviation on the same object or the same request path is
+  still in place. If this is the case, name precisely what remains — do not reach for a
+  different cause to explain evidence the prior one already explains.
+- **The cause was a real fault, but not this incident's.** Something genuinely broken
+  was found and repaired, yet it never explained the intake symptom. Two checks settle
+  this: does the condition named predate the incident, and can it mechanically reach
+  the symptom that is still being reported?
+- **The cause was wrong.** The evidence gathered supports a different origin, and the
+  fix changed something that was never on the failing path.
+
+Run the specific checks that separate those three cases — a check that could come out
+either way, not one that confirms what is already believed.
+
+### Prior attempt(s):

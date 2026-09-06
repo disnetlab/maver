@@ -1,0 +1,4 @@
+## Second-opinion assignment
+A prior incident with similar observations was attributed to a different fault family: {{FAMILY}}.
+{{DIRECTIVE}}
+Treat this strictly as a hypothesis to verify or falsify against live evidence gathered in this session; a past incident is never evidence about the live one. If the live evidence does not support it, diagnose whatever the evidence does support.

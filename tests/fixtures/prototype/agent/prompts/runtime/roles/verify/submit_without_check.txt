@@ -1,0 +1,1 @@
+You called submit_verify_result before running a single check. You cannot judge end-to-end recovery without re-evaluating the alert/SLI and exercising the affected request path. Run those checks first.

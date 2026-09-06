@@ -127,7 +127,11 @@ src = ["src", "tests"]
 # Local working state, not source. Ruff formats Python blocks inside Markdown, and
 # reflowing the survey notes would destroy the aligned annotations that make them
 # readable. The directory is gitignored and deleted once the specs land.
-extend-exclude = ["refactor"]
+#
+# The frozen prototype copy is evidence, not source: two of its files are Python, and
+# they are byte-for-byte what the parity checks compare against. Formatting or fixing
+# them would rewrite the thing being compared.
+extend-exclude = ["refactor", "tests/fixtures/prototype"]
 
 [tool.ruff.lint]
 select = [

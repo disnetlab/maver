@@ -1,0 +1,4 @@
+Incident context:
+```json
+{{ALERT_JSON}}
+```

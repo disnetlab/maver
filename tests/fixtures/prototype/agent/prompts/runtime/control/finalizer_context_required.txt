@@ -1,0 +1,1 @@
+You must now call `{{SUBMIT_TOOL}}` exactly once. Do not call any other tool and do not write prose.

@@ -1,0 +1,11 @@
+Use `exec_kubectl_cmd_safely` for every cluster operation. `code_exec` (Python) and `bash_exec` run in a sandbox with NO cluster credentials, so kubectl or any cluster/shell command inside them fails — never run kubectl there. Use `code_exec`/`bash_exec` only to filter, parse, or compute over output you have already captured.
+When output may be long or must be reused/processed programmatically, pass `save_as` to `exec_kubectl_cmd_safely` (e.g. `save_as="pods.json"`): the full output is written to `tool_outputs/` in your sandbox directory. For normal short reads, omit `save_as` and use the inline result. `code_exec` and `bash_exec` run with that sandbox as the current directory, so read saved files with a relative path (e.g. `tool_outputs/pods.json`) — you never need an absolute path.
+
+Correct pattern — capture, then process:
+1. `exec_kubectl_cmd_safely(cmd="kubectl get deploy -n NS -o json", save_as="deps.json")`
+2. `code_exec` Python: `json.load(open("tool_outputs/deps.json"))`, then filter/compute.
+
+Anti-patterns that FAIL (the sandbox has no cluster credentials) — never do these:
+- `code_exec` running `subprocess.run(["kubectl", ...])` or `os.system("kubectl ...")`.
+- `bash_exec` running `kubectl get ... > file`.
+Both are rejected; run kubectl via `exec_kubectl_cmd_safely` instead.

@@ -1,0 +1,12 @@
+{{PLAYBOOK_BLOCK}}{{PROCEDURAL_CONTEXT}}{{MEMORY_GUIDANCE}}
+Incident context:
+```json
+{{ALERT_JSON}}
+```
+
+Root cause from RCA:
+```json
+{{ROOT_CAUSE_JSON}}
+```
+
+{{TASK}}

@@ -1,0 +1,1 @@
+Your previous generation ended because max token exceeded before any complete tool call was emitted. {{PREVIOUS_NOTE}} Continue from that state and now emit one complete tool call. Every turn must invoke a tool: either call an investigation tool or call `{{SUBMIT_TOOL}}` to finish. Do not restart the analysis, repeat the full reasoning, or respond with plain text.

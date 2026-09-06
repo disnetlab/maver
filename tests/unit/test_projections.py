@@ -5,13 +5,13 @@ model reads, so their exact wording is a held-constant input to every published 
 measurement. The expectations are a golden file produced by importing the prototype's own
 `build_memory_projections` and calling it, never by recording Kira's output: a fixture
 generated from the code under test asserts nothing.
-`test_the_golden_file_came_from_the_prototype` re-derives it whenever the prototype tree
-is on disk, so the file cannot quietly drift into being our own output later.
+`test_the_golden_file_came_from_the_prototype` re-derives it by running the prototype's
+renderer, frozen under `tests/fixtures/prototype`, so the file cannot quietly drift into
+being our own output later.
 """
 
 import importlib.util
 import json
-import os
 import pathlib
 import sys
 import types
@@ -19,6 +19,7 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
+from prototype_tree import prototype_root
 
 from kira.contracts import LearningResult
 from kira.memory.projections import build_projections
@@ -26,13 +27,7 @@ from kira.memory.projections import build_projections
 FIXTURE = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "prototype_projections.json"
 GOLDEN: dict[str, dict[str, Any]] = json.loads(FIXTURE.read_text(encoding="utf-8"))["expected"]
 
-_DEFAULT_PROTOTYPE = pathlib.Path(__file__).resolve().parents[2].parent / "k8s-agentic-operator"
-PROTOTYPE = (
-    pathlib.Path(os.environ.get("KIRA_PROTOTYPE_ROOT", _DEFAULT_PROTOTYPE))
-    / "agent"
-    / "memory"
-    / "projections.py"
-)
+PROTOTYPE = prototype_root() / "agent" / "memory" / "projections.py"
 
 
 def load_prototype_renderer() -> tuple[Callable[..., Any], Callable[[bool], None]]:
@@ -221,7 +216,6 @@ def test_the_incident_bound_marker_is_always_present(name: str) -> None:
 
 
 @pytest.mark.parity
-@pytest.mark.skipif(not PROTOTYPE.exists(), reason="the prototype tree is not on disk")
 def test_the_golden_file_came_from_the_prototype() -> None:
     """Re-derive the golden file from the prototype so it cannot become our own output."""
     renderer, set_mask = load_prototype_renderer()

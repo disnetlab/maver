@@ -1,0 +1,11 @@
+## Prior-incident review assignment
+Records of past incidents whose observations resemble this one are provided
+below. They may or may not describe the same underlying fault.
+
+{{PRECEDENTS}}
+
+Use these records as hypotheses only — a past incident is never evidence
+about the live one. Investigate this cluster independently: for any mechanism
+suggested above, verify or falsify it against live evidence gathered in this
+session, and diagnose whatever the live evidence best supports, whether or
+not it matches the records.

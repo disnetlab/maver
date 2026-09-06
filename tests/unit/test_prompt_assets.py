@@ -6,15 +6,15 @@ it is supposed to preserve. The check walks the shipped tree rather than listing
 files, so an asset added without a prototype counterpart fails instead of passing
 unnoticed.
 
-The prototype is not part of this repository. Point ``PROTOTYPE_PROMPTS`` at its
-``agent/prompts`` directory, or keep it checked out beside this one; the test skips
-when it is absent.
+The prototype is not part of this repository, so the assets compared against are
+frozen under ``tests/fixtures/prototype``; see :mod:`prototype_tree` for the copy and
+for the environment name that compares against a live checkout instead.
 """
 
-import os
 from pathlib import Path
 
 import pytest
+from prototype_tree import prototype_root
 
 pytestmark = pytest.mark.parity
 """Prototype-pinned throughout: see the module docstring for where the data came from."""
@@ -22,12 +22,7 @@ pytestmark = pytest.mark.parity
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHIPPED = REPO_ROOT / "src" / "kira" / "prompts"
 
-PROTOTYPE = Path(
-    os.environ.get(
-        "PROTOTYPE_PROMPTS",
-        REPO_ROOT.parent / "k8s-agentic-operator" / "agent" / "prompts",
-    )
-)
+PROTOTYPE = prototype_root() / "agent" / "prompts"
 
 # Composition markers were renamed on the way in, and only in the role system prompts.
 # Runtime blocks carry their own markers, including a {{MEMORY_GUIDANCE}} that names a
@@ -119,7 +114,6 @@ def _shipped_assets() -> list[Path]:
     )
 
 
-@pytest.mark.skipif(not PROTOTYPE.is_dir(), reason=f"prototype prompts not at {PROTOTYPE}")
 @pytest.mark.parametrize("relative", _shipped_assets(), ids=str)
 def test_every_shipped_asset_is_byte_identical_to_the_prototype(relative: Path) -> None:
     if relative in CARRIED_FROM_PROTOTYPE_CODE:

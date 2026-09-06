@@ -1,0 +1,1 @@
+`{{SUBMIT_TOOL}}` was rejected because it was emitted in the same turn as other tool calls. A submit tool is terminal and must be the only tool call in its assistant message. Review the tool results from this turn, then call `{{SUBMIT_TOOL}}` exactly once in the next turn if you are ready to finalize.

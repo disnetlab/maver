@@ -1,0 +1,1 @@
+You called submit_execution_result before running a single command. You cannot have applied or verified the approved plan without inspecting and changing the cluster. Read the target resource, apply the planned mutation with Check-and-Set, verify it took effect, and only then submit. Report a failure only after a real attempt.
