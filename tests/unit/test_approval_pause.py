@@ -25,7 +25,12 @@ from kira.memory.ports import ApprovalRecord
 from kira.middleware.authority import ActionRequest, ApprovalPending
 from kira.middleware.human_approval import approval_granted, authorities, take_grant
 from kira.orchestration import jobs
-from kira.orchestration.resume import ApprovalCheckpoint, denial_result, load_checkpoint
+from kira.orchestration.resume import (
+    ApprovalCheckpoint,
+    denial_result,
+    load_checkpoint,
+    restored_state,
+)
 from kira.orchestration.runner import Deployment, resume_after_decision, run_incident
 from kira.settings.authority import AuthorityRule, AuthoritySettings
 from kira.settings.groups import (
@@ -199,6 +204,31 @@ async def test_the_checkpoint_carries_the_transcript_and_the_budget(
     assert checkpoint.state["root_cause"] is not None
     assert checkpoint.state["plan"] is not None
     assert checkpoint.remediation_retries == 0
+    deploy.storage.close()
+
+
+async def test_the_records_an_incident_was_denied_survive_the_pause(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A per-episode exclusion set is a measurement instrument, and half a run under it
+    is not an arm: a continuation that read the process floor alone would finish the
+    incident able to retrieve exactly what the first half was denied."""
+    deploy, _ = deployment(tmp_path)
+    session = deploy.storage.sessions.create_session(ALERT)
+    with pytest.raises(ApprovalPending):
+        await run_incident(
+            ALERT,
+            session.session_id,
+            deploy,
+            fire_post_hooks=False,
+            withheld_record_ids=["sess-twin", "sess-own"],
+        )
+
+    stored = deploy.storage.sessions.get_session(session.session_id)
+    assert stored is not None
+    checkpoint = ApprovalCheckpoint.model_validate(stored.checkpoint)
+    assert checkpoint.state["withheld_record_ids"] == ["sess-own", "sess-twin"]
+    assert restored_state(checkpoint)["withheld_record_ids"] == ["sess-own", "sess-twin"]
     deploy.storage.close()
 
 

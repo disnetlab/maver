@@ -93,6 +93,7 @@ __all__ = [
     "resume_after_decision",
     "run_incident",
     "tool_context_for",
+    "withheld_records",
 ]
 
 _log = logging.getLogger(__name__)
@@ -411,7 +412,14 @@ def _second_pass_node(
             stage="rca",
             sequence=deployment.sequences.for_session(state.get("session_id", "")),
         )
-        tools = tool_context_for(deployment, resources, "rca", state.get("session_id", ""), journal)
+        tools = tool_context_for(
+            deployment,
+            resources,
+            "rca",
+            state.get("session_id", ""),
+            journal,
+            withheld=state.get("withheld_record_ids", ()),
+        )
 
         async def snapshot() -> str:
             namespace = str((state.get("alert") or {}).get("namespace") or "").strip()
@@ -434,7 +442,7 @@ def _second_pass_node(
                 sampling=deployment.profile.aux_sampling or deployment.profile.sampling,
                 memory=deployment.storage.retriever if deployment.settings.memory.enabled else None,
                 snapshot=snapshot,
-                withheld_record_ids=frozenset(deployment.settings.memory.exclude_record_ids),
+                withheld_record_ids=withheld_records(deployment, state),
                 emit=JournalEmitter(journal, policy=policy.name),
             )
         )
@@ -529,6 +537,7 @@ def _context_builder(
             state.get("session_id", ""),
             journal,
             retrieving=retrieving,
+            withheld=state.get("withheld_record_ids", ()),
         )
 
         resumed = pending_resume.pop(spec.name, None)
@@ -577,6 +586,7 @@ async def run_incident(
     fire_post_hooks: bool = True,
     finalize_run_status: bool = True,
     target_stage: TargetStage = "full",
+    withheld_record_ids: Sequence[str] = (),
 ) -> IncidentState:
     """Run one incident to a terminal state and record what happened.
 
@@ -592,6 +602,9 @@ async def run_incident(
             caller then finalises it. The lifecycle state is recorded immediately either
             way.
         target_stage: How far to run.
+        withheld_record_ids: Corpus records this incident may not retrieve, unioned with
+            the process-wide floor in settings rather than replacing it. An environment
+            adapter supplies one per episode; a plain deployment supplies none.
 
     Returns:
         The terminal incident state.
@@ -609,6 +622,7 @@ async def run_incident(
             target_stage=target_stage,
             incident_dir=resources.incident_dir,
             shared_dir=resources.shared_dir,
+            withheld_record_ids=withheld_record_ids,
         )
         journal = Journal(
             deployment.sink,
@@ -831,7 +845,16 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
                 checkpoint.session_id, start=checkpoint.sequence
             ),
         )
-        tools = tool_context_for(deployment, resources, role, checkpoint.session_id, journal)
+        tools = tool_context_for(
+            deployment,
+            resources,
+            role,
+            checkpoint.session_id,
+            journal,
+            # Carried across the pause. A continuation that read the floor alone would
+            # finish the run able to retrieve what the first half was denied.
+            withheld=state.get("withheld_record_ids", ()),
+        )
         content = await _replay(checkpoint, record, tools, deployment, journal)
         for event in resume_events(checkpoint, record, result_chars=len(content)):
             journal.record(event)
@@ -991,8 +1014,13 @@ def tool_context_for(
     journal: Journal,
     *,
     retrieving: bool | None = None,
+    withheld: Sequence[str] = (),
 ) -> ToolContext:
-    """One role's view of the environment. Shared by the runner and the continuation."""
+    """One role's view of the environment. Shared by the runner and the continuation.
+
+    ``withheld`` is the incident's own exclusion set, which is unioned with the
+    process-wide floor rather than replacing it.
+    """
     return ToolContext(
         transport=resources.transport,
         workspace=resources.workspace,
@@ -1011,10 +1039,32 @@ def tool_context_for(
         memory=deployment.storage.retriever if _may_retrieve(deployment, retrieving) else None,
         sessions=deployment.storage.sessions,
         runs=deployment.storage.runs,
-        # The floor the setting promises. It reached the gated second pass and no role,
-        # so a generalisation arm withheld the evaluated incident's own record from the
-        # harness query while every role could still search it up and read it back.
-        memory_exclude=tuple(sorted(deployment.settings.memory.exclude_record_ids)),
+        # The floor the setting promises, plus whatever this incident was opened with.
+        # The floor reached the gated second pass and no role, so a generalisation arm
+        # withheld the evaluated incident's own record from the harness query while
+        # every role could still search it up and read it back.
+        memory_exclude=tuple(
+            sorted(frozenset(deployment.settings.memory.exclude_record_ids) | frozenset(withheld))
+        ),
+    )
+
+
+def withheld_records(deployment: Deployment, state: IncidentState) -> frozenset[str]:
+    """Every corpus record this incident may not retrieve.
+
+    Two sources, unioned. The process-wide floor is a deployment's own promise about the
+    corpus; the incident's set is what an environment adapter withheld for this episode,
+    and neither is the other's to override.
+
+    Args:
+        deployment: The process's shared resources.
+        state: The incident state.
+
+    Returns:
+        The session ids to withhold.
+    """
+    return frozenset(deployment.settings.memory.exclude_record_ids) | frozenset(
+        state.get("withheld_record_ids") or ()
     )
 
 

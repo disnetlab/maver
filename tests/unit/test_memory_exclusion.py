@@ -85,7 +85,9 @@ def _deployment(
     )
 
 
-async def _contexts(deployment: Deployment) -> AsyncIterator[ToolContext]:
+async def _contexts(
+    deployment: Deployment, withheld: tuple[str, ...] = ()
+) -> AsyncIterator[ToolContext]:
     async with incident_context("sess-now", {"namespace": "shop"}, deployment) as resources:
         yield tool_context_for(
             deployment,
@@ -93,6 +95,7 @@ async def _contexts(deployment: Deployment) -> AsyncIterator[ToolContext]:
             "rca",
             "sess-now",
             Journal(deployment.sink, session_id="sess-now", stage="rca"),
+            withheld=withheld,
         )
 
 
@@ -139,6 +142,25 @@ async def test_a_record_s_labels_are_not_rendered_when_a_role_opens_it(
         assert opened.get("error") is None, "the record is readable; only its labels are not"
         assert "labels" not in opened
         assert "leak-the-answer" not in json.dumps(opened)
+
+
+async def test_the_incident_s_own_set_is_unioned_with_the_process_floor(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Two sources, and neither is the other's to override.
+
+    The floor is a deployment's own promise about the corpus; the incident's set is what
+    an environment adapter withheld for this episode. A run that took one and dropped the
+    other would fail open in the direction that flatters the result.
+    """
+    deployment = _deployment(tmp_path, exclude=frozenset({"sess-other-0"}))
+    async for ctx in _contexts(deployment, withheld=(WITHHELD,)):
+        assert ctx.memory_exclude == ("sess-other-0", WITHHELD)
+
+        await memory_search(ctx, query=QUERY, scope="evidence")
+        assert WITHHELD not in ctx.memory_aliases.values()
+        assert "sess-other-0" not in ctx.memory_aliases.values()
+        assert json.loads(str(await open_memory(ctx, session_id=WITHHELD)))["error"] == "not found"
 
 
 async def test_the_records_a_role_was_served_reach_the_log_and_not_its_context(

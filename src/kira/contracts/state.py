@@ -41,6 +41,12 @@ class IncidentState(TypedDict, total=False):
     alert: dict[str, Any]
     target_stage: TargetStage
 
+    # Corpus records this incident may not retrieve, on top of the process-wide floor
+    # in settings. On the state rather than beside it so that it survives a pause: an
+    # incident that resumed without it would finish the run able to read what the first
+    # half was denied.
+    withheld_record_ids: list[str]
+
     # Filesystem paths injected by the runner. The incident directory is writable for
     # this run only; shared memory is reachable through the memory tools and never by
     # direct file access.

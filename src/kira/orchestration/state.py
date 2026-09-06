@@ -8,6 +8,7 @@ them. A missing key and a key holding a default are indistinguishable to a reade
 the defaults belong here, once, where they can be seen together.
 """
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ def initial_state(
     target_stage: TargetStage,
     incident_dir: Path,
     shared_dir: Path,
+    withheld_record_ids: Sequence[str] = (),
 ) -> IncidentState:
     """Seed every key of the incident state.
 
@@ -32,6 +34,8 @@ def initial_state(
         target_stage: How far the pipeline should run.
         incident_dir: The writable workspace for this run.
         shared_dir: The workspace shared across runs.
+        withheld_record_ids: Corpus records this incident may not retrieve, over and
+            above the process-wide floor.
 
     Returns:
         The state the first role is entered with.
@@ -40,6 +44,7 @@ def initial_state(
         session_id=session_id,
         alert=alert,
         target_stage=target_stage,
+        withheld_record_ids=sorted(set(withheld_record_ids)),
         incident_dir=str(incident_dir),
         shared_dir=str(shared_dir),
         messages={},
