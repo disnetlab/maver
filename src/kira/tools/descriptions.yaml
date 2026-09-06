@@ -10,18 +10,14 @@ bash_exec:
   default: >-
     Run a bash command inside the session workspace (cwd and HOME are both set
     there). Use it for local text filtering, simple file reads, and processing
-    saved tool outputs such as tool_outputs/pods.json. In KUBECTL_MODE=mcp it
-    has no cluster credentials and kubectl is rejected; in
-    KUBECTL_MODE=proxy_exec, kubectl resolves to the stage-aware SREGym proxy
-    shim. Returns combined stdout, stderr, and exit code.
+    saved tool outputs such as tool_outputs/pods.json. It has no cluster
+    credentials and kubectl is rejected; use exec_kubectl_cmd_safely for cluster
+    operations. Returns combined stdout, stderr, and exit code.
   agents:
     execution: >-
       Run a bash command inside the session workspace. Use it for waiting (e.g.
       sleep), local text filtering, and post-processing kubectl output saved under
-      tool_outputs/. In KUBECTL_MODE=proxy_exec, kubectl resolves to the
-      stage-aware SREGym proxy shim; do not use watch-style kubectl commands such
-      as `kubectl wait` or `kubectl rollout status`; prefer short
-      `kubectl get ... -o json/jsonpath` checks. In KUBECTL_MODE=mcp, use
+      tool_outputs/. It has no cluster credentials and kubectl is rejected; use
       exec_kubectl_cmd_safely for cluster operations.
 
 code_exec:
@@ -29,17 +25,16 @@ code_exec:
     Execute a Python script inside the session workspace (cwd and HOME are set
     there). Only Python is supported. Use it for local parsing, comparison, and
     multi-step analysis over saved tool outputs such as tool_outputs/pods.json.
-    In KUBECTL_MODE=mcp, kubectl subprocess calls are rejected; in
-    KUBECTL_MODE=proxy_exec, kubectl resolves to the stage-aware SREGym proxy
-    shim. Returns combined stdout, stderr, and exit code.
+    It has no cluster credentials and kubectl subprocess calls are rejected; use
+    exec_kubectl_cmd_safely for cluster operations. Returns combined stdout,
+    stderr, and exit code.
   agents:
     execution: >-
       Execute a Python script inside the session workspace. Use it for generating
       config snippets, comparing cluster state programmatically, or any multi-step
-      analysis too complex for a shell one-liner. In KUBECTL_MODE=proxy_exec,
-      kubectl subprocess calls route through the stage-aware SREGym proxy shim;
-      do not use `kubectl wait` or `kubectl rollout status`; prefer short
-      `kubectl get` status/readiness checks.
+      analysis too complex for a shell one-liner. It has no cluster credentials
+      and kubectl subprocess calls are rejected; use exec_kubectl_cmd_safely for
+      cluster operations.
 
 ssh_exec:
   default: >-
@@ -54,9 +49,9 @@ ssh_exec:
 
 exec_kubectl_cmd_safely:
   default: >-
-    Execute a kubectl command against the cluster via the kubectl MCP server.
-    Pass the full command string starting with "kubectl" (e.g.
-    "kubectl get pods -n shop"). -A/--all-namespaces, API discovery, raw
+    Execute a kubectl command against the cluster. Pass the full command string
+    starting with "kubectl" (e.g. "kubectl get pods -n shop").
+    -A/--all-namespaces, API discovery, raw
     discovery, and credential/context override flags are blocked. Runs kubectl
     directly with no shell, so shell pipes/redirects/chains (|, >, &&, ;) are not
     supported — use -o json/-o jsonpath for structured output, or post-process the

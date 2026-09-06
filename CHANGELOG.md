@@ -1,6 +1,6 @@
 # Changelog
 
-Schema changes only. `SCHEMA_VERSION` in `src/kira/contracts/__init__.py` versions the
+Schema changes and model-facing text. `SCHEMA_VERSION` in `src/kira/contracts/__init__.py` versions the
 submission schemas and the event contract together, and every run records it in its
 configuration snapshot.
 
@@ -22,3 +22,22 @@ frozen".
   rejected and asked again, where the archive accepted it and dropped the field, so the
   two are not interchangeable on a run that produced such a submission.
   See `refactor/PARITY-CHECKLIST.md` P57.
+
+## Model-facing text
+
+Prompts and tool descriptions are held-constant inputs to every published measurement,
+and unlike code they are read by the model rather than executed, so a change to them is
+recorded here rather than left to the commit log.
+
+### Tool descriptions
+
+- **`bash_exec`, `code_exec` and `exec_kubectl_cmd_safely` no longer branch on
+  `KUBECTL_MODE`.** The two-mode conditional described a `proxy_exec` mode in which
+  kubectl resolved to a proxy shim inside the sandbox. That mode is not in this system:
+  there is no such setting and no such code path, the sandbox carries no cluster
+  credentials, and both sandbox tools refuse kubectl unconditionally. The model was
+  told, in one request, both that the sandbox has no credentials (the kubectl guidance
+  block) and that a mode exists in which kubectl works there (the description). The
+  entries now state the one behaviour: no credentials, kubectl rejected, use
+  `exec_kubectl_cmd_safely`. `exec_kubectl_cmd_safely` also drops "via the kubectl MCP
+  server", which named one adapter's transport in a core description.
