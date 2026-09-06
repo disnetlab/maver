@@ -12,7 +12,17 @@ this backend a different retriever from the one that was measured, under the sam
 :mod:`kira.memory.bm25` and :mod:`kira.memory.retrieval` own the ranking, and the query
 below has no ``ORDER BY`` that means anything.
 
-Three things differ from SQLite and each is a decision rather than a translation.
+**The index is over normalised terms, not raw text.** ``to_tsvector('english', ...)`` over
+the raw text is what the campaign measured, and it is also the one thing the embedded
+backend cannot reproduce without a server. So the normalisation moved into Python
+(:mod:`kira.memory.lexemes`), both backends store its terms beside the raw text, and both
+index and query those. The two pools are then equal for the same corpus and query by
+construction rather than by inspection, which is what lets an adopter who will not run a
+server reproduce the retriever that was measured. The vectors are built by
+``array_to_tsvector`` and the query is a ``tsquery`` cast, so no dictionary and no parser
+runs over terms that have already been normalised; see :func:`_terms_vector`.
+
+Three further things differ from SQLite and each is a decision rather than a translation.
 
 **A pool of connections, not one guarded by a lock.** The embedded store serialises every
 call through a single connection because SQLite has a single writer anyway. Here that
