@@ -605,16 +605,6 @@ class MemoryStoreContract:
         assert hits[0].session_id == "oom"
         assert hits[0].score is not None
 
-    def test_scan_returns_only_what_matches(self, records: TextSearch) -> None:
-        """An empty scan is a real answer, so it must not fall back to anything."""
-        records.upsert_summary(a_record("s1", evidence="pod is in CrashLoopBackOff", lesson="bump"))
-        records.upsert_summary(a_record("s2", evidence="node under disk pressure", lesson="prune"))
-
-        assert [m.session_id for m in records.scan_summaries(r"crash ?loop")] == ["s1"]
-        assert [m.session_id for m in records.scan_summaries("prune", scope="lesson")] == ["s2"]
-        assert records.scan_summaries("nothing mentions this") == []
-        assert records.scan_summaries("[unclosed(") == [], "a bad pattern costs a turn, not a run"
-
     # Every write path -----------------------------------------------------------
 
     def test_a_nul_byte_is_stripped_on_every_write_path(

@@ -56,9 +56,6 @@ class FakeText:
         self.asked_for.append(text)
         return [m for m in self.memories if m.session_id not in exclude][:limit]
 
-    def scan_summaries(self, pattern, *, n_results=5, scope="evidence") -> list[SessionMemory]:
-        return []
-
     def open_record(self, session_id: str) -> SessionMemory | None:
         return next((m for m in self.memories if m.session_id == session_id), None)
 

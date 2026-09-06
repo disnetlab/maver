@@ -134,28 +134,6 @@ class Retriever:
         hits.sort(key=lambda hit: (-(hit.score or 0.0), hit.session_id))
         return hits[: self.k]
 
-    def scan(
-        self,
-        pattern: str,
-        *,
-        scope: SearchScope = "evidence",
-    ) -> list[SearchHit]:
-        """Return only records matching a pattern.
-
-        Distinct from :meth:`search` in what an empty result means. Ranked retrieval
-        returning nothing means nothing scored above the floor; a scan returning nothing
-        means the corpus does not mention this, which is a fact a role can act on.
-
-        Args:
-            pattern: A case-insensitive regular expression.
-            scope: Which projection to match.
-
-        Returns:
-            Matching hits, unscored because nothing ranked them.
-        """
-        found = self.text.scan_summaries(pattern, n_results=self.k, scope=scope)
-        return [_to_hit(memory, scope) for memory in found]
-
     def open(self, session_id: str) -> SessionMemory | None:
         """Read one stored record whole, including what retrieval withholds.
 

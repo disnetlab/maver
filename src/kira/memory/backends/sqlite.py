@@ -20,7 +20,6 @@ from the scheduler thread as well as the request thread.
 """
 
 import json
-import re
 import sqlite3
 import threading
 import uuid
@@ -870,48 +869,6 @@ class SqliteRecordIndex:
             ).fetchall()
         return [_to_memory(row) for row in rows]
 
-    def scan_summaries(
-        self,
-        pattern: str,
-        *,
-        n_results: int = 5,
-        scope: SearchScope = "evidence",
-    ) -> list[SessionMemory]:
-        """Return only records matching a regular expression.
-
-        SQLite has no REGEXP operator by default and the corpus is small, so rows are
-        filtered here rather than through a function registered on the connection. An
-        invalid pattern returns nothing instead of raising, which costs a role one turn.
-
-        Args:
-            pattern: A case-insensitive regular expression.
-            n_results: How many to return.
-            scope: Which projection to match.
-
-        Returns:
-            Matching records, possibly none.
-        """
-        if not pattern.strip() or n_results <= 0:
-            return []
-        try:
-            expression = re.compile(pattern, re.IGNORECASE)
-        except re.error:
-            return []
-        with self._db.read() as conn:
-            rows = conn.execute(
-                "SELECT session_id, evidence_text, lesson_text, payload_json FROM records_fts "
-                "ORDER BY rowid"
-            ).fetchall()
-        found: list[SessionMemory] = []
-        for row in rows:
-            memory = _to_memory(row)
-            body = _projection(memory, scope)
-            if body and expression.search(body):
-                found.append(memory)
-            if len(found) >= n_results:
-                break
-        return found
-
     def open_record(self, session_id: str) -> SessionMemory | None:
         """Read one stored record whole, including what retrieval withholds.
 
@@ -953,10 +910,6 @@ class SqliteRecordIndex:
 
 def _column(scope: SearchScope) -> str:
     return "lesson_text" if scope == "lesson" else "evidence_text"
-
-
-def _projection(memory: SessionMemory, scope: SearchScope) -> str:
-    return memory.lesson_text if scope == "lesson" else memory.evidence_text
 
 
 def _to_session(row: sqlite3.Row) -> SessionRecord:

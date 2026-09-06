@@ -527,9 +527,8 @@ class RunStore(Protocol):
 class TextSearch(Protocol):
     """Lexical retrieval over the distilled corpus.
 
-    The required backend. Ranked retrieval always returns its top-k whether or not
-    anything is relevant, which is why :meth:`scan_summaries` exists alongside it: a
-    scan returns only what matches, so an empty result is a real answer.
+    The required backend. It generates candidates and never ranks them, so every method
+    here is a way of narrowing the corpus rather than of ordering it.
     """
 
     def upsert_summary(self, memory: SessionMemory) -> None:
@@ -568,29 +567,6 @@ class TextSearch(Protocol):
 
         Returns:
             Candidate records, in no meaningful order.
-        """
-        ...
-
-    def scan_summaries(
-        self,
-        pattern: str,
-        *,
-        n_results: int = 5,
-        scope: SearchScope = "evidence",
-    ) -> list[SessionMemory]:
-        """Return only records matching a regular expression.
-
-        Records rather than hits, so that :class:`SearchHit` is built in exactly one
-        place. A backend that returned hits would have to reproduce the retriever's
-        metadata layout, and two copies of that would drift.
-
-        Args:
-            pattern: A case-insensitive regular expression.
-            n_results: How many to return.
-            scope: Which projection to match.
-
-        Returns:
-            Matching records, possibly none.
         """
         ...
 

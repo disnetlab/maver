@@ -43,7 +43,6 @@ operator who tuned their DSN or their role knows something this file does not.
 """
 
 import logging
-import re
 import threading
 import uuid
 from collections.abc import Iterator, Sequence
@@ -1142,51 +1141,6 @@ class PostgresRecordIndex:
             rows = conn.execute(query, (text, self.corpus_id, list(exclude), limit)).fetchall()
         return [_to_memory(row) for row in rows]
 
-    def scan_summaries(
-        self,
-        pattern: str,
-        *,
-        n_results: int = 5,
-        scope: SearchScope = "evidence",
-    ) -> list[SessionMemory]:
-        """Return only records matching a regular expression.
-
-        Filtered here rather than with ``~*`` so that both backends answer a scan with
-        the same regular expression dialect; PostgreSQL's is POSIX and Python's is not,
-        and a pattern that means two things depending on where the corpus lives is worse
-        than a scan over a few hundred rows. An invalid pattern returns nothing instead
-        of raising, which costs a role one turn.
-
-        Args:
-            pattern: A case-insensitive regular expression.
-            n_results: How many to return.
-            scope: Which projection to match.
-
-        Returns:
-            Matching records, possibly none.
-        """
-        if not pattern.strip() or n_results <= 0:
-            return []
-        try:
-            expression = re.compile(pattern, re.IGNORECASE)
-        except re.error:
-            return []
-        with self._db.read() as conn:
-            rows = conn.execute(
-                f"SELECT {_RECORD_COLUMNS} FROM records WHERE corpus_id = %s "
-                "ORDER BY written_at, session_id",
-                (self.corpus_id,),
-            ).fetchall()
-        found: list[SessionMemory] = []
-        for row in rows:
-            memory = _to_memory(row)
-            body = _projection(memory, scope)
-            if body and expression.search(body):
-                found.append(memory)
-            if len(found) >= n_results:
-                break
-        return found
-
     def open_record(self, session_id: str) -> SessionMemory | None:
         """Read one stored record whole, including what retrieval withholds.
 
@@ -1230,10 +1184,6 @@ class PostgresRecordIndex:
 
 def _vector(scope: SearchScope) -> str:
     return "lesson_tsv" if scope == "lesson" else "evidence_tsv"
-
-
-def _projection(memory: SessionMemory, scope: SearchScope) -> str:
-    return memory.lesson_text if scope == "lesson" else memory.evidence_text
 
 
 def _to_session(row: _Row) -> SessionRecord:
