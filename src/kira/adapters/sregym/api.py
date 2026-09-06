@@ -20,7 +20,7 @@ from fastapi import APIRouter, HTTPException
 
 from kira.adapters.registry import get_adapter
 from kira.adapters.sregym.conductor import Conductor
-from kira.api.deps import Service, ServiceDep
+from kira.api.deps import Service, ServiceDep, admit
 from kira.orchestration.episode import open_episode, run_episode
 
 __all__ = ["router"]
@@ -51,25 +51,33 @@ async def create_episode(service: ServiceDep, submit: bool = True) -> dict[str, 
     Raises:
         HTTPException: 502 when the conductor could not be reached or could not
             describe the application, which is a refusal to start rather than a failed
-            episode.
+            episode; and whatever :func:`~kira.api.deps.admit` refuses with. An episode
+            is an incident, so it answers to the same process-wide admission rules as
+            one — this route obeyed neither, and a deploy mid-campaign therefore took a
+            problem into a process that was already shutting down.
     """
-    adapter = get_adapter(_ADAPTER)(service.deployment.settings)
+    claim = admit(service)
     try:
-        start = await open_episode(adapter, service.deployment)
-    except httpx.HTTPError as exc:
-        raise _unreachable(exc) from exc
+        adapter = get_adapter(_ADAPTER)(service.deployment.settings)
+        try:
+            start = await open_episode(adapter, service.deployment)
+        except httpx.HTTPError as exc:
+            raise _unreachable(exc) from exc
 
-    service.runs.register(start.session_id)
-    task = asyncio.create_task(_drive(adapter, service, start, submit=submit))
-    service.runs.attach(start.session_id, task)
-    return {
-        "session_id": start.session_id,
-        "status": "accepted",
-        # Read into the driver's log line and nowhere else. It is the ground-truth fault
-        # label, so it must not reach a prompt, and the pipeline never sees this reply.
-        "problem_id": start.context.external_key,
-        "started_at": start.started_at,
-    }
+        service.runs.register(start.session_id)
+        task = asyncio.create_task(_drive(adapter, service, start, submit=submit))
+        service.runs.attach(start.session_id, task)
+        return {
+            "session_id": start.session_id,
+            "status": "accepted",
+            # Read into the driver's log line and nowhere else. It is the ground-truth
+            # fault label, so it must not reach a prompt, and the pipeline never sees
+            # this reply.
+            "problem_id": start.context.external_key,
+            "started_at": start.started_at,
+        }
+    finally:
+        service.runs.release(claim)
 
 
 @router.get("/sregym/problem")

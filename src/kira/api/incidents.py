@@ -26,7 +26,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from kira.api.deps import Service, ServiceDep
+from kira.api.deps import Service, ServiceDep, admit
 from kira.contracts.lifecycle import LifecycleState, RunStatus
 from kira.contracts.state import TargetStage
 from kira.middleware.authority import ApprovalPending
@@ -72,34 +72,14 @@ async def create_incident(body: IncidentRequest, service: ServiceDep) -> dict[st
     Raises:
         HTTPException: 503 when HTTP intake is switched off, which is how a deployment
             that takes alerts only from its queue closes this door without losing the
-            read routes.
+            read routes; and whatever :func:`~kira.api.deps.admit` refuses with.
     """
     if not service.deployment.settings.intake.http_enabled:
         raise HTTPException(
             status_code=503, detail="HTTP intake disabled (KIRA_INTAKE__HTTP_ENABLED=false)"
         )
 
-    if service.runs.draining:
-        # A process on its way out must not open an incident it cannot finish. Refused
-        # before the deduplication check, because a repost during shutdown is not a
-        # request to join a run this process is about to abandon.
-        raise HTTPException(
-            status_code=503,
-            detail="shutting down; not accepting new incidents",
-            headers={"Retry-After": "30"},
-        )
-
-    limit = service.deployment.settings.server.max_concurrent_incidents
-    claim = service.runs.claim(fingerprint(body.alert), limit)
-    if claim is None:
-        # Refused rather than queued. The queue would be invisible to the caller and
-        # every run already in flight would slow down to make room for it; a refusal an
-        # alerting source can retry is the honest answer.
-        raise HTTPException(
-            status_code=429,
-            detail=f"already handling {limit} incidents",
-            headers={"Retry-After": "60"},
-        )
+    claim = admit(service, fingerprint=fingerprint(body.alert))
 
     # A retrying alert source posting the same alert twice wants one incident, not two
     # agents remediating the same fault against each other. Answered with the run that

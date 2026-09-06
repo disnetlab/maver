@@ -9,6 +9,7 @@ makes, because they were written against the prototype and cannot move.
 """
 
 import ast
+import asyncio
 import json
 import pathlib
 from typing import Any
@@ -17,7 +18,9 @@ import httpx
 import pytest
 import respx
 
+from kira.adapters.base import EpisodeContext
 from kira.adapters.sregym import SREGymAdapter, SregymConfig
+from kira.adapters.sregym import api as sregym_api
 from kira.adapters.sregym.episode import reduce_feedback
 from kira.adapters.sregym.evidence import EvidenceFilter
 from kira.adapters.sregym.signal import build_diagnosis_solution, build_signal
@@ -26,6 +29,7 @@ from kira.api.app import create_app
 from kira.audit.journal import Journal, ListSink
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
+from kira.orchestration.episode import EpisodeStart
 from kira.orchestration.runner import Deployment
 from kira.settings.groups import MemorySettings, ServerSettings, VerifySettings
 from kira.settings.profiles import load_profile
@@ -555,7 +559,73 @@ async def test_a_deployment_that_never_saw_the_harness_reads_its_defaults() -> N
 
 async def _settle(app: Any) -> None:
     """Wait for the episode this process started."""
-    import asyncio  # noqa: PLC0415
-
     while pending := {task for task in app.state.service.runs.tasks() if not task.done()}:
         await asyncio.gather(*pending, return_exceptions=True)
+
+
+async def test_the_episode_route_answers_to_the_same_admission_rules(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An episode is an incident, and both rules an intake obeys belong to the process.
+
+    This route enforced neither. A deploy or an eviction mid-campaign therefore took a
+    problem into a process that had already begun shutting down — the drain then
+    cancelled it and the cell was recorded as an agent failure rather than retried
+    against a live process — and the route could oversubscribe the private model
+    endpoint past the bound that exists because oversubscription wedges it.
+    """
+    opened = 0
+
+    async def open_one(adapter: Any, deploy: Deployment) -> EpisodeStart:
+        nonlocal opened
+        opened += 1
+        record = deploy.storage.sessions.create_session({"alertname": f"episode-{opened}"})
+        return EpisodeStart(
+            session_id=record.session_id,
+            started_at=record.started_at,
+            context=EpisodeContext(namespace="shop", external_key=f"problem-{opened}"),
+            signal={},
+        )
+
+    async def never_ends(*args: Any, **kwargs: Any) -> None:
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(sregym_api, "open_episode", open_one)
+    monkeypatch.setattr(sregym_api, "run_episode", never_ends)
+    settings = Settings(
+        server=ServerSettings(workdir=tmp_path, max_concurrent_incidents=1),
+        memory=MemorySettings(enabled=False, learning_enabled=False),
+        verify=VerifySettings(enabled=False),
+        intake={"adapters": ["sregym"]},  # type: ignore[arg-type]
+    )
+    storage = build_storage(settings)
+    app = create_app(
+        deployment=Deployment(
+            settings=settings,
+            storage=storage,
+            completion=_Model(),
+            profile=PROFILE,
+            transport_for=lambda session_id: _FakeTransport(),  # type: ignore[arg-type, return-value]
+            sink=ListSink(),
+        ),
+        schedule_resume=lambda request_id: None,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://kira"
+    ) as client:
+        assert (await client.post("/api/v1/sregym/episodes")).status_code == 202
+        full = await client.post("/api/v1/sregym/episodes")
+        assert full.status_code == 429
+        assert full.headers["Retry-After"] == "60"
+
+        app.state.service.runs.begin_draining()
+        shutting = await client.post("/api/v1/sregym/episodes")
+        assert shutting.status_code == 503
+        assert shutting.headers["Retry-After"] == "30"
+
+        assert opened == 1, "a refused episode is one the environment was never asked for"
+        for task in app.state.service.runs.tasks():
+            task.cancel()
+        await _settle(app)
+    storage.close()
