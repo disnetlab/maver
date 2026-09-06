@@ -13,12 +13,18 @@ from typing import Any
 
 import pytest
 
-from kira.audit.journal import ListSink
+from kira.audit.journal import Journal, ListSink
 from kira.contracts import SCHEMA_VERSION
 from kira.contracts.events import InterventionEvent
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
-from kira.orchestration.runner import Deployment, run_incident
+from kira.orchestration.runner import (
+    Deployment,
+    incident_context,
+    run_incident,
+    tool_context_for,
+)
+from kira.settings.authority import AuthoritySettings
 from kira.settings.groups import (
     MemorySettings,
     PipelineSettings,
@@ -27,6 +33,7 @@ from kira.settings.groups import (
 )
 from kira.settings.profiles import load_profile
 from kira.settings.root import Settings
+from kira.tools.kubernetes import exec_kubectl_cmd_safely
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 
@@ -337,3 +344,35 @@ async def test_a_hook_that_raises_is_recorded_and_the_incident_carries_on(
     assert failures and failures[0].action == "bypassed"
     assert failures[0].detail == "broken raised in before_model: RuntimeError: boom"
     deploy.storage.close()
+
+
+async def test_a_deployment_that_widens_writes_reaches_the_tool_and_not_only_the_gate(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The tool's own stage check must screen against the settings the gate was built on.
+
+    It read the environment instead, cached for the process, so a deployment assembled
+    in code — an evaluation harness, a test, anything that builds Settings rather than
+    exporting variables — had the gate allow the write and the tool refuse it, with
+    nothing anywhere to say why.
+    """
+    settings = Settings(
+        server=ServerSettings(workdir=tmp_path),
+        memory=MemorySettings(enabled=False, learning_enabled=False),
+        verify=VerifySettings(enabled=False),
+        authority=AuthoritySettings(additional_write_stages=frozenset({"verify"})),
+    )
+    deploy = Deployment(
+        settings=settings,
+        storage=build_storage(settings),
+        completion=FakeModel(),
+        profile=PROFILE,
+        transport_for=lambda session_id: FakeTransport(),
+    )
+    async with incident_context("s1", ALERT, deploy) as resources:
+        ctx = tool_context_for(
+            deploy, resources, "verify", "s1", Journal(session_id="s1", stage="verify")
+        )
+        answer = await exec_kubectl_cmd_safely(ctx, cmd="kubectl delete deploy web -n shop")
+
+    assert not answer.startswith("error:")

@@ -190,6 +190,13 @@ class ToolContext:
     state its call site cannot see, which is how the prototype ended up with five
     environment reads hidden inside its toolset builder.
     """
+    widened_write_stages: frozenset[str] = frozenset()
+    """Stages this deployment opened writes to, beyond each tool's own declared set.
+
+    Injected for the same reason the tool settings are. A tool screening itself against
+    an independent read of the environment would refuse a stage the gate was built to
+    allow, which is two knobs disagreeing with nothing to say why.
+    """
     evidence: EvidencePolicy = field(default_factory=NullEvidencePolicy)
     memory: Retriever | None = None
     """The experience store, or None when this configuration has none."""

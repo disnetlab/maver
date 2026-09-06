@@ -1005,6 +1005,7 @@ def tool_context_for(
         session_id=session_id,
         journal=journal,
         settings=deployment.settings.tools,
+        widened_write_stages=deployment.settings.authority.additional_write_stages,
         scope=resources.scope,
         evidence=deployment.evidence,
         # Two conditions, not one. A configuration with the store enabled and roles kept

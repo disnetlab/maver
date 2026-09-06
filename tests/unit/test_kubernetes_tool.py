@@ -19,7 +19,6 @@ from kira.tools.kubernetes import (
     kubectl_authority,
     tokenize,
 )
-from kira.tools.policy import _widened_stages
 from kira.tools.workspace import SessionWorkspace
 
 POLICY = KubernetesPolicy()
@@ -319,18 +318,19 @@ class _EchoCluster(_NoCluster):
         return "DISPATCHED " + " ".join(argv)
 
 
-def _context(tmp_path: Path, role: str) -> ToolContext:
+def _context(tmp_path: Path, role: str, widened: frozenset[str] = frozenset()) -> ToolContext:
     return ToolContext(
         transport=_EchoCluster(),
         workspace=SessionWorkspace(tmp_path),
         role=role,
         session_id="s1",
         journal=Journal(session_id="s1", stage=role),
+        widened_write_stages=widened,
     )
 
 
 async def test_a_cluster_write_is_refused_inside_the_tool_and_not_only_at_the_gate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     """The second of the two enforcement points the documents promise.
 
@@ -353,11 +353,6 @@ async def test_a_cluster_write_is_refused_inside_the_tool_and_not_only_at_the_ga
 
     # The operator's widening reaches the tool as well as the gate. Two knobs
     # disagreeing would refuse a write the gate had allowed, with nothing to say why.
-    monkeypatch.setenv("KIRA_AUTHORITY__ADDITIONAL_WRITE_STAGES", "verify")
-    _widened_stages.cache_clear()
-    try:
-        assert "DISPATCHED" in await exec_kubectl_cmd_safely(
-            _context(tmp_path, "verify"), cmd=write
-        )
-    finally:
-        _widened_stages.cache_clear()
+    assert "DISPATCHED" in await exec_kubectl_cmd_safely(
+        _context(tmp_path, "verify", frozenset({"verify"})), cmd=write
+    )

@@ -428,7 +428,9 @@ async def exec_kubectl_cmd_safely(ctx: ToolContext, cmd: str, save_as: str | Non
         return refusal
     # `exec` is exempt, as it is at the gate: an in-container command was permitted for
     # every role in every measured run, and refusing it here would change that.
-    if classify(argv, policy) == "write" and not may_write(_TOOL, ctx.role):
+    if classify(argv, policy) == "write" and not may_write(
+        _TOOL, ctx.role, ctx.widened_write_stages
+    ):
         return _stage_refusal(ctx.role)
 
     argv = _append_delete_wait_false(_bound_blocking_wait(argv, ctx.transport.timeout_seconds))
