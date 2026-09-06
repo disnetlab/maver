@@ -46,7 +46,12 @@ ANSWER = (
 )
 
 
-def _deployment(tmp_path: pathlib.Path, *, exclude: frozenset[str]) -> Deployment:
+def _deployment(
+    tmp_path: pathlib.Path,
+    *,
+    exclude: frozenset[str] = frozenset(),
+    labels: dict[str, str] | None = None,
+) -> Deployment:
     settings = Settings(
         server=ServerSettings(workdir=tmp_path),
         memory=MemorySettings(enabled=True, learning_enabled=False, exclude_record_ids=exclude),
@@ -59,6 +64,7 @@ def _deployment(tmp_path: pathlib.Path, *, exclude: frozenset[str]) -> Deploymen
         storage.index.upsert_summary(
             SessionMemory(
                 session_id=session_id,
+                labels=dict(labels or {}) if session_id == WITHHELD else {},
                 evidence_text=text,
                 lesson_text=text,
                 incident_summary=text,
@@ -115,6 +121,24 @@ async def test_a_withheld_record_is_unreachable_by_search_or_by_identifier(
         assert json.loads(str(await session_trace_summary(ctx, session_id=WITHHELD)))["error"] == (
             "not found"
         )
+
+
+async def test_a_record_s_labels_are_not_rendered_when_a_role_opens_it(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Opening a record is the only place a whole one is rendered for a model.
+
+    A label is the environment's own key. Under an evaluation harness it is the
+    ground-truth fault label, so it must not appear in the JSON a role reads back, even
+    for a record the role is perfectly entitled to open.
+    """
+    deployment = _deployment(tmp_path, labels={"external_key": "leak-the-answer"})
+    async for ctx in _contexts(deployment):
+        opened = json.loads(str(await open_memory(ctx, session_id=WITHHELD, scope="lesson")))
+
+        assert opened.get("error") is None, "the record is readable; only its labels are not"
+        assert "labels" not in opened
+        assert "leak-the-answer" not in json.dumps(opened)
 
 
 async def test_the_records_a_role_was_served_reach_the_log_and_not_its_context(

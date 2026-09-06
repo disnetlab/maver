@@ -20,9 +20,45 @@ from kira.memory.ports import SessionMemory, SessionStore, TextSearch
 from kira.memory.projections import build_projections
 from kira.settings.groups import MemorySettings
 
-__all__ = ["distil"]
+__all__ = ["distil", "label_name", "signal_labels"]
 
 _log = logging.getLogger(__name__)
+
+
+def label_name(key: str) -> str:
+    """Name the label one of the environment's own signal keys is stored under.
+
+    Args:
+        key: The key as it appears on the signal, underscore and all.
+
+    Returns:
+        The key without its leading underscore. The prefix is what marks a key as the
+        environment's own; it has done that job by the time the value is a label, and
+        keeping it would make every reader spell it.
+    """
+    return key.lstrip("_")
+
+
+def signal_labels(signal: Mapping[str, Any]) -> dict[str, str]:
+    """Read the environment's own keys off a signal, as record labels.
+
+    The underscore-prefixed keys, which are exactly the ones every prompt builder drops:
+    an environment writes what only it can use under that prefix, and this carries those
+    onto the record it produced so the environment can find its own records later. The
+    core does not interpret any of them.
+
+    Args:
+        signal: The signal as it was stored, before a prompt builder filtered it.
+
+    Returns:
+        Label name to value, empty values dropped, since a label that names nothing
+        cannot identify anything either.
+    """
+    return {
+        label_name(key): str(value)
+        for key, value in signal.items()
+        if key.startswith("_") and value is not None and str(value)
+    }
 
 
 def distil(
@@ -75,12 +111,22 @@ def distil(
         affected_resource=str(root_cause.get("affected_resource") or ""),
         verification_verdict=_verdict(result, packet),
         corrected_cause=projections.corrected_cause,
+        # From the stored signal rather than from the packet, which carries the alert as
+        # the roles saw it: the packet is rendered whole into this pass's prompt, so the
+        # environment's own keys are filtered out of it long before this point.
+        labels=signal_labels(_stored_signal(sessions, packet.session_id)),
         **_evaluation(packet.external_feedback),
     )
     index.upsert_summary(record)
     sessions.mark_distilled(packet.session_id)
     _log.info("distilled session %s into the corpus", packet.session_id)
     return record
+
+
+def _stored_signal(sessions: SessionStore, session_id: str) -> Mapping[str, Any]:
+    """The signal as the session holds it, keys and all. Empty when there is no session."""
+    record = sessions.get_session(session_id)
+    return {} if record is None else record.alert
 
 
 def _verdict(result: LearningResult, packet: LearningPacket) -> str:

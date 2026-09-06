@@ -87,6 +87,65 @@ def test_re_distilling_replaces_rather_than_accumulates(tmp_path: pathlib.Path) 
     stack.close()
 
 
+def test_the_environment_s_own_signal_keys_become_the_record_s_labels(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The record has to say which episode produced it, and only the signal knows.
+
+    Read from the stored session rather than from the packet: the packet carries the
+    alert as the roles saw it, with the underscore-prefixed keys already dropped.
+    """
+    stack = storage(tmp_path)
+    session = stack.sessions.create_session(
+        {
+            "alertname": "HighErrorRate",
+            "namespace": "shop",
+            "_external_key": "leak-the-answer",
+            "_attempt": 2,
+            "_blank": "",
+        }
+    )
+
+    memory = distil(
+        packet(session_id=session.session_id),
+        RESULT,
+        index=stack.index,
+        sessions=stack.sessions,
+    )
+
+    assert memory.labels == {"external_key": "leak-the-answer", "attempt": "2"}
+    stored = stack.index.open_record(session.session_id)
+    assert stored is not None and stored.labels == memory.labels
+    stack.close()
+
+
+def test_no_label_reaches_the_text_a_later_incident_can_read(tmp_path: pathlib.Path) -> None:
+    """Under an evaluation harness a label is the ground-truth fault label.
+
+    The record's two projections are what retrieval matches and returns, and the whole
+    record is what `open_memory` renders, so a label in any of them would hand a later
+    incident the answer to the problem this one was scored on.
+    """
+    stack = storage(tmp_path)
+    session = stack.sessions.create_session(
+        {"alertname": "HighErrorRate", "_external_key": "leak-the-answer"}
+    )
+
+    memory = distil(
+        packet(session_id=session.session_id),
+        RESULT,
+        index=stack.index,
+        sessions=stack.sessions,
+    )
+
+    assert memory.labels == {"external_key": "leak-the-answer"}
+    for text in (memory.evidence_text, memory.lesson_text, memory.incident_summary):
+        assert "leak-the-answer" not in text
+        assert "external_key" not in text
+    assert [m.session_id for m in stack.index.candidates("leak-the-answer")] == []
+    stack.close()
+
+
 def test_the_evidence_index_uses_what_was_seen_before_any_grade_arrived(
     tmp_path: pathlib.Path,
 ) -> None:
