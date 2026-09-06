@@ -1,7 +1,9 @@
 """The command line surface stays a group as subcommands are added."""
 
 import json
+import logging
 import pathlib
+from unittest import mock
 
 import pytest
 from typer.testing import CliRunner
@@ -32,6 +34,23 @@ def test_version_flag_reports_the_package_version() -> None:
 def test_bare_invocation_shows_help_rather_than_running_something() -> None:
     result = runner.invoke(app, [])
     assert "Usage" in result.output
+
+
+def test_the_configured_log_level_reaches_the_root_logger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All four shipped deployment artifacts set this, the local overlay to DEBUG, and
+    the server hardcoded INFO: an operator raised the level, restarted the pod and got
+    the same output with nothing to say why."""
+    monkeypatch.setenv("KIRA_OBSERVABILITY__LOG_LEVEL", "DEBUG")
+    root = logging.getLogger()
+    # basicConfig is a no-op on a root that already has handlers, and the test runner
+    # installs one. The server calls it on an untouched interpreter.
+    monkeypatch.setattr(root, "handlers", [])
+    monkeypatch.setattr(root, "level", root.level)
+    with mock.patch("uvicorn.run"):
+        assert runner.invoke(app, ["serve"]).exit_code == 0
+    assert root.level == logging.DEBUG
 
 
 def test_approvals_read_and_decide_the_configured_store(

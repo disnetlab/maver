@@ -116,7 +116,7 @@ def serve(
     import uvicorn  # noqa: PLC0415 - a server dependency no other command needs
 
     settings = _resolved()
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=settings.observability.log_level)
     bind_host = host or settings.server.host
     bind_port = port or settings.server.port
     typer.echo(f"kira {__version__} listening on {bind_host}:{bind_port}")

@@ -47,7 +47,6 @@ DECLARED_FOR_UNBUILT_WORK = {
     "intake.kafka.group_id": "the queue intake is a phase-two extra",
     "model.request_timeout_s": "the profile's own limit is what the client sends",
     "model.num_retries": "the profile's own limit is what the client sends",
-    "observability.log_level": "logging is configured by the process, not from here",
     "observability.metric_interval_ms": "no metric exporter is installed",
     "observability.event_log_enabled": "the audit sink is chosen by the composition root",
     "observability.event_log_path": "the audit sink writes to the store, not a file",

@@ -970,8 +970,11 @@ class ObservabilitySettings(SettingsGroup):
 
     model_config = group_config("observability")
 
-    log_level: str = setting(
-        "INFO", "KIRA_OBSERVABILITY__LOG_LEVEL", "LOG_LEVEL", description="Root log level."
+    log_level: Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"] = setting(
+        "INFO",
+        "KIRA_OBSERVABILITY__LOG_LEVEL",
+        "LOG_LEVEL",
+        description="Root log level, applied to the root logger when the server starts.",
     )
     otlp_endpoint: str | None = setting(
         None,
