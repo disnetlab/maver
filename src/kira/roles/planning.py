@@ -143,7 +143,7 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         artifact=artifact,
         transcript=result.transcript,
         error=None if artifact is not None else (result.reason or result.status),
-        metadata={"replan": replanning},
+        metadata={"replan": replanning, "submit_guard": result.guard.metadata()},
     )
 
 

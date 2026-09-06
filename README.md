@@ -44,7 +44,7 @@ the data archive, not here.
 | Only execution writes: a stage-aware gate refuses a write from any other role, and the kubectl tool refuses it again on its own | D | `uv run pytest tests/unit/test_write_gate.py tests/unit/test_kubernetes_tool.py` |
 | A stage-aware gate classifies read, write, exec and blocked, and refuses a write outside the stages that may issue one | D | `uv run pytest tests/unit/test_write_gate.py tests/unit/test_kubernetes_tool.py` |
 | Any write can be held for a person: the run parks durably, and a decision resumes the same incident from the role that was interrupted | D | `uv run pytest tests/unit/test_approval_pause.py` |
-| Execution opens on a forced read and cannot report a plan applied without having touched the cluster | D | `uv run pytest tests/unit/test_roles_execution.py` |
+| Execution opens on a forced read, and a submission with no command behind it is refused for the submit guard's budget of two rejections; a third is accepted, recorded as a bypass on the run row and in the event log | D | `uv run pytest tests/unit/test_roles_execution.py tests/unit/test_loop.py` |
 | Verification hands back to planning on an insufficient fix and to diagnosis on a wrong cause, under one shared budget | D | `uv run pytest tests/unit/test_routing.py tests/unit/test_roles_verify.py` |
 | Records carry lifecycle states, and retrieval demotes an invalidated record without hiding it | D | `uv run pytest tests/unit/test_lifecycle.py` |
 | Distillation writes bounded evidence and lesson projections; a raw transcript never enters retrieval | D | `uv run pytest tests/unit/test_projections.py tests/unit/test_distil.py` |

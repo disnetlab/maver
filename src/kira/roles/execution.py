@@ -7,6 +7,12 @@ mutation. It holds the cluster-write lock for the length of its run. And its sub
 guard is the strictest of any role's, because the way this role fails quietly is by
 reporting a plan as applied without having touched the cluster.
 
+That guard is a budget, not a floor: it refuses two such submissions and the third is
+accepted unconsulted, so a run can still file a `succeeded` remediation having dispatched
+nothing. That is the behaviour every published measurement was taken under, so it stands;
+what the run then carries is the record of it, on the run row as `submit_guard` and in
+the event log as a bypassed intervention naming the role, the count and the finding.
+
 Check-and-Set — re-read the target immediately before mutating, report the drift if the
 precondition no longer holds, and stop the dependent steps — is instructed in the prompt
 rather than enforced here. Four properties of this module are what make the instruction
@@ -256,7 +262,7 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         artifact=artifact,
         transcript=result.transcript,
         error=None if artifact is not None else (result.reason or result.status),
-        metadata={"plan_steps": len(plan.steps)},
+        metadata={"plan_steps": len(plan.steps), "submit_guard": result.guard.metadata()},
     )
 
 
@@ -272,4 +278,5 @@ EXECUTION = role(
     )
 )
 """The applying role. The only writer, serialised against itself, opening on a forced
-read and guarded against submitting a remediation it never attempted."""
+read and guarded, for two rejections, against submitting a remediation it never
+attempted."""

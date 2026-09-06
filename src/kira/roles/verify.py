@@ -143,7 +143,11 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         error=None if artifact is not None else (result.reason or result.status),
         # Persisted because the eval container is recreated per cell: without this, a
         # run with no blocks cannot be told apart from a gate that never managed to look.
-        metadata={"health_gate": ctx.settings.verify.health_gate, "gate": gate.audit()},
+        metadata={
+            "health_gate": ctx.settings.verify.health_gate,
+            "gate": gate.audit(),
+            "submit_guard": result.guard.metadata(),
+        },
     )
 
 

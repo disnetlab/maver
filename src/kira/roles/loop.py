@@ -16,6 +16,7 @@ tracing, prompt shaping — go through the hook stack instead.
 import asyncio
 import inspect
 import logging
+import textwrap
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -53,7 +54,7 @@ from kira.roles.policy import (
 from kira.tools.errors import call_failed, call_timed_out
 from kira.tools.registry import RETRIEVAL_PROVENANCE, ToolOutput
 
-__all__ = ["LoopResult", "SubmitGuard", "ToolFn", "run_until_submit"]
+__all__ = ["GuardRecord", "LoopResult", "SubmitGuard", "ToolFn", "run_until_submit"]
 
 _log = logging.getLogger(__name__)
 
@@ -69,6 +70,48 @@ returns content the model should consider is not reporting a fault.
 """
 
 _GUARD_CONTENT_MARK = "note:"
+
+_FINDING_WIDTH = 160
+"""How much of a guard's rejection the record keeps. Long enough to identify the
+finding, short enough that a run row is not a second copy of the prompt asset."""
+
+
+def _finding(rejection: str) -> str:
+    """Condense a guard's rejection into the one line the record keeps."""
+    first = next((line.strip() for line in rejection.splitlines() if line.strip()), "")
+    return textwrap.shorten(first, width=_FINDING_WIDTH, placeholder=" ...")
+
+
+@dataclass(frozen=True, slots=True)
+class GuardRecord:
+    """What the submit guard did to one run.
+
+    A record, not a control: nothing reads it to decide anything. A guard whose budget
+    is spent accepts the next submission unconsulted, and that acceptance is otherwise
+    indistinguishable from one the guard approved — same artifact, same submission
+    event, same run status. So the run carries what happened to it, because a reader
+    reconstructing the run has no other way to tell the two apart.
+
+    Attributes:
+        rejections: How many submissions the guard handed back.
+        bypassed: Whether a submission was then accepted with the budget spent.
+        finding: The guard's last finding, which the bypass overrode.
+    """
+
+    rejections: int = 0
+    bypassed: bool = False
+    finding: str | None = None
+
+    def metadata(self) -> dict[str, Any]:
+        """Build the run row's ``submit_guard`` entry.
+
+        Returns:
+            The counts, and the overridden finding when there was a bypass.
+        """
+        entry: dict[str, Any] = {"rejections": self.rejections, "bypassed": self.bypassed}
+        if self.bypassed and self.finding:
+            entry["finding"] = self.finding
+        return entry
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +134,9 @@ class LoopResult:
     reason: str | None = None
     tool_calls_made: int = 0
     turns_used: int = 0
+    guard: GuardRecord = field(default_factory=GuardRecord)
+    """What the submit guard did, for the record. All zeros when the role runs without
+    one, or when it ran and never refused."""
 
     @property
     def submitted(self) -> bool:
@@ -110,6 +156,8 @@ class _State:
     tool_calls_made: int = 0
     normal_turns_used: int = 0
     guard_rejections: int = 0
+    guard_bypassed: bool = False
+    guard_finding: str = ""
     submit_rejections: int = 0
     mixed_rejections: int = 0
     rescues_used: int = 0
@@ -265,6 +313,11 @@ async def run_until_submit(
             reason=reason,
             tool_calls_made=state.tool_calls_made,
             turns_used=state.normal_turns_used,
+            guard=GuardRecord(
+                rejections=state.guard_rejections,
+                bypassed=state.guard_bypassed,
+                finding=state.guard_finding or None,
+            ),
         )
 
     def request_rescue(reason: str) -> bool:
@@ -680,17 +733,20 @@ async def run_until_submit(
             if submit_guard is not None:
                 if state.guard_rejections >= limits.submit_guard_rejections:
                     # Taken anyway: a run whose guard will never be satisfied still has
-                    # to end. What the record could not say is that this one was never
-                    # asked — the acceptance that follows is otherwise identical to a
+                    # to end, and this is what every published measurement was taken
+                    # under. The acceptance that follows is otherwise identical to a
                     # guard's approval, and the guard's dose is what an arm's gap is
-                    # divided by.
+                    # divided by — so the run says here, and on its row, which role was
+                    # let through, after how many rejections, and over what finding.
+                    state.guard_bypassed = True
                     log.record(
                         InterventionEvent(
                             control="submit_guard",
                             action="bypassed",
                             detail=(
-                                f"guard budget spent after {state.guard_rejections} "
-                                "rejections; submission accepted unconsulted"
+                                f"{role}: guard budget spent after "
+                                f"{state.guard_rejections} rejections; submission "
+                                f"accepted unconsulted, overriding: {state.guard_finding}"
                             ),
                         )
                     )
@@ -700,6 +756,7 @@ async def run_until_submit(
                     )
                     if verdict:
                         state.guard_rejections += 1
+                        state.guard_finding = _finding(str(verdict))
                         is_note = str(verdict).startswith(_GUARD_CONTENT_MARK)
                         _hand_back(state, call_, str(verdict), note=is_note, rescue=handed_back)
                         log.record(

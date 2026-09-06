@@ -16,8 +16,14 @@ the chain-relative test cannot see it.
 So this gate is computed here rather than asked for in the prompt, and enforced in Verify's
 submit guard rather than described to the model. It answers one hypothesis-free question: is
 anything in the incident namespace unhealthy right now? A failure blocks the `recovered`
-verdict outright; the model may still argue in its summary, it just cannot close the
-incident.
+verdict for as long as the submit guard's budget lasts: the model may still argue in its
+summary, and after two refusals a third `recovered` submission is accepted with the block
+unapplied.
+
+That budget is the measured behaviour and is not changed here. The run row's
+`submit_guard` entry and the bypassed intervention in the event log say when a verdict
+closed an incident this gate had found unhealthy, so a `recovered` taken over the gate is
+legible as one rather than reading as a namespace the gate passed.
 
 Asymmetry is deliberate. A false block costs one extra loop pass — of the cells that took a
 back-edge, none were damaged by it and three had a wrong diagnosis corrected. A false pass
