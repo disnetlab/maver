@@ -31,6 +31,13 @@ rules:
       - events
       - resourcequotas
       - limitranges
+      # Names and metadata only; a ServiceAccount object carries no token, and the
+      # Secrets it lists are still unreadable. Granted here because the write role
+      # already carries it, so without this line a namespace bound read-only is the
+      # only place `kubectl get sa` is refused — the diagnosis for a pod stuck on a
+      # ServiceAccount that does not exist, gated behind write authority it does not
+      # need.
+      - serviceaccounts
     verbs: ["get", "list", "watch"]
 
   # Endpoints' replacement. A service-selector or target-port fault is diagnosed by
@@ -44,6 +51,16 @@ rules:
     resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
     verbs: ["get", "list", "watch"]
 
+  # Where a StatefulSet's and a DaemonSet's revision history lives. `kubectl rollout
+  # history` and `kubectl rollout undo` read these for both kinds — a Deployment's
+  # history is its ReplicaSets, which the rule above covers, but a StatefulSet's is not
+  # — so without this the two commands fail on
+  # `controllerrevisions.apps is forbidden` for the two workload kinds most often rolled
+  # back by hand.
+  - apiGroups: ["apps"]
+    resources: ["controllerrevisions"]
+    verbs: ["get", "list", "watch"]
+
   - apiGroups: ["batch"]
     resources: ["jobs", "cronjobs"]
     verbs: ["get", "list", "watch"]
@@ -54,6 +71,13 @@ rules:
 
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch"]
+
+  # An eviction refused by a disruption budget looks like a stuck drain from every
+  # other angle. Read-only, here and in the write role: relaxing a budget so an
+  # eviction succeeds is turning off the control that was doing its job.
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
     verbs: ["get", "list", "watch"]
 
   # `kubectl top pods`.

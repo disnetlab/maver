@@ -3,9 +3,9 @@
 # way, one namespace at a time. It is never bound cluster-wide, and a cluster-wide
 # binding of it would hand a language model write access to the whole cluster.
 #
-# Two things the kubectl tool will classify and the approval gate will offer are
-# deliberately not granted here, so the API server refuses them with a message the model
-# can read:
+# Four things the kubectl tool will classify and the approval gate will offer are
+# deliberately not granted, here or anywhere in base/, so the API server refuses them
+# with a message the model can read:
 #
 #   Node mutation — cordon, uncordon, drain and taint are cluster-scoped writes, and a
 #   fault injected as a cordon is one an agent must diagnose rather than undo. Granting
@@ -13,6 +13,17 @@
 #
 #   Secrets — the widest grant available in a workload namespace, and no fault family
 #   this system reports needs it. It is an opt-in fragment in overlays/production/.
+#
+#   RBAC objects — roles, bindings and their cluster-scoped forms. Something that can
+#   write a RoleBinding can grant itself everything else on this page, which makes every
+#   other line here advisory. The tool's resource vocabulary names all four kinds, so
+#   this is a decision rather than an oversight.
+#
+#   Cluster-wide pod reads — which is why `kubectl describe node` fails: it lists pods
+#   across every namespace to show what is scheduled there. `kubectl get node <name> -o
+#   yaml` answers the node's own state and is granted. Making describe work means letting
+#   the agent read every workload in the cluster, including the namespaces the read role
+#   is deliberately never bound in.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -53,8 +64,26 @@ rules:
     resources: ["pods/exec"]
     verbs: ["create"]
 
+  # pods/status is not here: nothing the kubectl tool can issue reads that subresource.
+  # `get`, `describe` and `wait` all read status off the pod itself, which the rule above
+  # already covers, and `patch --subresource=status` was never granted a write verb.
   - apiGroups: [""]
-    resources: ["pods/log", "pods/status", "events"]
+    resources: ["pods/log", "events"]
+    verbs: ["get", "list", "watch"]
+
+  # Read-only, deliberately. `kubectl rollout history` and `kubectl rollout undo` read a
+  # StatefulSet's and a DaemonSet's revisions from here — a Deployment's live in its
+  # ReplicaSets, which the workload rule above already covers — and the rollback itself
+  # is a patch on the workload, so no write verb on the revisions is needed.
+  - apiGroups: ["apps"]
+    resources: ["controllerrevisions"]
+    verbs: ["get", "list", "watch"]
+
+  # Read-only for a third reason: a disruption budget refusing an eviction is a finding,
+  # and widening one so the eviction goes through is disabling the control rather than
+  # repairing the fault. Diagnosable here, changeable only by a person.
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
     verbs: ["get", "list", "watch"]
 
   - apiGroups: ["batch"]

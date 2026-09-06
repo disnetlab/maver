@@ -68,25 +68,39 @@ the approval gate in the process, which holds every cluster write until a person
 it unless `KIRA_AUTHORITY__MODE` says otherwise.
 
 Cluster-wide, the agent can read nodes, persistent volumes, storage classes, volume
-attachments and node metrics, and can `get` a single namespace by name. That is what
-tells a pending pod on an unschedulable node apart from an application fault. It cannot
-list namespaces and it cannot write anything cluster-scoped.
+attachments, priority classes, ingress classes and node metrics, and can `get` a single
+namespace by name. That is what tells a pending pod on an unschedulable node, a pod
+naming a priority class that does not exist, and an ordinary application fault apart. It
+cannot list namespaces and it cannot write anything cluster-scoped.
 
-Per namespace, it can read the workloads, pods and their logs, services, endpoints and
-endpoint slices, config maps, claims, events, quotas, autoscalers, ingresses, network
-policies, pod metrics and KEDA objects. With the write role it can additionally create,
-patch and delete workloads, pods, services, config maps, claims, jobs, ingresses,
-autoscalers and KEDA objects, evict a pod, and run `kubectl exec`.
+Per namespace, it can read the workloads and their revision history, pods and their logs,
+services, endpoints and endpoint slices, config maps, claims, service accounts, events,
+quotas, disruption budgets, autoscalers, ingresses, network policies, pod metrics and KEDA
+objects. With the write role it can additionally create, patch and delete workloads, pods,
+services, config maps, claims, service accounts, jobs, ingresses, autoscalers and KEDA
+objects, evict a pod, and run `kubectl exec`.
 
-Three things are deliberately not granted:
+The roles are derived from what the kubectl tool can actually issue rather than assembled
+by hand: `tests/unit/test_deploy.py` reads the verb and resource vocabulary out of
+`kira.tools.kubernetes` and fails if a kind the tool knows is neither granted below nor
+listed as a decision. Six things are decisions:
 
 - **Secrets**, read or write. `overlays/production/rbac-secrets-write.yaml` is the opt-in
   fragment, and it says what opting in costs. Without it, one line of the namespace
   snapshot — the check for a workload referring to a secret that does not exist — reports
   `(unavailable)`, and nothing else changes.
+- **RBAC objects** — roles, bindings, and their cluster-scoped forms. Anything that can
+  write a `RoleBinding` can grant itself every other line on this page.
 - **Node mutation.** `cordon`, `uncordon`, `drain` and `taint` are cluster-scoped writes.
   The kubectl tool will classify them and the gate will offer them; the API server
   refuses them, which is the answer we want.
+- **Cluster-wide pod reads**, which is why `kubectl describe node` fails: it lists pods in
+  every namespace. `kubectl get node <name> -o yaml` answers the node's own state and is
+  granted. Granting the describe means letting the agent read every workload in the
+  cluster, including the namespaces the read role is deliberately never bound in.
+- **Disruption budget writes.** They are readable, because an eviction a budget refuses
+  looks like a stuck drain from every other angle; widening one so the eviction goes
+  through is disabling the control rather than repairing the fault.
 - **`kubectl exec` in a read-only namespace.** Running a command inside a container
   cannot be proven read-only, so it lives in the write role.
 
@@ -112,9 +126,22 @@ and an inert policy that looks enforced is worse than an absent one.
 ## Validating a change
 
 ```bash
+make test PYTEST_FLAGS=tests/unit/test_deploy.py   # renders both overlays, no cluster
 kubectl kustomize deploy/k8s/overlays/production | kubeconform -strict -summary
-kubectl apply --dry-run=client -k deploy/k8s/overlays/production
 ```
 
+`tests/unit/test_deploy.py` is the check that runs in CI. It renders both overlays with
+`kubectl kustomize`, validates every rendered `KIRA_`-prefixed key against the settings
+model, builds `Settings` from the rendered environment so a value the validators refuse
+fails here rather than in a crash loop, checks the probe paths against the routes
+`kira.api.health` actually declares, and compares the RBAC verbs with the tool's own.
+
+**`kubectl apply --dry-run=client` is not an offline check**, which is worth knowing
+before you point it at a cluster you did not mean to touch. It still performs API
+discovery against the current context, `--validate=false` included: with `KUBECONFIG`
+pointed at nothing it fails with `unable to recognize ...: the server could not find the
+requested resource` rather than rendering. `kubectl kustomize` is the pure-rendering
+command.
+
 The rendered production ConfigMap must contain every key the base ConfigMap has. An
-overlay that drops one is the first trap above, happening quietly.
+overlay that drops one is the first trap above, happening quietly; the test asserts it.

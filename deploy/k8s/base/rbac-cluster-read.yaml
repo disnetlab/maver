@@ -25,6 +25,19 @@ rules:
     resources: ["storageclasses", "volumeattachments"]
     verbs: ["get", "list", "watch"]
 
+  # The other two cluster-scoped objects a namespaced workload can point at and be
+  # broken by. A pod pending on a PriorityClass that does not exist and an Ingress naming
+  # an IngressClass no controller claims are both invisible from inside the namespace,
+  # and the kubectl tool names both kinds in its own resource vocabulary, so without
+  # these the model asks and is refused mid-incident.
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: ["priorityclasses"]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingressclasses"]
+    verbs: ["get", "list", "watch"]
+
   # `kubectl top nodes`.
   - apiGroups: ["metrics.k8s.io"]
     resources: ["nodes"]
