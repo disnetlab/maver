@@ -171,7 +171,12 @@ async def run_episode(
                 ok=False,
             )
         )
-        return EpisodeResult(session_id=start.session_id, failed=True)
+        # Closed like any other ending. A crash still owes the environment a release and
+        # the harness an answer: without them the conductor stays parked on a deployed
+        # application until its own teardown timeout, and the problem produces no result
+        # row at all, so it leaves the denominator instead of counting as a failure.
+        closed = await _close(adapter, bound, start, journal, None, submit=submit, crashed=True)
+        return replace(closed, failed=True)
 
     drop_episode(start.session_id)
     return await _close(adapter, bound, start, journal, state, submit=submit)
@@ -214,18 +219,13 @@ async def _continue(
         # Another continuation already took it, and an episode has one ending.
         return status
 
-    record = deployment.storage.sessions.get_session(start.session_id)
-    # Read back rather than returned: a continuation reports a status. Closed even when
-    # the continuation could not run, because an episode that ends here owes the harness
-    # an answer and the environment a release either way — without them the problem
-    # leaves the run with no result at all rather than a failed one.
-    state = (
-        stored_state(record, target_stage=start.context.target_stage)
-        if record is not None
-        else None
-    )
+    # No state to hand over: a continuation reports a status, so :func:`_close` reads
+    # the answers back from the store itself. Closed even when the continuation could
+    # not run, because an episode that ends here owes the harness an answer and the
+    # environment a release either way — without them the problem leaves the run with no
+    # result at all rather than a failed one.
     await _close(
-        adapter, deployment, start, _journal(deployment, start.session_id), state, submit=submit
+        adapter, deployment, start, _journal(deployment, start.session_id), None, submit=submit
     )
     return status
 
@@ -238,14 +238,30 @@ async def _close(
     state: IncidentState | None,
     *,
     submit: bool,
+    crashed: bool = False,
 ) -> EpisodeResult:
-    """Hand the answers over, distil what happened, and give the environment back."""
+    """Hand the answers over, distil what happened, and give the environment back.
+
+    Args:
+        adapter: The adapter holding this episode.
+        deployment: The episode's own composition.
+        start: What :func:`open_episode` returned.
+        journal: The episode's log.
+        state: The incident state, or None when the pipeline produced none.
+        submit: Whether answers are handed over for grading.
+        crashed: Whether the pipeline died rather than finished, in which case the
+            terminal run status has already been written and must stand.
+    """
     loop_ended_at = _utcnow()
     submitted: list[str] = []
     feedback: ExternalFeedback | None = None
     error: str | None = None
+    # A pipeline that produced no state still owes an answer, so it is rebuilt from what
+    # was written down rather than skipped. Every encoder handles an absent diagnosis;
+    # none of them is reached if nothing is submitted at all.
+    state = state if state is not None else _recovered_state(deployment, start)
     try:
-        if submit and state is not None:
+        if submit:
             submitted, error = await _submit_plan(adapter, start, state, journal)
             if adapter.holds_environment_for_grading():
                 feedback = await adapter.fetch_feedback()
@@ -267,12 +283,37 @@ async def _close(
         _record_episode(
             journal, adapter, start, submitted, loop_ended_at, feedback, error, deployment
         )
-        _finalize(deployment, start.session_id, state)
+        if not crashed:
+            # A crash has already written its terminal status. Re-resolving one from a
+            # state rebuilt to answer with would report the run that did not happen.
+            _finalize(deployment, start.session_id, state)
 
     return EpisodeResult(
         session_id=start.session_id,
         submitted=tuple(submitted),
         graded=feedback is not None,
+    )
+
+
+def _recovered_state(deployment: Deployment, start: EpisodeStart) -> IncidentState:
+    """Rebuild enough of an incident to answer with, from what was written down.
+
+    A crashed pipeline returns nothing, and a storage failure must never forfeit
+    grading, so the fallback is the signal the episode opened on rather than no
+    submission at all.
+    """
+    try:
+        record = deployment.storage.sessions.get_session(start.session_id)
+    except Exception:
+        _log.exception("could not read session %s back to answer with", start.session_id)
+        record = None
+    if record is not None:
+        return stored_state(record, target_stage=start.context.target_stage)
+    return IncidentState(
+        session_id=start.session_id,
+        alert=dict(start.signal),
+        target_stage=start.context.target_stage,
+        error=None,
     )
 
 

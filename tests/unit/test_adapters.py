@@ -307,7 +307,13 @@ async def test_a_crashed_pipeline_leaves_a_run_a_poller_can_tell_is_over(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Without this the run stays running forever and the harness blocks until its own
-    outer timeout, which costs the whole cell rather than one run."""
+    outer timeout, which costs the whole cell rather than one run.
+
+    A crash ends the episode like any other ending, so it owes the same two things: the
+    environment back, or the conductor holds a deployed application until its own
+    teardown timeout; and an answer, or the problem produces no result row and leaves
+    the denominator instead of counting as the failure it was.
+    """
 
     async def crash(*args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("boom")
@@ -319,6 +325,8 @@ async def test_a_crashed_pipeline_leaves_a_run_a_poller_can_tell_is_over(
 
     assert result.failed is True
     assert deploy.storage.sessions.get_session(result.session_id).run_status == "failed"
+    assert stub.releases == 1
+    assert stub.submitted[0] == ("diagnosis", "nothing was concluded")
 
 
 async def test_the_storage_only_key_is_written_and_never_rendered(
