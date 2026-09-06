@@ -61,8 +61,7 @@ async def create_episode(service: ServiceDep, submit: bool = True) -> dict[str, 
 
     service.runs.register(start.session_id)
     task = asyncio.create_task(_drive(adapter, service, start, submit=submit))
-    service.tasks.add(task)
-    task.add_done_callback(service.tasks.discard)
+    service.runs.attach(start.session_id, task)
     return {
         "session_id": start.session_id,
         "status": "accepted",

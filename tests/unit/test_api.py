@@ -150,7 +150,7 @@ def client(app: Any) -> httpx.AsyncClient:
 
 async def settle(service: Service) -> None:
     """Wait for every incident this process started."""
-    while pending := {task for task in service.tasks if not task.done()}:
+    while pending := {task for task in service.runs.tasks() if not task.done()}:
         await asyncio.gather(*pending, return_exceptions=True)
 
 
@@ -225,7 +225,7 @@ async def test_a_crashed_incident_is_left_terminal(
     assert polled["run_status"] == "failed"
     assert polled["status"] == "invalidated"
     assert polled["error"] == "RuntimeError: the transport is gone"
-    assert app.state.service.runs.get(session_id) is None
+    assert app.state.service.runs.live() == []
     deploy.storage.close()
 
 
@@ -250,9 +250,48 @@ async def test_a_cancelled_incident_re_raises_and_still_unregisters(
             session_id=session.session_id, alert=ALERT, target_stage="full", service=service
         )
 
-    assert service.runs.get(session.session_id) is None
+    assert service.runs.live() == []
     stopped = deploy.storage.sessions.get_session(session.session_id)
     assert stopped is not None and stopped.state == "pending", "a stop is not a crash"
+    deploy.storage.close()
+
+
+async def test_an_operator_can_stop_a_running_incident(tmp_path: pathlib.Path) -> None:
+    """The runbook's answer to a run that is spiralling, and it reached nothing.
+
+    Deleting the pod is the alternative, and it skips every ``finally`` the run is
+    holding: the terminal record, and an environment adapter's release of the
+    application being graded.
+    """
+
+    class Forever:
+        async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
+            await asyncio.sleep(3600)
+            raise AssertionError("unreachable")
+
+    deploy = dataclasses.replace(deployment(tmp_path, mode="auto"), completion=Forever())
+    app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
+
+    async with client(app) as http:
+        session_id = (await http.post("/api/v1/incidents", json={"alert": ALERT})).json()[
+            "session_id"
+        ]
+        for _ in range(100):  # until the diagnosing role has opened its run row
+            if deploy.storage.runs.runs_for(session_id):
+                break
+            await asyncio.sleep(0.01)
+
+        stopped = await http.post(f"/api/v1/incidents/{session_id}/cancel")
+        assert stopped.status_code == 202
+        assert stopped.json() == {"session_id": session_id, "status": "cancelling"}
+        await settle(app.state.service)
+
+        assert (await http.post("/api/v1/incidents/nope/cancel")).status_code == 404
+        again = await http.post(f"/api/v1/incidents/{session_id}/cancel")
+        assert again.status_code == 409, "a run that has already stopped is not running"
+
+    assert deploy.storage.sessions.get_session(session_id).run_status == RunStatus.CANCELLED.value
+    assert app.state.service.runs.live() == []
     deploy.storage.close()
 
 

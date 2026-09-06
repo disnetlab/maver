@@ -176,7 +176,7 @@ async def test_an_incident_runs_end_to_end_on_the_shipped_transport(deployment: 
         assert created.status_code == 202, created.text
         session_id = created.json()["session_id"]
 
-        while pending := {t for t in app.state.service.tasks if not t.done()}:
+        while pending := {t for t in app.state.service.runs.tasks() if not t.done()}:
             await asyncio.gather(*pending, return_exceptions=True)
 
         incident = await http.get(f"/api/v1/incidents/{session_id}")
@@ -247,7 +247,7 @@ async def test_every_mechanism_composes_on_the_shipped_transport(every_mechanism
     ) as http:
         created = await http.post("/api/v1/incidents", json={"alert": ALERT})
         session_id = created.json()["session_id"]
-        while pending := {t for t in app.state.service.tasks if not t.done()}:
+        while pending := {t for t in app.state.service.runs.tasks() if not t.done()}:
             await asyncio.gather(*pending, return_exceptions=True)
         body = (await http.get(f"/api/v1/incidents/{session_id}")).json()
 
@@ -298,7 +298,7 @@ async def test_a_write_waits_for_a_person_and_then_does_what_they_said(
     ) as http:
         created = await http.post("/api/v1/incidents", json={"alert": ALERT})
         session_id = created.json()["session_id"]
-        while pending := {t for t in app.state.service.tasks if not t.done()}:
+        while pending := {t for t in app.state.service.runs.tasks() if not t.done()}:
             await asyncio.gather(*pending, return_exceptions=True)
 
         parked = (await http.get(f"/api/v1/incidents/{session_id}")).json()
@@ -317,7 +317,7 @@ async def test_a_write_waits_for_a_person_and_then_does_what_they_said(
         assert resumed == [request_id]
 
         assert await jobs.resume_approval(request_id) == "success"
-        while pending := {t for t in app.state.service.tasks if not t.done()}:
+        while pending := {t for t in app.state.service.runs.tasks() if not t.done()}:
             await asyncio.gather(*pending, return_exceptions=True)
 
     after = _kubectl_calls(tmp_path)

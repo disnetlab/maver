@@ -208,9 +208,11 @@ async def _drain(service: Service, timeout_s: float) -> None:
     # so the record would say a run is in progress on a process that no longer exists.
     # Cancelling gives each one's handler the chance to write that it is over.
     _log.warning("cancelling %d incident(s) that did not drain: %s", len(remaining), remaining)
-    for task in list(service.tasks):
+    carrying = service.runs.tasks()
+    for task in carrying:
         task.cancel()
-    await asyncio.wait(set(service.tasks), timeout=_CANCELLATION_GRACE_S)
+    if carrying:
+        await asyncio.wait(carrying, timeout=_CANCELLATION_GRACE_S)
     still_live = service.runs.live()
     if still_live:
         _log.error("shut down with %d incident(s) unrecorded: %s", len(still_live), still_live)

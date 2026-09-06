@@ -1,13 +1,12 @@
-"""Scheduling what happens after an incident, and holding a run that is still going."""
+"""Scheduling what happens after an incident, and tracking the runs in flight."""
 
-import asyncio
 import pathlib
 from typing import Any
 
 import pytest
 
 from kira.orchestration import hooks
-from kira.orchestration.control import RunCancelled, RunControl, RunRegistry
+from kira.orchestration.control import RunRegistry
 from kira.orchestration.hooks import PostIncidentHook, fire_hooks, register_hook
 from kira.orchestration.outcomes import Outcome
 
@@ -90,34 +89,12 @@ async def test_re_running_an_incident_replaces_its_job_rather_than_queueing_a_se
     assert scheduler.jobs[0]["replace_existing"] is True
 
 
-async def test_cancelling_a_paused_run_releases_it() -> None:
-    """Otherwise it waits forever for a resume that is never coming."""
-    control = RunControl("s1")
-    control.pause()
-    waiting = asyncio.create_task(control.wait_if_paused())
-    await asyncio.sleep(0)
-
-    control.cancel()
-
-    with pytest.raises(RunCancelled):
-        await waiting
-
-
-async def test_a_cancelled_run_stops_at_its_next_checkpoint() -> None:
-    control = RunControl("s1")
-    control.cancel()
-
-    with pytest.raises(RunCancelled):
-        await control.wait_if_paused()
-
-
 def test_the_registry_forgets_a_run_that_has_finished() -> None:
     """State here is only ever about runs in flight; a finished run has nothing left
-    to pause."""
+    to stop."""
     registry = RunRegistry()
     registry.register("s1")
     assert registry.live() == ["s1"]
 
     registry.unregister("s1")
     assert registry.live() == []
-    assert registry.get("s1") is None

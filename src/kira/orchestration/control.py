@@ -1,8 +1,9 @@
-"""Pausing and cancelling a run that is already going.
+"""The incidents this process is carrying right now.
 
-An in-process registry of the incidents running right now, checked by the loop before
-each model call. State is lost on a restart, by design: only in-progress runs exist
-here, and a run that did not survive the restart has nothing left to pause.
+An in-process registry: the live set, the fingerprint index that recognises a repost of
+one alert, the reservation that makes admission a single step, and the task handle an
+operator's cancel reaches for. State is lost on a restart, by design: only runs in
+progress exist here, and a run that did not survive the restart has nothing left to stop.
 
 Distinct from the approval gate, which parks a run durably on a human decision. This is
 the operator's hand on a run that is behaving badly — the one who wants it to stop now,
@@ -10,78 +11,8 @@ not the one being asked to approve a write.
 """
 
 import asyncio
-import logging
-from dataclasses import dataclass, field
 
-__all__ = ["RunCancelled", "RunControl", "RunRegistry"]
-
-_log = logging.getLogger(__name__)
-
-
-class RunCancelled(Exception):
-    """A run was cancelled by an operator while it was waiting."""
-
-
-@dataclass
-class RunControl:
-    """One live run's pause and cancel state."""
-
-    session_id: str
-    _resumed: asyncio.Event = field(default_factory=asyncio.Event)
-    _cancelled: bool = False
-
-    def __post_init__(self) -> None:
-        """Start released. A run is only held once someone asks for it."""
-        self._resumed.set()
-
-    @property
-    def paused(self) -> bool:
-        """Whether the run is currently held.
-
-        Returns:
-            True while paused.
-        """
-        return not self._resumed.is_set()
-
-    @property
-    def cancelled(self) -> bool:
-        """Whether the run has been asked to stop.
-
-        Returns:
-            True once cancelled.
-        """
-        return self._cancelled
-
-    def pause(self) -> None:
-        """Hold the run before its next model call."""
-        self._resumed.clear()
-
-    def resume(self) -> None:
-        """Release a held run."""
-        self._resumed.set()
-
-    def cancel(self) -> None:
-        """Ask the run to stop, and release it if it is waiting.
-
-        Releasing matters: a paused run that is then cancelled would otherwise wait
-        forever for a resume that is never coming.
-        """
-        self._cancelled = True
-        self._resumed.set()
-
-    async def wait_if_paused(self) -> None:
-        """Block while paused, then continue or raise.
-
-        Raises:
-            RunCancelled: When the run was cancelled, whether before or during the wait.
-        """
-        if self._cancelled:
-            raise RunCancelled(self.session_id)
-        if not self._resumed.is_set():
-            _log.info("run %s is paused", self.session_id)
-            await self._resumed.wait()
-        if self._cancelled:
-            raise RunCancelled(self.session_id)
+__all__ = ["RunRegistry"]
 
 
 class RunRegistry:
@@ -89,27 +20,41 @@ class RunRegistry:
 
     def __init__(self) -> None:
         """Start empty."""
-        self._runs: dict[str, RunControl] = {}
+        self._runs: dict[str, asyncio.Task[None] | None] = {}
+        self._tasks: set[asyncio.Task[None]] = set()
         self._by_alert: dict[str, str] = {}
         self._reserved = 0
         self._draining = False
 
-    def register(self, session_id: str, *, fingerprint: str | None = None) -> RunControl:
+    def register(self, session_id: str, *, fingerprint: str | None = None) -> None:
         """Start tracking a run.
 
         Args:
             session_id: The incident.
             fingerprint: What identifies the alert that raised it, when the caller
                 computed one. Used to recognise a repost of the same alert.
-
-        Returns:
-            Its control handle.
         """
-        control = RunControl(session_id)
-        self._runs[session_id] = control
+        self._runs[session_id] = None
         if fingerprint is not None:
             self._by_alert[fingerprint] = session_id
-        return control
+
+    def attach(self, session_id: str, task: asyncio.Task[None]) -> None:
+        """Hold the task carrying a registered run.
+
+        Held strongly, because ``asyncio`` keeps only a weak reference to a task and a
+        background incident nobody is awaiting can be collected mid-run. The reference
+        is given up when the task ends rather than when its run unregisters, which are
+        not the same moment: a run gives up its place in the live set from inside the
+        task that is still unwinding.
+
+        Args:
+            session_id: The incident, already registered.
+            task: The task running it.
+        """
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        if session_id in self._runs:
+            self._runs[session_id] = task
 
     def unregister(self, session_id: str) -> None:
         """Stop tracking a run that has finished.
@@ -121,6 +66,37 @@ class RunRegistry:
         for fingerprint, tracked in list(self._by_alert.items()):
             if tracked == session_id:
                 del self._by_alert[fingerprint]
+
+    def cancel(self, session_id: str) -> bool:
+        """Ask a run this process is carrying to stop.
+
+        Cancelling the task rather than raising a flag the loop polls: every await in a
+        run is already a cancellation point, so the stop arrives at the next one without
+        the loop having to check for it, and the task's own handler is what records that
+        the incident is over and lets an adapter hand its environment back.
+
+        Args:
+            session_id: The incident.
+
+        Returns:
+            True when a running task was asked to stop. False when this process is not
+            carrying the run — it finished, it is parked on a person, or it never ran
+            here.
+        """
+        task = self._runs.get(session_id)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        return True
+
+    def tasks(self) -> set[asyncio.Task[None]]:
+        """The tasks carrying the runs in this process.
+
+        Returns:
+            A snapshot, so a caller may cancel or await them while they finish and
+            remove themselves.
+        """
+        return set(self._tasks)
 
     def find(self, fingerprint: str) -> str | None:
         """Find a live run already working on this alert.
@@ -205,17 +181,6 @@ class RunRegistry:
         drifts.
         """
         self._reserved = max(0, self._reserved - 1)
-
-    def get(self, session_id: str) -> RunControl | None:
-        """Look up a live run.
-
-        Args:
-            session_id: The incident.
-
-        Returns:
-            Its control handle, or None when the run is not in this process.
-        """
-        return self._runs.get(session_id)
 
     def live(self) -> list[str]:
         """Which incidents are running here.

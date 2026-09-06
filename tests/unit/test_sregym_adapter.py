@@ -557,5 +557,5 @@ async def _settle(app: Any) -> None:
     """Wait for the episode this process started."""
     import asyncio  # noqa: PLC0415
 
-    while pending := {task for task in app.state.service.tasks if not task.done()}:
+    while pending := {task for task in app.state.service.runs.tasks() if not task.done()}:
         await asyncio.gather(*pending, return_exceptions=True)

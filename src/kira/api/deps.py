@@ -6,7 +6,6 @@ handler reaches for nothing global. The prototype's routers called
 them could be exercised without the whole process standing up around them.
 """
 
-import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Annotated, cast
@@ -35,14 +34,7 @@ class Service:
     a route that silently continued nothing would look exactly like one that worked.
     """
     runs: RunRegistry = field(default_factory=RunRegistry)
-    """The incidents running in this process right now."""
-    tasks: set[asyncio.Task[None]] = field(default_factory=set)
-    """Strong references to the running incident tasks.
-
-    Held because ``asyncio`` keeps only a weak reference to a task, so a background
-    incident nobody is awaiting can be collected mid-run. A finished task removes
-    itself; :attr:`runs` answers a different question and is not a substitute.
-    """
+    """The incidents running in this process right now, and the tasks carrying them."""
 
 
 def service(request: Request) -> Service:

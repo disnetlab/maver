@@ -159,6 +159,38 @@ async def read_incident(session_id: str, service: ServiceDep) -> dict[str, Any]:
     }
 
 
+@router.post("/incidents/{session_id}/cancel", status_code=202)
+async def cancel_incident(session_id: str, service: ServiceDep) -> dict[str, Any]:
+    """Stop a run that is going wrong, without killing the process.
+
+    An operator watching a run spiral had no way to stop it short of deleting the pod,
+    which skips every ``finally`` the run is holding: the terminal record, and an
+    environment adapter's release of the application it is grading.
+
+    Args:
+        session_id: The incident to stop.
+        service: The process's resources.
+
+    Returns:
+        The incident, and that it is being stopped. Answered before the run has unwound,
+        like the intake it mirrors: a poller reads ``run_status`` for the end.
+
+    Raises:
+        HTTPException: 404 when there is no such incident, and 409 when this process is
+            not carrying it — it has already finished, or it is parked on a person,
+            which is ended by deciding the approval rather than here.
+    """
+    record = await asyncio.to_thread(service.deployment.storage.sessions.get_session, session_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="incident not found")
+    if not service.runs.cancel(session_id):
+        raise HTTPException(
+            status_code=409, detail=f"incident is {record.run_status}, not running here"
+        )
+    _log.info("session %s was cancelled by an operator", session_id)
+    return {"session_id": session_id, "status": "cancelling"}
+
+
 async def start_incident(
     alert: dict[str, Any], *, target_stage: str, service: Service
 ) -> dict[str, Any]:
@@ -194,8 +226,7 @@ async def start_incident(
             service=service,
         )
     )
-    service.tasks.add(task)
-    task.add_done_callback(service.tasks.discard)
+    service.runs.attach(record.session_id, task)
     return {
         "session_id": record.session_id,
         "status": "accepted",
