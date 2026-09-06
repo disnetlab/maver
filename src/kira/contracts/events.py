@@ -309,9 +309,12 @@ class AuditEvent(BaseModel):
     session_id: str
     sequence: int = Field(
         description=(
-            "Monotonic position within the session. Ordering is by this field and not "
-            "by timestamp: timestamps have collided at the resolution the stores use, "
-            "and text-typed timestamp columns have silently broken range filters."
+            "Monotonic position within the session, allocated once for the session "
+            "and shared by every stage's journal. Ordering is by this field and not by "
+            "timestamp: timestamps have collided at the resolution the stores use, and "
+            "text-typed timestamp columns have silently broken range filters. A process "
+            "that did not run the incident — a resume after a decision, or a distilling "
+            "job — begins a new order, so its events sort among the original ones."
         )
     )
     stage: str = Field(description="The role or mechanism the event occurred under.")

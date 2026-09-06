@@ -169,9 +169,12 @@ async def _abandon(
         sessions.set_run_status(session_id, RunStatus.FAILED)
     except Exception:
         _log.exception("could not record the abandonment of incident %s", session_id)
-    Journal(deployment.sink, session_id=session_id, stage="environment").record(
-        EnvironmentEvent(adapter=adapter_name, action="failed", detail=detail, ok=False)
-    )
+    Journal(
+        deployment.sink,
+        session_id=session_id,
+        stage="environment",
+        sequence=deployment.sequences.for_session(session_id),
+    ).record(EnvironmentEvent(adapter=adapter_name, action="failed", detail=detail, ok=False))
     await _release_abandoned(session_id, adapter_name, deployment)
     return "abandoned"
 

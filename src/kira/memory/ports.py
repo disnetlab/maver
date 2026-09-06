@@ -499,9 +499,10 @@ class RunStore(Protocol):
         that could choose one could also collide with another caller writing to the
         same run.
 
-        Note that :mod:`kira.audit.journal` stamps a sequence of its own, per
-        ``session_id`` rather than per run. The two are different orderings and are not
-        yet reconciled; that happens when the journal is wired to a store.
+        Note that :mod:`kira.audit.journal` stamps a sequence of its own, into the
+        payload, per ``session_id`` rather than per run. The two are different
+        orderings and both are stored: this one orders a run, and the payload's orders
+        the incident the run belongs to.
 
         Args:
             event: The event to append.

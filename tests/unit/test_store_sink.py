@@ -18,6 +18,7 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+from kira.audit.journal import Journal, SequenceRegistry
 from kira.audit.store_sink import StoreSink
 from kira.contracts.events import AuditEvent, StageEvent, ToolCallEvent
 from kira.memory.factory import build_storage
@@ -48,12 +49,12 @@ def event(payload: Any, *, sequence: int = 1, run_id: str | None = "r1") -> Audi
     )
 
 
-def a_run(stack: Any) -> None:
+def a_run(stack: Any, run_id: str = "r1", role: str = "execution") -> None:
     stack.runs.start_run(
         AgentRunRecord(
-            agent_run_id="r1",
+            agent_run_id=run_id,
             pipeline_id="s1",
-            agent_name="execution",
+            agent_name=role,
             attempt=1,
             status="running",
             started_at="2026-09-01T00:00:00Z",
@@ -205,3 +206,42 @@ def test_a_failed_write_does_not_end_the_incident(tmp_path: pathlib.Path) -> Non
     # Closing a sink whose every write raises still returns, and the drain is still
     # alive to take the next event.
     sink.close()
+
+
+def test_one_incidents_stages_share_one_order(tmp_path: pathlib.Path) -> None:
+    """Sorting an incident by ``sequence`` alone must return emission order.
+
+    Every stage writes through a journal of its own, and a position each of them
+    allocated alone restarted at 1 per stage: one incident held four events numbered 1,
+    and reading a 45-event incident back by that field put the recovery verdict before
+    the write it verified. The clocks here run backwards so that ``created_at`` sorts
+    against the true order, which is the fallback the sequence exists to replace.
+    """
+    stack = storage(tmp_path)
+    sink = StoreSink(stack.runs)
+    sequences = SequenceRegistry()
+    stages = (("r1", "rca"), ("r2", "execution"), ("r3", "verify"))
+    for run_id, role in stages:
+        a_run(stack, run_id, role)
+
+    emitted: list[tuple[str, str]] = []
+    for index, (run_id, role) in enumerate(stages):
+        journal = Journal(
+            sink,
+            session_id="s1",
+            stage=role,
+            run_id=run_id,
+            now=lambda index=index: datetime(2026, 9, 1, 12 - index, tzinfo=UTC),
+            sequence=sequences.for_session("s1"),
+        )
+        for event_name in ("entered", "exited"):
+            journal.record(StageEvent(stage=role, event=event_name))
+            emitted.append((role, event_name))
+    sink.close()
+
+    stored = [record for run_id, _ in stages for record in stack.runs.events_for(run_id)]
+    by_sequence = sorted(stored, key=lambda record: record.payload["sequence"])
+    assert [(r.role, r.payload["event"]) for r in by_sequence] == emitted
+    by_timestamp = sorted(stored, key=lambda record: record.created_at)
+    assert [(r.role, r.payload["event"]) for r in by_timestamp] != emitted
+    stack.close()

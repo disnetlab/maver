@@ -105,7 +105,12 @@ async def run_learning(
 
     spec = get_role("learning")
     async with incident_context(session_id, dict(packet.alert), deployment) as resources:
-        journal = Journal(deployment.sink, session_id=session_id, stage=spec.name)
+        journal = Journal(
+            deployment.sink,
+            session_id=session_id,
+            stage=spec.name,
+            sequence=deployment.sequences.for_session(session_id),
+        )
         tools = tool_context_for(deployment, resources, spec.name, session_id, journal)
         outcome = await spec.run(
             RoleContext(

@@ -10,6 +10,7 @@ write still executes; it simply is not reconstructible, which is a deployment ch
 rather than something the loop should have to branch on.
 """
 
+import itertools
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -17,7 +18,14 @@ from typing import Protocol, runtime_checkable
 
 from kira.contracts.events import AuditEvent, EventPayload
 
-__all__ = ["EventSink", "Journal", "ListSink", "NullSink"]
+__all__ = [
+    "EventSink",
+    "Journal",
+    "ListSink",
+    "NullSink",
+    "SequenceAllocator",
+    "SequenceRegistry",
+]
 
 _log = logging.getLogger(__name__)
 
@@ -65,12 +73,83 @@ class ListSink:
         self.events.append(event)
 
 
+class SequenceAllocator:
+    """Hands out one session's event positions, in order.
+
+    Session-scoped and not journal-scoped. A session is written by a journal per stage,
+    so a position each of them restarts cannot order the incident it describes: sorting
+    one incident by a per-journal count puts the recovery verdict before the write it
+    verifies.
+    """
+
+    def __init__(self, start: int = 0) -> None:
+        """Continue an existing order, or begin one.
+
+        Args:
+            start: The last position already handed out. The next is one past it.
+        """
+        self._counter = itertools.count(start + 1)
+
+    def allocate(self) -> int:
+        """Take the next position.
+
+        Returns:
+            The position, one past the last handed out.
+        """
+        return next(self._counter)
+
+
+class SequenceRegistry:
+    """The allocator each session's journals share, for the length of this process.
+
+    Held by the deployment rather than in a module global, so two deployments in one
+    process are genuinely independent — the same reason the write lock lives there.
+
+    A process that did not run the incident begins a new order rather than continuing
+    the stored one: a resume after a decision, or a distilling job started from nothing
+    but a session id, restarts at 1. No port exposes a session's highest stored
+    position, and the only read that would produce one is an unindexed scan of a JSON
+    field in both backends, which is a large price for an ordering that is already
+    settled by the run each event belongs to.
+    """
+
+    def __init__(self, capacity: int = 256) -> None:
+        """Start empty.
+
+        Args:
+            capacity: How many sessions keep their place. Far above any real
+                concurrency, so what is evicted is a session that stopped emitting
+                thousands of incidents ago; an unbounded map in a served process is the
+                alternative.
+        """
+        self._capacity = capacity
+        self._allocators: dict[str, SequenceAllocator] = {}
+
+    def for_session(self, session_id: str) -> SequenceAllocator:
+        """The allocator this session's journals write through.
+
+        Args:
+            session_id: The incident.
+
+        Returns:
+            The session's allocator, created on first use.
+        """
+        allocator = self._allocators.get(session_id)
+        if allocator is None:
+            allocator = SequenceAllocator()
+            self._allocators[session_id] = allocator
+            while len(self._allocators) > self._capacity:
+                self._allocators.pop(next(iter(self._allocators)))
+        return allocator
+
+
 class Journal:
     """Stamps and writes a run's events.
 
-    Owns the sequence number so ordering is a property of the log rather than of the
-    clock: two events written in the same millisecond still have a defined order, which
-    matters because the interesting questions are about what followed what.
+    Ordering is a property of the log rather than of the clock: two events written in
+    the same millisecond still have a defined order, which matters because the
+    interesting questions are about what followed what. The order is the session's, so
+    the allocator is shared by every stage's journal rather than owned by one of them.
     """
 
     def __init__(
@@ -81,6 +160,7 @@ class Journal:
         stage: str,
         run_id: str | None = None,
         now: Callable[[], datetime] | None = None,
+        sequence: SequenceAllocator | None = None,
     ) -> None:
         """Build a journal for one stage of one session.
 
@@ -90,22 +170,25 @@ class Journal:
             stage: The role or mechanism these events occur under.
             run_id: The attempt within the session, when there is one.
             now: Clock override, for tests.
+            sequence: The session's position allocator. A journal given none allocates
+                alone, which only orders its own events.
         """
         self._sink = sink or NullSink()
         self._session_id = session_id
         self._stage = stage
         self._run_id = run_id
         self._now = now or (lambda: datetime.now(UTC))
-        self._sequence = 0
+        self._sequence = sequence or SequenceAllocator()
+        self._last = 0
 
     @property
     def sequence(self) -> int:
-        """How many events have been written.
+        """The position of the last event written through this journal.
 
         Returns:
-            The current sequence number.
+            The position, or zero before anything is written.
         """
-        return self._sequence
+        return self._last
 
     def record(self, payload: EventPayload) -> AuditEvent:
         """Write one event.
@@ -120,10 +203,10 @@ class Journal:
         Returns:
             The stamped event, whether or not the sink accepted it.
         """
-        self._sequence += 1
+        self._last = self._sequence.allocate()
         event = AuditEvent(
             session_id=self._session_id,
-            sequence=self._sequence,
+            sequence=self._last,
             stage=self._stage,
             run_id=self._run_id,
             occurred_at=self._now(),

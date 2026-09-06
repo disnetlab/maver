@@ -6,8 +6,10 @@ the system's auditability claim rests on, and until now it reached a sink that d
 it: the events were built, ordered and stamped, and then dropped.
 
 The order is the journal's, not the store's. A sequence number is allocated per session
-before the write, because timestamps have collided at the resolution these stores use and
-the interesting questions are all about what followed what.
+before the write — by one allocator every stage's journal shares — because timestamps
+have collided at the resolution these stores use and the interesting questions are all
+about what followed what. The store's own ``seq`` remains per run, so the session's order
+is the one in the payload.
 
 A failure to record is logged and swallowed. An incident that is being handled correctly
 must not be ended by an audit write, and a lost event is visible as a gap in the sequence

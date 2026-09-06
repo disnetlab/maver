@@ -319,7 +319,12 @@ def _recovered_state(deployment: Deployment, start: EpisodeStart) -> IncidentSta
 
 def _journal(deployment: Deployment, session_id: str) -> Journal:
     """The episode's own log, which belongs to the environment rather than to a role."""
-    return Journal(deployment.sink, session_id=session_id, stage="environment")
+    return Journal(
+        deployment.sink,
+        session_id=session_id,
+        stage="environment",
+        sequence=deployment.sequences.for_session(session_id),
+    )
 
 
 def _bind(deployment: Deployment, adapter: EnvironmentAdapter) -> Deployment:

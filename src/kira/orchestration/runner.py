@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from kira.adapters.base import AdapterTool
-from kira.audit.journal import EventSink, Journal, NullSink
+from kira.audit.journal import EventSink, Journal, NullSink, SequenceRegistry
 from kira.contracts.events import StageEvent
 from kira.contracts.lifecycle import RunStatus
 from kira.contracts.routing import HandBack, Route
@@ -128,6 +128,10 @@ class Deployment:
     tool_extras: tuple[AdapterTool, ...] = ()
     """Tools an environment adapter supplies, each carrying the roles allowed them."""
     sink: EventSink = field(default_factory=NullSink)
+    sequences: SequenceRegistry = field(default_factory=SequenceRegistry)
+    """The event position each session's journals share. Per deployment for the same
+    reason the write lock is: a session is written by a journal per stage, and an order
+    that restarts with each of them orders nothing."""
     write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     """One cluster writer per process. Held here rather than in a module global so two
     deployments in one process are genuinely independent, which is what makes the
@@ -364,7 +368,12 @@ def _second_pass_node(
                 trace_summaries=tuple(delta.get("trace_summaries", ())),
             )
 
-        journal = Journal(deployment.sink, session_id=state.get("session_id", ""), stage="rca")
+        journal = Journal(
+            deployment.sink,
+            session_id=state.get("session_id", ""),
+            stage="rca",
+            sequence=deployment.sequences.for_session(state.get("session_id", "")),
+        )
         tools = tool_context_for(deployment, resources, "rca", state.get("session_id", ""), journal)
 
         async def snapshot() -> str:
@@ -475,6 +484,7 @@ def _context_builder(
             session_id=state.get("session_id", ""),
             stage=spec.name,
             run_id=run_id,
+            sequence=deployment.sequences.for_session(state.get("session_id", "")),
         )
         tools = tool_context_for(
             deployment,
@@ -576,7 +586,12 @@ async def run_incident(
             incident_dir=resources.incident_dir,
             shared_dir=resources.shared_dir,
         )
-        journal = Journal(deployment.sink, session_id=session_id, stage="pipeline")
+        journal = Journal(
+            deployment.sink,
+            session_id=session_id,
+            stage="pipeline",
+            sequence=deployment.sequences.for_session(session_id),
+        )
         # Written before any role runs, and first. A campaign is reconstructible only if
         # the configuration it ran under is in the record beside its result.
         journal.record(
@@ -779,7 +794,12 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
     # role. The gate keeps the full label, which is what its write policy is written in.
     role = stage_role(checkpoint.stage)
     async with incident_context(checkpoint.session_id, alert, deployment) as resources:
-        journal = Journal(deployment.sink, session_id=checkpoint.session_id, stage=checkpoint.stage)
+        journal = Journal(
+            deployment.sink,
+            session_id=checkpoint.session_id,
+            stage=checkpoint.stage,
+            sequence=deployment.sequences.for_session(checkpoint.session_id),
+        )
         tools = tool_context_for(deployment, resources, role, checkpoint.session_id, journal)
         content = await _replay(checkpoint, record, tools, deployment, journal)
         for event in resume_events(checkpoint, record, result_chars=len(content)):
