@@ -18,6 +18,7 @@ request is described rather than a bare marker, and one per model call is nothin
 the tool results this same log already carries.
 """
 
+import asyncio
 import time
 from dataclasses import dataclass
 
@@ -68,12 +69,19 @@ class RecordingCompletion:
         started = time.monotonic()
         try:
             response = await self.inner.complete(request, caller=caller)
-        except Exception as exc:
+        except BaseException as exc:
             # A call that failed is still a call that was made, and this one has already
             # cost every retry the client spent on it. Recorded rather than raised past,
             # because the rule is that a model call anywhere is counted — and because a
             # started row with nothing after it is how the log says the process died,
             # which a terminal failure is not.
+            #
+            # BaseException, because cancellation is one of the designed outcomes here:
+            # the selector and the distilling pass are each bounded by a wait_for, and a
+            # call cancelled on that bound has already burned a full prefill and
+            # whatever it generated before it. Caught as Exception, those two were the
+            # calls this module exists to stop from escaping accounting, and a routine
+            # timeout was indistinguishable in the log from an OOM kill.
             self.journal.record(
                 ModelCallEvent(
                     caller=caller,
@@ -84,7 +92,9 @@ class RecordingCompletion:
                     ).as_record(),
                     duration_ms=int((time.monotonic() - started) * 1000),
                     attempt=getattr(exc, "attempts", 1),
-                    error=f"{type(exc).__name__}: {exc}",
+                    error="cancelled"
+                    if isinstance(exc, asyncio.CancelledError)
+                    else f"{type(exc).__name__}: {exc}",
                 )
             )
             raise

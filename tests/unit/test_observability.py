@@ -1,5 +1,6 @@
 """Counting every model call, and the spans that go with them."""
 
+import asyncio
 import pathlib
 from typing import Any
 
@@ -203,3 +204,28 @@ async def test_a_call_that_failed_is_still_a_call_that_was_counted() -> None:
     failed = sink.events[-1].payload
     assert failed.error is not None and "Connection error." in failed.error
     assert failed.sampling["digest"] == RESOLVED.digest
+
+
+async def test_a_cancelled_call_is_counted_like_any_other() -> None:
+    """The selector and the distilling pass are each bounded by a ``wait_for``, and a
+    cancelled call has already burned a full prefill. Caught as ``Exception``, those two
+    left a started row and nothing after it — which is how the log says the process
+    died, so a routine timeout read as an OOM kill and its cost was never counted."""
+
+    class Slow:
+        async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
+            await asyncio.sleep(10)
+            raise AssertionError("the bound should have cancelled this")
+
+    sink = ListSink()
+    recorder = RecordingCompletion(
+        Slow(), Journal(sink, session_id="s1", stage="rca"), PROFILE, RESOLVED
+    )
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(
+            recorder.complete(request(), caller="secondpass.selector"), timeout=0.05
+        )
+
+    assert [e.payload.kind for e in sink.events] == ["model_call_started", "model_call"]
+    assert cost_of(sink).payload.error == "cancelled"
