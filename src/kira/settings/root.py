@@ -499,7 +499,10 @@ def arm_overrides(settings: Settings) -> ArmOverrides:
     arm = resolved_arm(settings)
     if arm is None:
         return ArmOverrides({}, {})
-    found = arm.contradicted_by(settings.model_dump(mode="json"))
+    resolved = settings.model_dump(mode="json")
+    # An arm's own name and directory are how it was selected, not settings it varies.
+    baseline = _unconfigured_tree() | {k: resolved[k] for k in ("arm", "arm_dir")}
+    found = arm.contradicted_by(resolved, baseline)
     broken = {path: pair for path, pair in found.items() if arm.is_held_constant(path)}
 
     # A sampling override displaces the profile without touching any path the arm
@@ -511,6 +514,28 @@ def arm_overrides(settings: Settings) -> ArmOverrides:
         for knob, value in sorted(settings.sampling_overrides().items()):
             broken[f"model.overrides.{knob}"] = (f"the {arm.name} profile", value)
     return ArmOverrides({p: v for p, v in found.items() if p not in broken}, broken)
+
+
+def _unconfigured_tree() -> dict[str, Any]:
+    """Render the settings tree with nothing supplied, as the arm comparison's baseline.
+
+    Built from the declared defaults rather than by constructing the groups, because
+    constructing one runs that group's own environment chain and what this needs is
+    precisely the tree an empty environment would produce.
+
+    Returns:
+        A JSON-safe mapping of every setting at its default.
+    """
+
+    def build(model: type[BaseSettings]) -> BaseSettings:
+        groups: dict[str, Any] = {
+            name: build(info.annotation)
+            for name, info in model.model_fields.items()
+            if isinstance(info.annotation, type) and issubclass(info.annotation, BaseSettings)
+        }
+        return model.model_construct(**groups)
+
+    return build(Settings).model_dump(mode="json")
 
 
 def load_settings() -> Settings:

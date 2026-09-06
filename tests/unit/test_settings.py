@@ -16,6 +16,7 @@ from kira.settings.authority import AuthorityRule, AuthoritySettings
 from kira.settings.root import (
     AliasedField,
     _iter_aliases,
+    arm_overrides,
     reset_settings,
     unknown_prefixed_names,
 )
@@ -329,6 +330,31 @@ class TestArmFiles:
         monkeypatch.setenv("MAX_TURNS", "8")
         with pytest.raises(ValueError, match="holds constant"):
             load_settings()
+
+    def test_a_held_constant_path_the_arm_does_not_write_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every shipped arm holds the model profile and ``runtime.*`` constant and
+        declares neither, so a claim enforced only where the file happens to write is a
+        claim enforced nowhere: the arm's own digest went into the run record while the
+        campaign ran on another model."""
+        monkeypatch.setenv("KIRA_ARM", "ma-s")
+        monkeypatch.setenv("KIRA_MODEL__PROFILE", "qwen3.8-27b")
+        with pytest.raises(ValueError, match=r"model\.profile"):
+            load_settings()
+        monkeypatch.delenv("KIRA_MODEL__PROFILE")
+        monkeypatch.setenv("LLM_REPEAT_CALL_SOFT_LIMIT", "4")
+        with pytest.raises(ValueError, match=r"runtime\.repeat_call_soft"):
+            load_settings()
+
+    def test_an_override_outside_the_held_constant_set_is_reported_not_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Overriding one key without editing a frozen file is the deployment contract
+        working, so it belongs in the report rather than in a refusal."""
+        monkeypatch.setenv("KIRA_ARM", "ma")
+        monkeypatch.setenv("KIRA_MEMORY__TOP_K", "9")
+        assert arm_overrides(load_settings()).allowed["memory.top_k"] == (5, 9)
 
     def test_the_arm_reaches_the_run_record(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A frozen arm carries a published number, so a later edit has to be detectable."""

@@ -30,6 +30,16 @@ __all__ = [
 ]
 
 
+_ARM_FILE_SPELLING = {"model.profile": "model_profile"}
+"""Settings paths an arm file spells differently, because it declares them as its own.
+
+The profile is a field of the arm rather than a line in its ``settings:`` block, so
+``holds_constant`` names it ``model_profile`` while the tree it lands in calls it
+``model.profile``. Without the bridge the one path every arm holds constant matches
+nothing.
+"""
+
+
 class Registration(BaseModel):
     """When and why an arm was created."""
 
@@ -150,12 +160,21 @@ class Arm(BaseModel):
             path: A dotted setting path.
 
         Returns:
-            True when any held-constant pattern matches.
+            True when any held-constant pattern matches, under either spelling of a
+            path an arm file names differently from the settings tree.
         """
-        return any(fnmatch(path, pattern) for pattern in self.holds_constant)
+        spellings = {path, _ARM_FILE_SPELLING.get(path, path)}
+        return any(fnmatch(s, pattern) for s in spellings for pattern in self.holds_constant)
 
-    def contradicted_by(self, resolved: dict[str, Any]) -> dict[str, tuple[Any, Any]]:
-        """Find settings this arm declares that the resolved configuration does not carry.
+    def contradicted_by(
+        self, resolved: dict[str, Any], defaults: dict[str, Any]
+    ) -> dict[str, tuple[Any, Any]]:
+        """Find where the resolved configuration departs from the one this arm names.
+
+        The comparison is against the whole tree the arm resolves to, not against the
+        keys it happens to write. An arm holds paths constant that it never declares —
+        every shipped one holds ``runtime.*`` and declares no runtime key — and a claim
+        checkable only where the file writes is not a claim.
 
         The environment outranks an arm file by design, so a difference here is not by
         itself a fault: an operator overriding one key without editing a frozen file is
@@ -165,16 +184,17 @@ class Arm(BaseModel):
 
         Args:
             resolved: The settings tree the process actually resolved.
+            defaults: The settings tree with nothing supplied, which this arm overlays.
 
         Returns:
-            Dotted path to the declared and resolved pair, empty when the file applied
-            as written.
+            Dotted path to the arm's value and the resolved one, empty when the arm
+            applied as written.
         """
         actual = _flatten(resolved)
         return {
-            path: (declared, actual[path])
-            for path, declared in _flatten(self.overlay()).items()
-            if path in actual and actual[path] != declared
+            path: (intended, actual[path])
+            for path, intended in _flatten(self.apply_to(defaults)).items()
+            if path in actual and actual[path] != intended
         }
 
     def constant_values(self, resolved: dict[str, Any]) -> dict[str, Any]:

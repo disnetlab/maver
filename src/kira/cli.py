@@ -175,7 +175,7 @@ def config_check() -> None:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2) from exc
     for path, (declared, actual) in sorted(overridden.items()):
-        typer.echo(f"arm override: {path} = {actual} (arm {settings.arm} says {declared})")
+        typer.echo(f"arm override: {path} = {actual} (arm {settings.arm} resolves {declared})")
     typer.echo("ok")
 
 
