@@ -605,22 +605,38 @@ class MemoryStoreContract:
         assert read.notes == "notehere"
         assert read.checkpoint == {"buffer": "ab"}
 
+        # The model names the tool and mints the tool-call id, so every column carrying
+        # one is as exposed as the payload. A raise here comes back out of the approval
+        # gate as an unhandled error rather than as the pause the caller expects.
         store.create_request(
             a_request(
                 "req-1",
                 session.session_id,
+                kind=f"tool{NUL}call",
+                stage=f"exec{NUL}ution",
                 summary=f"delete{NUL}pod",
                 payload={"args": [f"kubectl{NUL}delete"]},
+                tool_call_id=f"call{NUL}1",
+                tool_name=f"kube{NUL}ctl",
+                decided_by=f"op{NUL}erator",
             )
         )
         request = store.get_request("req-1")
         assert request is not None
+        assert request.kind == "toolcall"
+        assert request.stage == "execution"
         assert request.summary == "deletepod"
         assert request.payload == {"args": ["kubectldelete"]}
+        assert request.tool_call_id == "call1"
+        assert request.tool_name == "kubectl"
+        assert request.decided_by == "operator"
 
         store.start_run(
             a_run(
-                "run-1", session.session_id, agent_name="execution", metadata={"note": f"m{NUL}eta"}
+                "run-1",
+                session.session_id,
+                agent_name=f"exec{NUL}ution",
+                metadata={"note": f"m{NUL}eta"},
             )
         )
         appended = store.append_event(
@@ -628,15 +644,28 @@ class MemoryStoreContract:
                 "event-1",
                 "run-1",
                 session.session_id,
-                event_type="tool_result",
+                event_type=f"tool{NUL}result",
                 payload={"result": f"binary{NUL}output"},
+                role=f"exec{NUL}ution",
+                tool_call_id=f"call{NUL}1",
+                tool_name=f"kube{NUL}ctl",
             )
         )
         store.finish_run("run-1", status="failed", error=f"boom{NUL}", output={"x": f"y{NUL}z"})
         assert appended.payload == {"result": "binaryoutput"}
-        assert store.events_for("run-1")[0].payload == {"result": "binaryoutput"}
+        assert appended.event_type == "toolresult"
+        assert appended.role == "execution"
+        assert appended.tool_call_id == "call1"
+        assert appended.tool_name == "kubectl"
+        stored_event = store.events_for("run-1")[0]
+        assert stored_event.payload == {"result": "binaryoutput"}
+        assert stored_event.event_type == "toolresult"
+        assert stored_event.role == "execution"
+        assert stored_event.tool_call_id == "call1"
+        assert stored_event.tool_name == "kubectl"
         run = store.get_run("run-1")
         assert run is not None
+        assert run.agent_name == "execution"
         assert run.metadata == {"note": "meta"}
         assert run.error == "boom"
         assert run.output == {"x": "yz"}

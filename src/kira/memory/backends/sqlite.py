@@ -437,8 +437,13 @@ class SqliteStore:
         """
         stored = replace(
             record,
+            kind=scrub_text(record.kind),
+            stage=scrub_text(record.stage),
             summary=scrub_text(record.summary),
+            tool_call_id=scrub_optional(record.tool_call_id),
+            tool_name=scrub_optional(record.tool_name),
             prompt=scrub_optional(record.prompt),
+            decided_by=scrub_text(record.decided_by),
             reason=scrub_optional(record.reason),
             created_at=record.created_at or _now(),
         )
@@ -603,7 +608,7 @@ class SqliteStore:
                 (
                     record.agent_run_id,
                     record.pipeline_id,
-                    record.agent_name,
+                    scrub_text(record.agent_name),
                     record.attempt,
                     record.status,
                     record.started_at,
@@ -712,11 +717,20 @@ class SqliteStore:
         Returns:
             The stored record, carrying the sequence it was given.
         """
+        # The model chooses the tool name and the tool-call id, so these columns carry
+        # model output as directly as the payload does.
+        stored = replace(
+            event,
+            event_type=scrub_text(event.event_type),
+            role=scrub_optional(event.role),
+            tool_call_id=scrub_optional(event.tool_call_id),
+            tool_name=scrub_optional(event.tool_name),
+        )
         with self._db.write() as conn:
             seq = int(
                 conn.execute(
                     "SELECT COALESCE(MAX(seq), 0) + 1 FROM agent_run_events WHERE agent_run_id = ?",
-                    (event.agent_run_id,),
+                    (stored.agent_run_id,),
                 ).fetchone()[0]
             )
             conn.execute(
@@ -724,29 +738,29 @@ class SqliteStore:
                 "event_type, role, tool_call_id, tool_name, payload_json, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    event.event_id,
-                    event.agent_run_id,
-                    event.pipeline_id,
+                    stored.event_id,
+                    stored.agent_run_id,
+                    stored.pipeline_id,
                     seq,
-                    event.event_type,
-                    event.role,
-                    event.tool_call_id,
-                    event.tool_name,
-                    _dumps(event.payload),
-                    event.created_at,
+                    stored.event_type,
+                    stored.role,
+                    stored.tool_call_id,
+                    stored.tool_name,
+                    _dumps(stored.payload),
+                    stored.created_at,
                 ),
             )
         return AgentRunEventRecord(
-            event_id=event.event_id,
-            agent_run_id=event.agent_run_id,
-            pipeline_id=event.pipeline_id,
+            event_id=stored.event_id,
+            agent_run_id=stored.agent_run_id,
+            pipeline_id=stored.pipeline_id,
             seq=seq,
-            event_type=event.event_type,
-            payload=scrub_mapping(event.payload),
-            created_at=event.created_at,
-            role=event.role,
-            tool_call_id=event.tool_call_id,
-            tool_name=event.tool_name,
+            event_type=stored.event_type,
+            payload=scrub_mapping(stored.payload),
+            created_at=stored.created_at,
+            role=stored.role,
+            tool_call_id=stored.tool_call_id,
+            tool_name=stored.tool_name,
         )
 
     def events_for(self, agent_run_id: str) -> list[AgentRunEventRecord]:

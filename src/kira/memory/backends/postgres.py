@@ -709,8 +709,13 @@ class PostgresStore:
         """
         stored = replace(
             record,
+            kind=scrub_text(record.kind),
+            stage=scrub_text(record.stage),
             summary=scrub_text(record.summary),
+            tool_call_id=scrub_optional(record.tool_call_id),
+            tool_name=scrub_optional(record.tool_name),
             prompt=scrub_optional(record.prompt),
+            decided_by=scrub_text(record.decided_by),
             reason=scrub_optional(record.reason),
             created_at=record.created_at or _now().isoformat(),
         )
@@ -859,7 +864,7 @@ class PostgresStore:
                     self.corpus_id,
                     record.agent_run_id,
                     record.pipeline_id,
-                    record.agent_name,
+                    scrub_text(record.agent_name),
                     record.attempt,
                     record.status,
                     _instant(record.started_at),
@@ -1011,6 +1016,15 @@ class PostgresStore:
     def _insert_event(self, event: AgentRunEventDraft) -> AgentRunEventRecord:
         """Insert one event, allocating its sequence in the same statement."""
         payload = scrub_mapping(event.payload)
+        # The model chooses the tool name and the tool-call id, so these columns carry
+        # model output as directly as the payload does.
+        stored = replace(
+            event,
+            event_type=scrub_text(event.event_type),
+            role=scrub_optional(event.role),
+            tool_call_id=scrub_optional(event.tool_call_id),
+            tool_name=scrub_optional(event.tool_name),
+        )
         with self._db.write() as conn:
             row = conn.execute(
                 "INSERT INTO agent_run_events (corpus_id, event_id, agent_run_id, pipeline_id, "
@@ -1021,34 +1035,34 @@ class PostgresStore:
                 "%s, %s, %s, %s, %s, %s) RETURNING seq",
                 (
                     self.corpus_id,
-                    event.event_id,
-                    event.agent_run_id,
-                    event.pipeline_id,
+                    stored.event_id,
+                    stored.agent_run_id,
+                    stored.pipeline_id,
                     self.corpus_id,
-                    event.agent_run_id,
-                    event.event_type,
-                    event.role,
-                    event.tool_call_id,
-                    event.tool_name,
+                    stored.agent_run_id,
+                    stored.event_type,
+                    stored.role,
+                    stored.tool_call_id,
+                    stored.tool_name,
                     Jsonb(payload),
-                    _instant(event.created_at),
+                    _instant(stored.created_at),
                 ),
             ).fetchone()
         if row is None:
             # RETURNING on an INSERT that did not raise always has a row, so this is a
             # driver that has stopped meaning what it says rather than a case to handle.
-            raise RuntimeError(f"no sequence came back for event {event.event_id}")
+            raise RuntimeError(f"no sequence came back for event {stored.event_id}")
         return AgentRunEventRecord(
-            event_id=event.event_id,
-            agent_run_id=event.agent_run_id,
-            pipeline_id=event.pipeline_id,
+            event_id=stored.event_id,
+            agent_run_id=stored.agent_run_id,
+            pipeline_id=stored.pipeline_id,
             seq=int(row["seq"]),
-            event_type=event.event_type,
+            event_type=stored.event_type,
             payload=payload,
-            created_at=event.created_at,
-            role=event.role,
-            tool_call_id=event.tool_call_id,
-            tool_name=event.tool_name,
+            created_at=stored.created_at,
+            role=stored.role,
+            tool_call_id=stored.tool_call_id,
+            tool_name=stored.tool_name,
         )
 
 
