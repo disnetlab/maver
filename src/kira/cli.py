@@ -23,12 +23,11 @@ from pydantic import ValidationError
 
 from kira import __version__
 from kira.adapters.registry import available_adapters
-from kira.api.app import enabled_adapters
+from kira.api.app import enabled_adapters, validate_deployment
 from kira.api.hitl import request_payload
 from kira.memory.factory import build_storage
 from kira.memory.ports import ApprovalStatus, ApprovalStore
-from kira.roles.registry import RoleRegistryError, validate_roles
-from kira.settings.profiles import load_profile
+from kira.roles.registry import RoleRegistryError
 from kira.settings.root import Settings, arm_overrides, legacy_names_in_use, load_settings
 
 app = typer.Typer(
@@ -164,14 +163,13 @@ def config_check() -> None:
     """
     try:
         settings = load_settings()
-        load_profile(settings.model.profile, settings.model.profile_dir)
-        validate_roles()
+        validate_deployment(settings)
         overridden = arm_overrides(settings).allowed
     except ValidationError as exc:
         for error in exc.errors():
             typer.echo(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}", err=True)
         raise typer.Exit(code=2) from exc
-    except (FileNotFoundError, RoleRegistryError, ValueError) as exc:
+    except (FileNotFoundError, RoleRegistryError, RuntimeError, ValueError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2) from exc
     for path, (declared, actual) in sorted(overridden.items()):

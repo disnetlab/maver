@@ -49,19 +49,55 @@ from kira.orchestration.jobs import (
 from kira.orchestration.runner import Deployment
 from kira.orchestration.scheduler import shutdown_scheduler
 from kira.roles.registry import validate_roles
+from kira.secondpass.strategies import policy_for
 from kira.settings.authority import Mode
 from kira.settings.profiles import load_profile
 from kira.settings.root import Settings, load_settings
 from kira.tools.transport.base import ToolTransport
 from kira.tools.transport.direct import direct_transport
 
-__all__ = ["API_PREFIX", "build_deployment", "create_app", "enabled_adapters"]
+__all__ = [
+    "API_PREFIX",
+    "build_deployment",
+    "create_app",
+    "enabled_adapters",
+    "validate_deployment",
+]
 
 _log = logging.getLogger(__name__)
 
 API_PREFIX = "/api/v1"
 """Where the incident and decision routes live. The health routes sit above it, because
 a Kubernetes probe should not have to know the API's version."""
+
+
+def validate_deployment(settings: Settings) -> None:
+    """Refuse a configuration this process cannot serve, before it serves anything.
+
+    The one place these checks live, so that ``kira config check`` answers for the
+    configuration ``serve`` builds rather than for a similar one. Every check the two
+    did not share was a green pre-flight on a deployment that then crash-looped: an
+    override declaring a marker nothing fills, a ranker nothing registered, or a
+    gate-and-delivery pair naming no composition, which reached only the first incident
+    because it was resolved inside the graph.
+
+    The stores are opened and closed again, because a store that cannot be opened is a
+    startup failure and there is no cheaper way to find out.
+
+    Args:
+        settings: The resolved configuration.
+
+    Raises:
+        FileNotFoundError: When the configured model profile does not exist.
+        RoleRegistryError: When a role cannot terminate or cannot be prompted.
+        SecondPassConfigError: When the configured gate and delivery name no
+            composition.
+        ValueError: When the configured storage backend or ranker is not installed.
+    """
+    load_profile(settings.model.profile, settings.model.profile_dir)
+    validate_roles(override_dir=settings.prompts.override_dir)
+    policy_for(settings.memory.second_pass, settings.memory)
+    build_storage(settings).close()
 
 
 def build_deployment(settings: Settings) -> Deployment:
@@ -78,10 +114,12 @@ def build_deployment(settings: Settings) -> Deployment:
         RoleRegistryError: When a role cannot terminate or cannot be prompted. Checked
             here, at startup, because the alternative is a run that burns its whole turn
             budget and reports what looks like a model failure.
+        SecondPassConfigError: When the configured gate and delivery name no
+            composition.
         ValueError: When the configured storage backend is not installed.
     """
+    validate_deployment(settings)
     profile = load_profile(settings.model.profile, settings.model.profile_dir)
-    validate_roles(override_dir=settings.prompts.override_dir)
     storage = build_storage(settings)
 
     def transport_for(session_id: str) -> ToolTransport:

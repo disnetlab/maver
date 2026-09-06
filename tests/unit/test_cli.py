@@ -9,11 +9,13 @@ import pytest
 from typer.testing import CliRunner
 
 from kira import __version__
+from kira.api.app import build_deployment
 from kira.cli import app
 from kira.memory.factory import build_storage
 from kira.memory.ports import ApprovalRecord
+from kira.roles.registry import RoleRegistryError
 from kira.settings.groups import ServerSettings
-from kira.settings.root import Settings
+from kira.settings.root import Settings, load_settings
 
 runner = CliRunner()
 
@@ -87,3 +89,37 @@ def test_approvals_read_and_decide_the_configured_store(
     decided = runner.invoke(app, ["approvals", "approve", "r1", "--by", "an operator"])
     assert decided.exit_code == 0
     assert runner.invoke(app, ["approvals", "approve", "r1"]).exit_code == 1
+
+
+def _unfilled_marker(tmp_path: pathlib.Path) -> dict[str, str]:
+    (tmp_path / "prompts" / "roles").mkdir(parents=True)
+    (tmp_path / "prompts" / "roles" / "rca.txt").write_text("{{TYPO_MARKER}}", encoding="utf-8")
+    return {"KIRA_PROMPTS__OVERRIDE_DIR": str(tmp_path / "prompts")}
+
+
+BROKEN_DEPLOYMENTS = {
+    "an override declaring a marker nothing fills": _unfilled_marker,
+    "a ranker nothing registered": lambda _: {"KIRA_MEMORY__RANKER": "not-a-ranker"},
+    "a gate and delivery naming no composition": lambda _: {
+        "KIRA_MEMORY__SECOND_PASS__ENABLED": "true",
+        "KIRA_MEMORY__SECOND_PASS__GATE": "always",
+        "KIRA_MEMORY__SECOND_PASS__DELIVERY": "context",
+    },
+}
+
+
+@pytest.mark.parametrize("case", sorted(BROKEN_DEPLOYMENTS), ids=lambda c: c.replace(" ", "-"))
+def test_config_check_and_serve_share_validation(
+    case: str, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The command's whole purpose is to catch a misconfigured deployment before an
+    incident does. It ran a subset of what the server runs, so each of these printed ok
+    and exit 0 on a configuration that crash-loops the pod, and the composition table was
+    resolved inside the graph so it reached only the first incident."""
+    monkeypatch.setenv("KIRA_SERVER__WORKDIR", str(tmp_path / "workspace"))
+    for name, value in BROKEN_DEPLOYMENTS[case](tmp_path).items():
+        monkeypatch.setenv(name, value)
+
+    assert runner.invoke(app, ["config", "check"]).exit_code == 2
+    with pytest.raises((RoleRegistryError, RuntimeError, ValueError)):
+        build_deployment(load_settings())
