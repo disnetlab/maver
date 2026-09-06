@@ -203,7 +203,10 @@ class TestToolCallNormalisation:
         ids = [c.id for c in response.tool_calls]
         assert len(set(ids)) == 3
         assert all(ids)
-        assert sum(c.id_synthesised for c in response.tool_calls) == 2
+        assert response.notes == (
+            "synthesised missing tool_call_id -> call_0_a",
+            "synthesised duplicate tool_call_id -> call_2_c",
+        )
         assert any("synthesised" in note for note in response.notes)
 
 

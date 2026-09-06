@@ -229,3 +229,34 @@ async def test_a_cancelled_call_is_counted_like_any_other() -> None:
 
     assert [e.payload.kind for e in sink.events] == ["model_call_started", "model_call"]
     assert cost_of(sink).payload.error == "cancelled"
+
+
+async def test_a_repair_the_client_made_reaches_the_event() -> None:
+    """A repeated tool-call identifier drops a result wherever results are matched to
+    calls by identifier, and the transcript then carries an identifier the provider
+    never sent. The repair is a harness intervention on the record, and the field that
+    documents itself as recorded on the audit event reached no event at all."""
+
+    class Repairing:
+        async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
+            return ModelResponse(
+                text=None,
+                tool_calls=(),
+                finish_reason="stop",
+                reasoning=None,
+                usage=Usage(),
+                duration_ms=1,
+                attempts=1,
+                notes=("synthesised duplicate tool_call_id -> call_1_get_promql",),
+            )
+
+    sink = ListSink()
+    recorder = RecordingCompletion(
+        Repairing(), Journal(sink, session_id="s1", stage="rca"), PROFILE, RESOLVED
+    )
+
+    await recorder.complete(request(), caller="rca")
+
+    assert cost_of(sink).payload.notes == [
+        "synthesised duplicate tool_call_id -> call_1_get_promql"
+    ]

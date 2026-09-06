@@ -53,7 +53,6 @@ class ToolCall:
     synthesised identifier appears in the echoed message and in the matching result.
     """
     parse_error: str | None = None
-    id_synthesised: bool = False
 
 
 @dataclass(frozen=True, slots=True)

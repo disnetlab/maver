@@ -117,6 +117,16 @@ class ModelCallEvent(BaseModel):
     duration_ms: int
     attempt: int = Field(default=1, description="1 for the first try, higher on retry.")
     error: str | None = None
+    notes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "What the client repaired in this response before anything above it saw "
+            "it. A repeated tool-call identifier drops a result wherever results are "
+            "matched to calls by identifier, and the transcript then shows an "
+            "identifier the provider never sent, so the repair is a harness "
+            "intervention on the record and belongs in it."
+        ),
+    )
 
 
 class ToolCallEvent(BaseModel):

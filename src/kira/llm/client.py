@@ -166,11 +166,9 @@ def _normalise_tool_calls(raw_calls: list[Any]) -> tuple[list[ToolCall], list[st
             raw_args = "{}"
 
         call_id = str(getattr(raw, "id", "") or "")
-        synthesised = False
         if not call_id or call_id in seen:
             reason = "missing" if not call_id else "duplicate"
             call_id = f"call_{index}_{name or 'unnamed'}"
-            synthesised = True
             notes.append(f"synthesised {reason} tool_call_id -> {call_id}")
         seen.add(call_id)
 
@@ -181,7 +179,6 @@ def _normalise_tool_calls(raw_calls: list[Any]) -> tuple[list[ToolCall], list[st
                 arguments=arguments,
                 raw_arguments=str(raw_args),
                 parse_error=parse_error,
-                id_synthesised=synthesised,
             )
         )
     return calls, notes
@@ -559,6 +556,7 @@ class LLMClient:
                 finish_reason=response.finish_reason,
                 duration_ms=duration_ms,
                 attempt=attempt,
+                notes=response.notes,
             )
             return response
 
@@ -611,6 +609,7 @@ class LLMClient:
         duration_ms: int,
         attempt: int,
         error: str | None = None,
+        notes: Sequence[str] = (),
     ) -> None:
         if self._sink is None:
             return
@@ -628,6 +627,7 @@ class LLMClient:
                 duration_ms=duration_ms,
                 attempt=attempt,
                 error=error,
+                notes=list(notes),
             )
         )
 

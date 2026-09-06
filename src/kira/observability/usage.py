@@ -112,6 +112,7 @@ class RecordingCompletion:
                 # tries it took. The client's own sink is where a deployment that wants
                 # per-attempt detail gets it; recording both here would double-count.
                 attempt=response.attempts,
+                notes=list(response.notes),
             )
         )
         return response
