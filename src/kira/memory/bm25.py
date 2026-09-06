@@ -24,9 +24,10 @@ from collections.abc import Sequence
 
 __all__ = ["DEFAULT_B", "DEFAULT_EPSILON", "DEFAULT_K1", "rank", "scores", "tokenize"]
 
-# Lowercased alphanumeric runs, the tokenisation the offline harness scored with.
-# Deliberately no stemming and no stopword list: a database applies both when it builds
-# a candidate set, and applying them twice would score different text than was measured.
+# Lowercased alphanumeric runs, the tokenisation the offline harness scored with, over
+# the raw record text. Deliberately no stemming and no stopword list: kira.memory.lexemes
+# applies both once, for both backends, when the candidate pool is built, and applying
+# them again here would score different text than was measured.
 _TOKEN = re.compile(r"[a-z0-9]+")
 
 DEFAULT_K1 = 1.2

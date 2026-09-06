@@ -14,12 +14,22 @@ would make the embedded deployment a different retriever from the one that was m
 under the same name. See :mod:`kira.memory.bm25` and :mod:`kira.memory.retrieval`, which
 own the ranking.
 
+**The index is over normalised terms, not raw text.** FTS5's ``unicode61`` tokeniser has
+no stemmer and no stopword list, so an index over the raw text is a different candidate
+generator from the PostgreSQL one the campaign measured. Both backends therefore store
+the output of :mod:`kira.memory.lexemes` beside the raw text and index that, and both
+query it with the terms of the same normaliser, which is what makes the two pools equal
+for the same corpus and query rather than merely similar. The tokeniser keeps ``-`` and
+``.`` as token characters and folds no diacritics, because a normalised term can contain
+either and splitting ``10.96.0.1`` into four tokens would undo the normalisation.
+
 One connection, guarded by one lock. The alternative, a connection per call, is what the
 prototype did; it cannot address an in-memory database, and the store has to be reachable
 from the scheduler thread as well as the request thread.
 """
 
 import json
+import logging
 import sqlite3
 import threading
 import uuid
@@ -32,7 +42,7 @@ from typing import TYPE_CHECKING, Any
 
 from kira.contracts.lifecycle import LifecycleState, RunStatus
 from kira.memory.backends.sanitise import scrub, scrub_mapping, scrub_optional, scrub_text
-from kira.memory.bm25 import tokenize
+from kira.memory.lexemes import lexemes
 from kira.memory.lifecycle import check_transition
 from kira.memory.ports import (
     AgentRunEventDraft,
@@ -51,6 +61,8 @@ if TYPE_CHECKING:
     from kira.memory.ports import ApprovalStore, RunStore, SessionStore, TextSearch
 
 __all__ = ["SqliteRecordIndex", "SqliteStore"]
+
+_log = logging.getLogger(__name__)
 
 _OPERATIONAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -125,18 +137,30 @@ CREATE TABLE IF NOT EXISTS agent_run_events (
 CREATE INDEX IF NOT EXISTS idx_agent_run_events_run ON agent_run_events(agent_run_id, seq);
 """
 
-# Two indexed columns and one payload blob, which is the whole design: FTS5 decides
-# which rows could match, and nothing else. Foreign keys are deliberately absent
-# throughout: the four ports are separate so that a deployment can implement one
-# without the others, and a constraint here would silently make that impossible.
+# Two indexed columns of normalised terms, the raw text they came from, and one payload
+# blob, which is the whole design: FTS5 decides which rows could match, and nothing else.
+# The raw text is carried unindexed because it is what a record *is* and what BM25 scores;
+# only the terms decide the pool. Foreign keys are deliberately absent throughout: the
+# four ports are separate so that a deployment can implement one without the others, and
+# a constraint here would silently make that impossible.
 _RECORD_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
     session_id UNINDEXED,
-    evidence_text,
-    lesson_text,
-    payload_json UNINDEXED
+    evidence_text UNINDEXED,
+    lesson_text UNINDEXED,
+    evidence_terms,
+    lesson_terms,
+    payload_json UNINDEXED,
+    tokenize = "unicode61 tokenchars '-.' remove_diacritics 0"
 );
 """
+
+_RECORD_COLUMNS = "session_id, evidence_text, lesson_text, payload_json"
+_RECORD_INSERT = (
+    "INSERT INTO records_fts "
+    "(session_id, evidence_text, lesson_text, evidence_terms, lesson_terms, payload_json) "
+    "VALUES (?, ?, ?, ?, ?, ?)"
+)
 
 _TERMINAL_RUN_STATUSES = frozenset(
     {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
@@ -807,10 +831,44 @@ class SqliteRecordIndex:
         """
         self._db = connection if isinstance(connection, _Connection) else _Connection(connection)
         self._db.script(_RECORD_SCHEMA)
+        self._reindex_if_stale()
 
     def close(self) -> None:
         """Close the connection. A no-op worth calling only on a standalone index."""
         self._db.close()
+
+    def _reindex_if_stale(self) -> None:
+        """Rebuild the index if it predates the shared normaliser.
+
+        A database written before the terms columns existed has an FTS5 table over the
+        raw text, which answers a different query. FTS5 cannot add a column, so the table
+        is rebuilt from its own rows — the raw text is the source of truth and is carried
+        through unchanged. Corpora here are hundreds of records, so this costs a moment
+        once. Idempotent: after it runs, the shape check finds nothing to do.
+        """
+        with self._db.read() as conn:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(records_fts)")}
+            if "evidence_terms" in columns:
+                return
+            stored = conn.execute(f"SELECT {_RECORD_COLUMNS} FROM records_fts").fetchall()
+
+        _log.info("rebuilding the sqlite record index over normalised terms: %d rows", len(stored))
+        self._db.script("DROP TABLE records_fts;" + _RECORD_SCHEMA)
+        with self._db.write() as conn:
+            conn.executemany(
+                _RECORD_INSERT,
+                [
+                    (
+                        row["session_id"],
+                        row["evidence_text"] or "",
+                        row["lesson_text"] or "",
+                        _terms(row["evidence_text"]),
+                        _terms(row["lesson_text"]),
+                        row["payload_json"],
+                    )
+                    for row in stored
+                ],
+            )
 
     def upsert_summary(self, memory: SessionMemory) -> None:
         """Write or replace one record.
@@ -823,16 +881,19 @@ class SqliteRecordIndex:
             for field in fields(memory)
             if field.name not in ("session_id", "evidence_text", "lesson_text")
         }
+        evidence = scrub_text(memory.evidence_text)
+        lesson = scrub_text(memory.lesson_text)
         with self._db.write() as conn:
             # FTS5 has no upsert, and a session must not end up indexed twice.
             conn.execute("DELETE FROM records_fts WHERE session_id = ?", (memory.session_id,))
             conn.execute(
-                "INSERT INTO records_fts (session_id, evidence_text, lesson_text, payload_json) "
-                "VALUES (?, ?, ?, ?)",
+                _RECORD_INSERT,
                 (
                     memory.session_id,
-                    scrub_text(memory.evidence_text),
-                    scrub_text(memory.lesson_text),
+                    evidence,
+                    lesson,
+                    _terms(evidence),
+                    _terms(lesson),
                     _dumps(payload),
                 ),
             )
@@ -847,10 +908,12 @@ class SqliteRecordIndex:
     ) -> list[SessionMemory]:
         """Return a pool of records that could plausibly match, unranked.
 
-        Terms are ORed. Quoting each one keeps a token that happens to spell an FTS5
-        operator a search term, and there is no cap on how many are used: the prototype
-        truncated the query to 32 tokens, which silently decided which documents the
-        ranker was allowed to see.
+        The query is normalised by :func:`kira.memory.lexemes.lexemes`, the same function
+        that produced the indexed terms, so the two meet on stems rather than on
+        surface forms. Terms are ORed. Quoting each one keeps a token that happens to
+        spell an FTS5 operator a search term, and there is no cap on how many are used:
+        the prototype truncated the query to 32 tokens, which silently decided which
+        documents the ranker was allowed to see.
 
         Args:
             text: The query, used to select a pool.
@@ -861,7 +924,7 @@ class SqliteRecordIndex:
         Returns:
             Candidate records, in insertion order, which carries no relevance.
         """
-        terms = list(dict.fromkeys(tokenize(text)))
+        terms = list(dict.fromkeys(lexemes(text)))
         if not terms or limit <= 0:
             return []
         disjunction = " OR ".join(f'"{term}"' for term in terms)
@@ -876,7 +939,7 @@ class SqliteRecordIndex:
                 # ORDER BY rowid, never BY rank: FTS5's own bm25() is a different scorer
                 # (b=0.75, negated, normalised across both indexed columns), and letting
                 # it decide the pool would make this a different retriever.
-                f"SELECT session_id, evidence_text, lesson_text, payload_json FROM records_fts "
+                f"SELECT {_RECORD_COLUMNS} FROM records_fts "
                 f"WHERE records_fts MATCH ?{clause} ORDER BY rowid LIMIT ?",
                 [expression, *withheld, limit],
             ).fetchall()
@@ -895,8 +958,7 @@ class SqliteRecordIndex:
             row = conn.execute(
                 # session_id is UNINDEXED, so this is a scan. The corpus is hundreds of
                 # records; an FTS5 index on an identifier would cost more than it saves.
-                "SELECT session_id, evidence_text, lesson_text, payload_json FROM records_fts "
-                "WHERE session_id = ? LIMIT 1",
+                f"SELECT {_RECORD_COLUMNS} FROM records_fts WHERE session_id = ? LIMIT 1",
                 (session_id,),
             ).fetchone()
         return None if row is None else _to_memory(row)
@@ -922,7 +984,11 @@ class SqliteRecordIndex:
 
 
 def _column(scope: SearchScope) -> str:
-    return "lesson_text" if scope == "lesson" else "evidence_text"
+    return "lesson_terms" if scope == "lesson" else "evidence_terms"
+
+
+def _terms(text: str | None) -> str:
+    return " ".join(lexemes(text or ""))
 
 
 def _to_session(row: sqlite3.Row) -> SessionRecord:
