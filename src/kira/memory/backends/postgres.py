@@ -55,7 +55,7 @@ operator who tuned their DSN or their role knows something this file does not.
 import logging
 import threading
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import fields, replace
 from datetime import UTC, datetime
@@ -69,6 +69,7 @@ from psycopg.types.json import Jsonb
 
 from kira.contracts.lifecycle import LifecycleState, RunStatus
 from kira.memory.backends.sanitise import scrub, scrub_mapping, scrub_optional, scrub_text
+from kira.memory.backends.schema import STORE_SCHEMA_VERSION, StoreSchema
 from kira.memory.lexemes import lexemes
 from kira.memory.lifecycle import check_transition
 from kira.memory.ports import (
@@ -93,6 +94,14 @@ _log = logging.getLogger(__name__)
 
 _Row = dict[str, Any]
 _Connection = psycopg.Connection[_Row]
+
+# One row, replaced on every stamp. See :mod:`kira.memory.backends.schema`.
+_VERSION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_version (
+    version    INTEGER NOT NULL,
+    applied_at TIMESTAMPTZ NOT NULL
+);
+"""
 
 # Foreign keys are deliberately absent, as in the embedded schema: the four ports are
 # separate so that a deployment can implement one without the others, and a constraint
@@ -252,9 +261,8 @@ ORDER BY written_at, session_id
 LIMIT %s
 """
 
-# The two halves of the migration off an `english`-over-raw-text index. Separately
-# conditional and each idempotent: adding a column that is there, or a vector built the
-# way it already is, would be wasted work on every startup.
+# The two halves of the migration off an `english`-over-raw-text index, applied together
+# in one transaction by the step that owns them.
 _ADD_TERMS_COLUMNS = """
 ALTER TABLE records ADD COLUMN IF NOT EXISTS evidence_terms TEXT NOT NULL DEFAULT '';
 ALTER TABLE records ADD COLUMN IF NOT EXISTS lesson_terms   TEXT NOT NULL DEFAULT '';
@@ -499,12 +507,110 @@ class _Pool:
         )
 
 
+def _stamp(conn: _Connection, version: int) -> None:
+    """Replace the stored layout version, inside whatever transaction is open."""
+    conn.execute("DELETE FROM schema_version")
+    conn.execute(
+        "INSERT INTO schema_version (version, applied_at) VALUES (%s, %s)", (version, _now())
+    )
+
+
+class _PostgresSchema(StoreSchema):
+    """The server backend's statements for the shared open sequence."""
+
+    def __init__(self, db: _Pool, name: str, layout: str) -> None:
+        """Take the pool and the half of the database this caller owns."""
+        self.name = name
+        self._db = db
+        self._layout = layout
+
+    def create_version_table(self) -> None:
+        self._db.script(_VERSION_SCHEMA)
+
+    def create_layout(self) -> None:
+        self._db.script(self._layout)
+
+    def stamped_version(self) -> int | None:
+        with self._db.read() as conn:
+            row = conn.execute("SELECT version FROM schema_version").fetchone()
+        return None if row is None else int(row["version"])
+
+    def is_unused(self) -> bool:
+        with self._db.read() as conn:
+            row = conn.execute(
+                "SELECT count(*) AS tables FROM information_schema.tables "
+                "WHERE table_schema = current_schema() AND table_name <> 'schema_version'"
+            ).fetchone()
+        return row is not None and int(row["tables"]) == 0
+
+    def detect_version(self) -> int:
+        """Tell a vector over raw text from one over normalised terms, by its expression.
+
+        A database with no record table at all is current rather than old: there is
+        nothing here of the layout version 1 described.
+        """
+        with self._db.read() as conn:
+            generated = conn.execute(
+                "SELECT pg_get_expr(d.adbin, d.adrelid) AS expression "
+                "FROM pg_attrdef d JOIN pg_attribute a "
+                "  ON a.attrelid = d.adrelid AND a.attnum = d.adnum "
+                "WHERE d.adrelid = to_regclass('records') AND a.attname = 'evidence_tsv'"
+            ).fetchone()
+        if generated is None:
+            return STORE_SCHEMA_VERSION
+        expression = generated["expression"] or ""
+        return STORE_SCHEMA_VERSION if "array_to_tsvector" in expression else 1
+
+    def stamp(self, version: int) -> None:
+        with self._db.write() as conn:
+            _stamp(conn, version)
+
+    @property
+    def steps(self) -> Mapping[int, Callable[[], None]]:
+        return {1: self._index_normalised_terms}
+
+    def _index_normalised_terms(self) -> None:
+        """Rebuild the record vectors over normalised terms.
+
+        A database written before them has two vectors built by `to_tsvector('english',
+        ...)` over the raw text, which is a different candidate generator from the
+        embedded backend's. The raw text is the source of truth and is never touched; the
+        terms are derived from it and the vectors from them, in that order, because a
+        generated column is computed as it is added. Every corpus in the table is rebuilt,
+        not just the one this deployment reads: they share one derived index and half of
+        it cannot be current.
+        """
+        with self._db.write() as conn:
+            conn.execute(_ADD_TERMS_COLUMNS)
+            stored = conn.execute(
+                "SELECT corpus_id, session_id, evidence_text, lesson_text FROM records"
+            ).fetchall()
+            _log.info("normalising %d stored records for the postgres index", len(stored))
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    "UPDATE records SET evidence_terms = %s, lesson_terms = %s "
+                    "WHERE corpus_id = %s AND session_id = %s",
+                    [
+                        (
+                            _terms(row["evidence_text"]),
+                            _terms(row["lesson_text"]),
+                            row["corpus_id"],
+                            row["session_id"],
+                        )
+                        for row in stored
+                    ],
+                )
+            conn.execute(_VECTOR_REBUILD)
+            _stamp(conn, 2)
+
+
 class PostgresStore:
     """:class:`~kira.memory.ports.SessionStore`, ``ApprovalStore`` and ``RunStore``.
 
     Attributes:
         corpus_id: The campaign whose rows this store can see.
         records: The corpus index, sharing this store's connections.
+        schema_version: The store layout this database is at.
     """
 
     def __init__(
@@ -516,7 +622,7 @@ class PostgresStore:
         connect_timeout: int = CONNECT_TIMEOUT_S,
         statement_timeout_ms: int = STATEMENT_TIMEOUT_MS,
     ) -> None:
-        """Open the database and create the schema if it is not there.
+        """Open the database, creating or migrating the schema to the current layout.
 
         Args:
             dsn: Connection string.
@@ -527,6 +633,11 @@ class PostgresStore:
             statement_timeout_ms: Milliseconds one statement may run. A timeout the
                 deployment already sets — in the DSN, on the role, on the database —
                 wins over this.
+
+        Raises:
+            StoreSchemaTooNew: When the database was written by a later build. The pool
+                is closed on the way out, because a store that refuses to open must not
+                leave the server holding connections nobody will use.
         """
         self.corpus_id = corpus_id
         self._db = _Pool(
@@ -535,7 +646,13 @@ class PostgresStore:
             connect_timeout=connect_timeout,
             statement_timeout_ms=statement_timeout_ms,
         )
-        self._db.script(_OPERATIONAL_SCHEMA)
+        try:
+            self.schema_version = _PostgresSchema(
+                self._db, "the server store", _OPERATIONAL_SCHEMA
+            ).open()
+        except BaseException:
+            self._db.close()
+            raise
         self.records = PostgresRecordIndex(self._db, corpus_id=corpus_id)
 
     def close(self) -> None:
@@ -1131,6 +1248,10 @@ class PostgresRecordIndex:
     """:class:`~kira.memory.ports.TextSearch` over two generated tsvectors.
 
     A candidate generator. Nothing here orders by relevance; see the module docstring.
+
+    Attributes:
+        corpus_id: The campaign whose rows this index can see.
+        schema_version: The store layout this database is at.
     """
 
     def __init__(
@@ -1140,75 +1261,31 @@ class PostgresRecordIndex:
         schema: str = "kira_memory",
         corpus_id: str = "default",
     ) -> None:
-        """Open or adopt a database and create the index if it is not there.
+        """Open or adopt a database, creating or migrating it to the current layout.
 
         Args:
             connection: A connection string, or the pool of the :class:`PostgresStore`
                 this index belongs to.
             schema: Schema holding the table, when opening a database of its own.
             corpus_id: The campaign this index reads and writes.
+
+        Raises:
+            StoreSchemaTooNew: When the database was written by a later build. The pool
+                is closed on the way out, for the reason :class:`PostgresStore` gives.
         """
         self.corpus_id = corpus_id
         self._db = connection if isinstance(connection, _Pool) else _Pool(connection, schema)
-        self._db.script(_RECORD_SCHEMA)
-        self._reindex_if_stale()
+        try:
+            self.schema_version = _PostgresSchema(
+                self._db, "the server record index", _RECORD_SCHEMA
+            ).open()
+        except BaseException:
+            self._db.close()
+            raise
 
     def close(self) -> None:
         """Close the connections. Worth calling only on a standalone index."""
         self._db.close()
-
-    def _reindex_if_stale(self) -> None:
-        """Rebuild the index if it predates the shared normaliser.
-
-        A database written before this has no terms columns and two vectors built with
-        `to_tsvector('english', ...)` over the raw text, which is a different candidate
-        generator from the embedded backend's. The raw text is the source of truth and is
-        never touched; the terms are derived from it and the vectors are derived from
-        them. The two steps are separately conditional, so a migration interrupted between
-        them finishes on the next open. Every corpus in the table is rebuilt, not just
-        this index's: they share one derived index and half of it cannot be current.
-        """
-        with self._db.read() as conn:
-            columns = conn.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema = current_schema() AND table_name = 'records'"
-            ).fetchall()
-            names = {row["column_name"] for row in columns}
-            generated = conn.execute(
-                "SELECT pg_get_expr(d.adbin, d.adrelid) AS expression "
-                "FROM pg_attrdef d JOIN pg_attribute a "
-                "  ON a.attrelid = d.adrelid AND a.attnum = d.adnum "
-                "WHERE d.adrelid = to_regclass('records') AND a.attname = 'evidence_tsv'"
-            ).fetchone()
-
-        if not set(_TERMS_COLUMNS) <= names:
-            self._add_terms_columns()
-        if generated is not None and "array_to_tsvector" not in (generated["expression"] or ""):
-            _log.info("rebuilding the postgres record vectors over normalised terms")
-            self._db.script(_VECTOR_REBUILD)
-
-    def _add_terms_columns(self) -> None:
-        """Add the terms columns and fill them from the raw text already stored."""
-        self._db.script(_ADD_TERMS_COLUMNS)
-        with self._db.write() as conn:
-            stored = conn.execute(
-                "SELECT corpus_id, session_id, evidence_text, lesson_text FROM records"
-            ).fetchall()
-            _log.info("normalising %d stored records for the postgres index", len(stored))
-            with conn.cursor() as cursor:
-                cursor.executemany(
-                    "UPDATE records SET evidence_terms = %s, lesson_terms = %s "
-                    "WHERE corpus_id = %s AND session_id = %s",
-                    [
-                        (
-                            _terms(row["evidence_text"]),
-                            _terms(row["lesson_text"]),
-                            row["corpus_id"],
-                            row["session_id"],
-                        )
-                        for row in stored
-                    ],
-                )
 
     def upsert_summary(self, memory: SessionMemory) -> None:
         """Write or replace one record.

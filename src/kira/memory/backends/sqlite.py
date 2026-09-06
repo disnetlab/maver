@@ -33,7 +33,7 @@ import logging
 import sqlite3
 import threading
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import fields, replace
 from datetime import UTC, datetime
@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any
 
 from kira.contracts.lifecycle import LifecycleState, RunStatus
 from kira.memory.backends.sanitise import scrub, scrub_mapping, scrub_optional, scrub_text
+from kira.memory.backends.schema import STORE_SCHEMA_VERSION, StoreSchema
 from kira.memory.lexemes import lexemes
 from kira.memory.lifecycle import check_transition
 from kira.memory.ports import (
@@ -63,6 +64,14 @@ if TYPE_CHECKING:
 __all__ = ["SqliteRecordIndex", "SqliteStore"]
 
 _log = logging.getLogger(__name__)
+
+# One row, replaced on every stamp. See :mod:`kira.memory.backends.schema`.
+_VERSION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_version (
+    version    INTEGER NOT NULL,
+    applied_at TEXT NOT NULL
+);
+"""
 
 _OPERATIONAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -242,21 +251,113 @@ class _Connection:
             self.raw.close()
 
 
+def _stamp(conn: sqlite3.Connection, version: int) -> None:
+    """Replace the stored layout version, inside whatever transaction is open."""
+    conn.execute("DELETE FROM schema_version")
+    conn.execute(
+        "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)", (version, _now())
+    )
+
+
+class _SqliteSchema(StoreSchema):
+    """The embedded backend's statements for the shared open sequence."""
+
+    def __init__(self, db: _Connection, name: str, layout: str) -> None:
+        """Take the connection and the half of the database this caller owns."""
+        self.name = name
+        self._db = db
+        self._layout = layout
+
+    def create_version_table(self) -> None:
+        self._db.script(_VERSION_SCHEMA)
+
+    def create_layout(self) -> None:
+        self._db.script(self._layout)
+
+    def stamped_version(self) -> int | None:
+        with self._db.read() as conn:
+            row = conn.execute("SELECT version FROM schema_version").fetchone()
+        return None if row is None else int(row["version"])
+
+    def is_unused(self) -> bool:
+        with self._db.read() as conn:
+            row = conn.execute(
+                "SELECT count(*) AS tables FROM sqlite_master WHERE type = 'table' "
+                "AND name NOT LIKE 'sqlite_%' AND name <> 'schema_version'"
+            ).fetchone()
+        return int(row["tables"]) == 0
+
+    def detect_version(self) -> int:
+        """Tell an index over raw text from one over normalised terms, by its columns.
+
+        A database with no record index at all is current rather than old: there is
+        nothing here of the layout version 1 described.
+        """
+        with self._db.read() as conn:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(records_fts)")}
+        return 1 if columns and "evidence_terms" not in columns else STORE_SCHEMA_VERSION
+
+    def stamp(self, version: int) -> None:
+        with self._db.write() as conn:
+            _stamp(conn, version)
+
+    @property
+    def steps(self) -> Mapping[int, Callable[[], None]]:
+        return {1: self._index_normalised_terms}
+
+    def _index_normalised_terms(self) -> None:
+        """Rebuild the record index over normalised terms.
+
+        An index written before them is over the raw text, which answers a different
+        query. FTS5 cannot add a column, so the table is rebuilt from its own rows — the
+        raw text is the source of truth and is carried through unchanged. Corpora here
+        are hundreds of records, so this costs a moment once. FTS5 takes its DDL in a
+        transaction like any other table, so an interrupted rebuild leaves the old index
+        whole rather than a half-filled new one.
+        """
+        with self._db.write() as conn:
+            stored = conn.execute(f"SELECT {_RECORD_COLUMNS} FROM records_fts").fetchall()
+            _log.info("rebuilding the sqlite record index: %d rows", len(stored))
+            conn.execute("DROP TABLE records_fts")
+            conn.execute(_RECORD_SCHEMA)
+            conn.executemany(
+                _RECORD_INSERT,
+                [
+                    (
+                        row["session_id"],
+                        row["evidence_text"] or "",
+                        row["lesson_text"] or "",
+                        _terms(row["evidence_text"]),
+                        _terms(row["lesson_text"]),
+                        row["payload_json"],
+                    )
+                    for row in stored
+                ],
+            )
+            _stamp(conn, 2)
+
+
 class SqliteStore:
     """:class:`~kira.memory.ports.SessionStore`, ``ApprovalStore`` and ``RunStore``.
 
     Attributes:
         records: The corpus index, sharing this store's database.
+        schema_version: The store layout this database is at.
     """
 
     def __init__(self, path: str | Path = ":memory:") -> None:
-        """Open the database and create the schema if it is not there.
+        """Open the database, creating or migrating the schema to the current layout.
 
         Args:
             path: Database file, or ``":memory:"`` for an ephemeral one.
+
+        Raises:
+            StoreSchemaTooNew: When the database was written by a later build.
         """
         self._db = _Connection(path)
-        self._db.script(_OPERATIONAL_SCHEMA)
+        self.schema_version = _SqliteSchema(
+            self._db, "the embedded store", _OPERATIONAL_SCHEMA
+        ).open()
         self.records = SqliteRecordIndex(self._db)
 
     def close(self) -> None:
@@ -820,55 +921,29 @@ class SqliteRecordIndex:
     """:class:`~kira.memory.ports.TextSearch` over an FTS5 index.
 
     A candidate generator. Nothing here orders by relevance; see the module docstring.
+
+    Attributes:
+        schema_version: The store layout this database is at.
     """
 
     def __init__(self, connection: _Connection | str | Path = ":memory:") -> None:
-        """Open or adopt a database and create the index if it is not there.
+        """Open or adopt a database, creating or migrating the index to the current layout.
 
         Args:
             connection: A path, or the connection of the :class:`SqliteStore` this
                 index belongs to.
+
+        Raises:
+            StoreSchemaTooNew: When the database was written by a later build.
         """
         self._db = connection if isinstance(connection, _Connection) else _Connection(connection)
-        self._db.script(_RECORD_SCHEMA)
-        self._reindex_if_stale()
+        self.schema_version = _SqliteSchema(
+            self._db, "the embedded record index", _RECORD_SCHEMA
+        ).open()
 
     def close(self) -> None:
         """Close the connection. A no-op worth calling only on a standalone index."""
         self._db.close()
-
-    def _reindex_if_stale(self) -> None:
-        """Rebuild the index if it predates the shared normaliser.
-
-        A database written before the terms columns existed has an FTS5 table over the
-        raw text, which answers a different query. FTS5 cannot add a column, so the table
-        is rebuilt from its own rows — the raw text is the source of truth and is carried
-        through unchanged. Corpora here are hundreds of records, so this costs a moment
-        once. Idempotent: after it runs, the shape check finds nothing to do.
-        """
-        with self._db.read() as conn:
-            columns = {row["name"] for row in conn.execute("PRAGMA table_info(records_fts)")}
-            if "evidence_terms" in columns:
-                return
-            stored = conn.execute(f"SELECT {_RECORD_COLUMNS} FROM records_fts").fetchall()
-
-        _log.info("rebuilding the sqlite record index over normalised terms: %d rows", len(stored))
-        self._db.script("DROP TABLE records_fts;" + _RECORD_SCHEMA)
-        with self._db.write() as conn:
-            conn.executemany(
-                _RECORD_INSERT,
-                [
-                    (
-                        row["session_id"],
-                        row["evidence_text"] or "",
-                        row["lesson_text"] or "",
-                        _terms(row["evidence_text"]),
-                        _terms(row["lesson_text"]),
-                        row["payload_json"],
-                    )
-                    for row in stored
-                ],
-            )
 
     def upsert_summary(self, memory: SessionMemory) -> None:
         """Write or replace one record.

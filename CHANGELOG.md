@@ -89,3 +89,25 @@ number, so a change to how it is built belongs here rather than in the commit lo
   BM25 scoring is unchanged: it still tokenises the raw text, because raw tokens are what
   was scored. Both backends migrate an existing database on open, deriving the terms from
   the raw text they already hold.
+
+## Storage
+
+Where a record is kept, as opposed to what it says. `STORE_SCHEMA_VERSION` in
+`src/kira/memory/backends/schema.py` versions the store layout — the tables, columns and
+indexes a database holds — and is a different number from `SCHEMA_VERSION` above, which
+versions the submission schemas and the event contract.
+
+- **Stores are versioned, and migrate themselves on open.** Both backends keep a
+  one-row `schema_version` table. A new database is created at the current version and
+  stamped with it; a database written before this mechanism has its layout read off its
+  own tables once, is stamped with what that says, and is then migrated a step at a
+  time. Each step applies its change and stamps the version it produces in one
+  transaction, so a migration interrupted part-way leaves the store at the version it
+  began at rather than between two, and the next open finishes it. The move to the
+  normalised-terms index described under Retrieval is step 1 → 2, so a store from any
+  earlier build opens and catches up with nothing for an operator to run.
+
+  A store stamped *above* the version the running build knows is refused at open, naming
+  both numbers. An older binary cannot be told what a newer layout means, and one that
+  wrote past it would corrupt the corpus quietly rather than fail; the deployment runs
+  the newer build, or points the older one at another database.
