@@ -932,3 +932,38 @@ async def test_the_event_order_survives_a_restart_across_the_pause(
     positions = [event.sequence for event in restarted.sink.events]
     assert positions == sorted(positions)
     assert len(set(positions)) == len(positions)
+
+
+async def test_the_replayed_decision_names_the_call_it_decided(tmp_path: pathlib.Path) -> None:
+    """The pair a continuation writes joins to the transcript by the call's identifier.
+
+    Without it the two events that record the whole of what an operator authorised are
+    the only ones in the incident's log that cannot be aligned to the position the
+    operator was shown.
+    """
+    deploy, _session_id, request_id = await parked_with(tmp_path)
+    checkpoint = ApprovalCheckpoint.model_validate(
+        deploy.storage.sessions.get_session(_session_id).checkpoint  # type: ignore[union-attr]
+    )
+    deploy.storage.approvals.decide(
+        request_id, status="approved", decided_by="an operator", reason="looks right"
+    )
+
+    await resume_after_decision(request_id, deploy)
+
+    # The pair the continuation itself wrote, not the refusal the gate recorded when it
+    # parked: one is identified by who decided it, the other by its rationale.
+    decision = next(
+        event.payload
+        for event in deploy.sink.events
+        if event.payload.kind == "policy_decision"
+        and getattr(event.payload, "decided_by", None) == "an operator"
+    )
+    call = next(
+        event.payload
+        for event in deploy.sink.events
+        if event.payload.kind == "tool_call"
+        and event.payload.rationale == "replayed after an operator decision"
+    )
+    assert decision.call_id == checkpoint.tool_call_id
+    assert call.call_id == checkpoint.tool_call_id

@@ -340,7 +340,8 @@ def resume_events(
 
     Both, always. The decision says what a person answered, and the call event says what
     the run then did with it — a log carrying only the first cannot distinguish an
-    approval that was replayed from one that was never acted on.
+    approval that was replayed from one that was never acted on. Both name the call, so
+    they join to the position in the stored transcript that the operator was shown.
 
     Args:
         checkpoint: What was written at the pause.
@@ -353,6 +354,7 @@ def resume_events(
     return [
         PolicyDecisionEvent(
             tool=checkpoint.tool_name,
+            call_id=checkpoint.tool_call_id,
             policy="prompt",
             decision=cast(Any, record.status),
             reason=record.reason or "",
@@ -361,6 +363,7 @@ def resume_events(
         ),
         ToolCallEvent(
             tool=checkpoint.tool_name,
+            call_id=checkpoint.tool_call_id,
             arguments=dict(checkpoint.tool_arguments),
             rationale="replayed after an operator decision",
             succeeded=record.status == "approved",
