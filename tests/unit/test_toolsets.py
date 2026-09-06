@@ -60,6 +60,25 @@ def test_a_capability_the_transport_lacks_removes_its_tools_before_the_run(tmp_p
     assert "get_metrics" in offered
 
 
+def test_an_environment_that_cannot_be_written_to_is_not_handed_the_write_tool(
+    tmp_path,
+) -> None:
+    """The word was in the vocabulary and in both transports, and no tool required it.
+
+    So a transport declaring `kubernetes` alone — or misspelling the write word, which
+    is the deviation the transport contract exists to catch — was handed the one tool
+    that mutates a cluster anyway, and the gap surfaced mid-incident as a tool error the
+    model works around. Withholding it costs kubectl entirely, reads included: one tool
+    serves both, and who may write through it is the gate's decision, not a transport's.
+    """
+    resolved = build_toolset(
+        "execution", context(tmp_path, capabilities=ALL - {"kubernetes.write"})
+    )
+
+    assert "exec_kubectl_cmd_safely" not in {d.name for d in resolved.definitions}
+    assert resolved.dropped["exec_kubectl_cmd_safely"] == "transport lacks kubernetes.write"
+
+
 def test_memory_tools_go_when_the_configuration_has_no_store(tmp_path) -> None:
     resolved = build_toolset("rca", context(tmp_path, memory=None))
     assert "memory_search" not in {d.name for d in resolved.definitions}

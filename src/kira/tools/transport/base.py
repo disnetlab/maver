@@ -32,6 +32,14 @@ Split finely enough that a real gap is expressible. ``kubernetes.rollback`` is s
 from ``kubernetes.write`` because replaying an inverse command needs a journal of what
 was applied, which a transport talking straight to an API server does not keep.
 
+``kubernetes.write`` is required *alongside* ``kubernetes`` by the one tool that can
+mutate a cluster, which is what makes withholding it mean something. What it cannot mean
+is reads without writes: one tool serves both, so withholding the word withholds kubectl
+altogether, and which roles may write through it is the approval gate's decision rather
+than a transport's. Stated here because the word was in the vocabulary and in both
+transports while no tool required it, so an environment could withhold it and still be
+handed every write.
+
 There is no word here for reaching a node. Host recovery runs a command over SSH from
 this process rather than through a transport, so what decides whether it is available is
 the deployment's node allowlist and not the bound environment. A vocabulary word no
