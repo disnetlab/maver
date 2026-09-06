@@ -46,9 +46,11 @@ class FakeTransport:
 class FakeModel:
     def __init__(self) -> None:
         self.calls = 0
+        self.requests: list[ModelRequest] = []
 
     async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
         self.calls += 1
+        self.requests.append(request)
         return ModelResponse(
             text=None,
             tool_calls=(
@@ -86,8 +88,8 @@ def deployment(tmp_path: pathlib.Path, **memory: Any) -> tuple[Deployment, FakeM
     )
 
 
-def closed_incident(deploy: Deployment) -> str:
-    session = deploy.storage.sessions.create_session(ALERT)
+def closed_incident(deploy: Deployment, alert: dict[str, Any] = ALERT) -> str:
+    session = deploy.storage.sessions.create_session(alert)
     deploy.storage.sessions.update_artefacts(
         session.session_id,
         root_cause={"affected_resource": "shop/Service/user", "fault_type": "misconfiguration"},
@@ -153,6 +155,26 @@ def test_the_packet_is_assembled_from_the_record_not_from_live_state(
     assert packet.alert == ALERT
     assert packet.root_cause is not None
     assert [s.role for s in packet.trace_summaries] == ["rca"]
+    deploy.storage.close()
+
+
+async def test_the_ground_truth_label_reaches_no_prompt_of_this_pass_either(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The underscore prefix is what makes the blinding structural rather than a
+    convention each role has to remember, and this pass renders the packet whole — so it
+    was the one role shown the answer key, in every feedback mode. Its output is the
+    corpus record a later incident retrieves, which is the worst place to leak it.
+    """
+    deploy, model = deployment(tmp_path)
+    session_id = closed_incident(deploy, {**ALERT, "_problem_id": "leak-the-answer"})
+
+    await run_learning(session_id, deploy)
+
+    request = model.requests[0]
+    rendered = request.system + json.dumps(request.messages)
+    assert "leak-the-answer" not in rendered
+    assert "_problem_id" not in rendered
     deploy.storage.close()
 
 

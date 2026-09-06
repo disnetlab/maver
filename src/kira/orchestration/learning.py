@@ -23,6 +23,7 @@ from kira.observability.usage import RecordingCompletion
 from kira.orchestration.jobs import bound_deployment
 from kira.orchestration.runner import Deployment, incident_context, tool_context_for
 from kira.roles.base import RoleContext
+from kira.roles.prompting import visible_alert
 from kira.roles.registry import get_role
 from kira.tools.toolsets import build_toolset
 
@@ -66,7 +67,13 @@ def build_packet(
     return LearningPacket(
         session_id=session_id,
         lifecycle_state=record.state,
-        alert=record.alert,
+        # Filtered here rather than at each reader. The packet is rendered whole into
+        # this pass's prompt, so the underscore-prefixed keys the other roles' prompt
+        # builders drop — for an evaluation harness, the ground-truth fault label —
+        # reached the one role whose output is the corpus record later incidents
+        # retrieve. Doing it at assembly covers every reader of the packet, including
+        # the corpus write, which renders the alert into a searchable projection.
+        alert=visible_alert(record.alert),
         root_cause=record.root_cause,
         plan=record.plan,
         execution_result=record.execution_result,
