@@ -518,6 +518,9 @@ class LLMClient:
         kwargs, applied = self._build_kwargs(request)
         attempts = self.profile.limits["num_retries"] + 1
         last: ModelCallError | None = None
+        # What the caller waits, which is what a per-incident latency is summed from.
+        # Every row's duration is measured from here and the attempt's own from below.
+        call_started = time.monotonic()
 
         for attempt in range(1, attempts + 1):
             started = time.monotonic()
@@ -531,7 +534,8 @@ class LLMClient:
                     sampling=applied,
                     usage=_extract_usage(getattr(exc, "usage", None)),
                     finish_reason=None,
-                    duration_ms=duration_ms,
+                    duration_ms=int((time.monotonic() - call_started) * 1000),
+                    last_attempt_ms=duration_ms,
                     attempt=attempt,
                     error=f"{type(exc).__name__}: {exc}",
                 )
@@ -554,7 +558,8 @@ class LLMClient:
                 sampling=applied,
                 usage=response.usage,
                 finish_reason=response.finish_reason,
-                duration_ms=duration_ms,
+                duration_ms=int((time.monotonic() - call_started) * 1000),
+                last_attempt_ms=duration_ms,
                 attempt=attempt,
                 notes=response.notes,
             )
@@ -607,6 +612,7 @@ class LLMClient:
         usage: Usage,
         finish_reason: str | None,
         duration_ms: int,
+        last_attempt_ms: int,
         attempt: int,
         error: str | None = None,
         notes: Sequence[str] = (),
@@ -625,6 +631,7 @@ class LLMClient:
                 cached_tokens=usage.cached_prompt_tokens,
                 finish_reason=finish_reason,
                 duration_ms=duration_ms,
+                last_attempt_ms=last_attempt_ms,
                 attempt=attempt,
                 error=error,
                 notes=list(notes),

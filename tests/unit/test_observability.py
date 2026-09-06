@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from kira.audit.journal import AuditEvent, Journal, ListSink
-from kira.llm.client import prompt_digest
+from kira.llm.client import LLMClient, prompt_digest
 from kira.llm.sampling import resolve_sampling
 from kira.llm.types import ModelRequest, ModelResponse, Usage
 from kira.observability.tracing import span
@@ -30,6 +30,15 @@ class FakeModel:
             duration_ms=7,
             attempts=2,
         )
+
+
+class _Raw:
+    """One completion as the provider library hands it back."""
+
+    def __init__(self) -> None:
+        message = type("M", (), {"content": "hi", "tool_calls": None})()
+        self.choices = [type("C", (), {"message": message, "finish_reason": "stop"})()]
+        self.usage = None
 
 
 def request(**kw: Any) -> ModelRequest:
@@ -260,3 +269,37 @@ async def test_a_repair_the_client_made_reaches_the_event() -> None:
     assert cost_of(sink).payload.notes == [
         "synthesised duplicate tool_call_id -> call_1_get_promql"
     ]
+
+
+async def test_a_retried_call_records_what_the_caller_waited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """907 ms over three attempts was recorded as 301, because the success path took
+    the last attempt's duration while the failure path took the whole call. Anyone
+    summing the column over an incident lost every retried attempt, and lost most of it
+    exactly where the endpoint was worst."""
+    monkeypatch.setattr("kira.llm.client._backoff", lambda *_: 0.0)
+    attempts = 0
+
+    async def provider(**kwargs: Any) -> Any:
+        nonlocal attempts
+        attempts += 1
+        await asyncio.sleep(0.05)
+        if attempts < 3:
+            raise ConnectionError("endpoint refused the connection")
+        return _Raw()
+
+    sink = ListSink()
+    recorder = RecordingCompletion(
+        LLMClient(PROFILE, Settings(), completion=provider),
+        Journal(sink, session_id="s1", stage="rca"),
+        PROFILE,
+        RESOLVED,
+    )
+
+    await recorder.complete(request(), caller="rca")
+
+    recorded = cost_of(sink).payload
+    assert recorded.attempt == 3
+    assert recorded.last_attempt_ms is not None
+    assert recorded.duration_ms >= 3 * recorded.last_attempt_ms

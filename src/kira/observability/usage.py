@@ -106,8 +106,14 @@ class RecordingCompletion:
                 completion_tokens=response.usage.completion_tokens,
                 reasoning_tokens=response.usage.reasoning_tokens,
                 cached_tokens=response.usage.cached_prompt_tokens,
+                # What the caller waited, not what the attempt that answered took.
+                # A call that failed twice and then succeeded recorded 301 ms of the
+                # 907 it had cost, and the same column meant the whole call on the
+                # failure path — so a sum over an incident was neither total nor
+                # per-attempt, and it under-reported most where the endpoint was worst.
+                duration_ms=int((time.monotonic() - started) * 1000),
+                last_attempt_ms=response.duration_ms,
                 finish_reason=response.finish_reason,
-                duration_ms=response.duration_ms,
                 # One event per completed call, and the attempt count says how many
                 # tries it took. The client's own sink is where a deployment that wants
                 # per-attempt detail gets it; recording both here would double-count.

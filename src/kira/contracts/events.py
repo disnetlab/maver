@@ -114,7 +114,21 @@ class ModelCallEvent(BaseModel):
             "cap and rarely carries a complete tool call."
         ),
     )
-    duration_ms: int
+    duration_ms: int = Field(
+        description=(
+            "Wall clock the caller waited on this call, every retry and every backoff "
+            "included. One meaning on both paths: recorded as the last attempt on "
+            "success and the whole call on failure, the same column answered two "
+            "questions and a mixed aggregate was neither."
+        )
+    )
+    last_attempt_ms: int | None = Field(
+        default=None,
+        description=(
+            "How long the attempt this row's outcome came from took. Null where no "
+            "single attempt produced it."
+        ),
+    )
     attempt: int = Field(default=1, description="1 for the first try, higher on retry.")
     error: str | None = None
     notes: list[str] = Field(
