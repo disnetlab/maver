@@ -282,6 +282,21 @@ class TestValidation:
         assert unknown_prefixed_names() == []
         assert load_settings().server.port == 8080
 
+    def test_an_unprefixed_group_name_is_not_a_second_control_surface(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The sweep above only looks at prefixed names, so anything the root answered
+        to without the prefix was live and invisible at once: it never reached the
+        typo check, never reached the run's record, and under an arm it lost silently
+        while the operator read the value they had exported. A bare ``MODEL`` is also
+        an ordinary name in a container that serves one, and it aborted startup.
+        """
+        monkeypatch.setenv("MODEL", "some-value")
+        monkeypatch.setenv("MEMORY__TOP_K", "9")
+        settings = load_settings()
+        assert settings.memory.top_k == 5
+        assert unknown_prefixed_names() == []
+
 
 class TestArmFiles:
     """An arm file is only a document until something resolves it into the settings."""

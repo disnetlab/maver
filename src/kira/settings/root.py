@@ -10,7 +10,7 @@ from typing import Any, NamedTuple
 
 from pydantic import AliasChoices, Field, model_validator
 from pydantic.fields import FieldInfo
-from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from kira.prompts.loader import overridden_roles
 from kira.settings.arms import Arm, arm_digest, load_arm
@@ -71,6 +71,13 @@ class Settings(SettingsGroup):
     environment names. The object is frozen: settings are injected into the components
     that need them, never re-read, so a run's behaviour cannot change underneath it.
     """
+
+    # The prefix is declared here rather than inherited, because without it this class
+    # answers to the bare group names as well: a plain ``MODEL`` in the environment
+    # aborted startup while pydantic tried to parse it as a group, and ``MEMORY__TOP_K``
+    # was a second live vocabulary that the misspelling sweep, which only looks at
+    # prefixed names, could not see and the run's record never mentioned.
+    model_config = SettingsGroup.model_config | SettingsConfigDict(env_prefix=ENV_PREFIX)
 
     arm: str | None = setting(
         None,
@@ -333,7 +340,15 @@ def _prune(
             and issubclass(annotation, BaseSettings)
             and isinstance(value, Mapping)
         ):
-            below = supplied.get(key) or {}
+            raw = supplied.get(key)
+            # A source reports a nested name in the environment's own casing, so a
+            # case-sensitive membership test below would miss what it supplied and the
+            # arm would displace it.
+            below = (
+                {str(name).lower(): value for name, value in raw.items()}
+                if isinstance(raw, Mapping)
+                else {}
+            )
             # Building the group runs its own chain: the modern name, the legacy names
             # it aliases, .env and the secrets directory. What it resolved for itself
             # is precisely what the arm must not displace.
