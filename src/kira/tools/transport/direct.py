@@ -139,10 +139,14 @@ class DirectTransport:
     def timeout_seconds(self) -> int:
         """How long one call may take before it is abandoned.
 
+        Floored at a second, as the transport the harness supplies also floors it. The
+        kubectl tool subtracts from this to bound a blocking wait, so a value below one
+        gives every call a deadline that has already passed.
+
         Returns:
-            The per-call timeout.
+            The per-call timeout, never below one second.
         """
-        return self._settings.timeout_s
+        return max(1, self._settings.timeout_s)
 
     async def kubectl(self, argv: Sequence[str]) -> str:
         """Run one kubectl invocation.

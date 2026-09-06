@@ -12,7 +12,9 @@ import stat
 from pathlib import Path
 
 import httpx
+import pytest
 import respx
+from pydantic import ValidationError
 
 from kira.audit.journal import Journal
 from kira.settings.groups import TransportSettings
@@ -166,3 +168,16 @@ async def test_a_blocking_command_is_bounded_under_the_transport_deadline(
     )
 
     assert result == "wait --for=condition=Ready pod/x --timeout=50s\n"
+
+
+def test_a_timeout_that_is_not_a_limit_is_refused_and_floored() -> None:
+    """Zero means "no limit" in curl, docker and kubectl's own --request-timeout, so an
+    operator writing it is not making an exotic mistake. Here it gave every cluster call
+    a deadline already past, and the run read in the log as a model that could not use
+    its tools. The floor holds for a value that reached the transport unvalidated, which
+    is the contract the harness's transport already keeps."""
+    with pytest.raises(ValidationError, match="at least 1 second"):
+        TransportSettings(timeout_s=0)
+
+    unchecked = TransportSettings.model_construct(kubectl_binary=ABSENT_KUBECTL, timeout_s=0)
+    assert DirectTransport(unchecked).timeout_seconds == 1

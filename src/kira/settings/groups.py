@@ -960,9 +960,18 @@ class TransportSettings(SettingsGroup):
         description=(
             "How long one cluster or telemetry call may take. A blocking kubectl is "
             "bounded ten seconds under this, so it reports its own timeout rather than "
-            "being killed with nothing to show for the wait."
+            "being killed with nothing to show for the wait. Must be positive: zero "
+            "means no limit in curl, docker and kubectl's own --request-timeout, and "
+            "here it would kill every call on a deadline already past."
         ),
     )
+
+    @field_validator("timeout_s")
+    @classmethod
+    def _timeout_is_a_limit(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("transport.timeout_s must be at least 1 second")
+        return value
 
 
 class ObservabilitySettings(SettingsGroup):
