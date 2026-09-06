@@ -8,6 +8,7 @@ prototype returned one of the two states, so the losing run's identifier never d
 
 import json
 import pathlib
+from collections import Counter
 from typing import Any
 
 from kira.audit.journal import ListSink
@@ -165,13 +166,14 @@ async def test_the_mechanism_replaces_the_diagnosis_and_keeps_both_runs(
     )
     storage = build_storage(settings)
     model = FakeModel()
+    sink = ListSink()
     deploy = Deployment(
         settings=settings,
         storage=storage,
         completion=model,
         profile=PROFILE,
         transport_for=lambda session_id: FakeTransport(),
-        sink=ListSink(),
+        sink=sink,
     )
     session = storage.sessions.create_session(ALERT)
 
@@ -180,6 +182,18 @@ async def test_the_mechanism_replaces_the_diagnosis_and_keeps_both_runs(
     # One gate, one selector, and two diagnosis runs — the dose an arm gap is divided by.
     assert model.callers.count("secondpass.gate") == 1
     assert model.callers.count("secondpass.selector") == 1
+
+    # And each of those calls is in the incident's own log, not only in the fake's tally.
+    # The prototype's second-pass helpers bypassed the usage log and its cost figures had
+    # to be published with the gap disclosed; the mechanism's calls are counted here
+    # because they are the mechanism's cost. All three helpers — the gate, the selector
+    # and the nominator the other composition adds — read the one completion the runner
+    # builds for the pass, so these two cover the site.
+    logged = Counter(
+        event.payload.caller for event in sink.events if event.payload.kind == "model_call"
+    )
+    assert logged["secondpass.gate"] == model.callers.count("secondpass.gate")
+    assert logged["secondpass.selector"] == model.callers.count("secondpass.selector")
     assert model.callers.count("rca") == 2
     assert len([r for r in storage.runs.runs_for(session.session_id) if r.agent_name == "rca"]) == 2
     assert len([rid for rid in final["run_ids"] if ":rca:" in rid]) == 2
