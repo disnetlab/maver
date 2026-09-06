@@ -55,6 +55,16 @@ CARRIED_FROM_PROTOTYPE_CODE = {
     Path("runtime/verify/submit_while_unhealthy.txt"),
 }
 
+# Assets that deliberately no longer match, and why. Byte fidelity is the migration
+# rule because prompt text is a held-constant input, so a divergence is a decision
+# someone has to make and write down rather than a diff someone has to explain later.
+DELIBERATELY_DIVERGED = {
+    Path("roles/learning.txt"): (
+        "prescribed a playbook layer this system does not have: the four playbook_* "
+        "tools are not registered and the domain/human triggers are not shipped"
+    ),
+}
+
 
 def _prototype_source(relative: Path) -> Path:
     """Map a shipped asset back to the prototype file it was copied from."""
@@ -106,6 +116,8 @@ def _shipped_assets() -> list[Path]:
 def test_every_shipped_asset_is_byte_identical_to_the_prototype(relative: Path) -> None:
     if relative in CARRIED_FROM_PROTOTYPE_CODE:
         pytest.skip("carried from prototype Python; no prompt file to diff against")
+    if relative in DELIBERATELY_DIVERGED:
+        pytest.skip(DELIBERATELY_DIVERGED[relative])
     expected = _prototype_source(relative).read_bytes()
     if relative.parts[0] == "roles":
         text = expected.decode("utf-8")

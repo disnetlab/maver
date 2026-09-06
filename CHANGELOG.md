@@ -29,6 +29,18 @@ Prompts and tool descriptions are held-constant inputs to every published measur
 and unlike code they are read by the model rather than executed, so a change to them is
 recorded here rather than left to the commit log.
 
+### Role prompts
+
+- **The Learning prompt no longer prescribes the playbook layer.** Roughly 100 of its
+  262 lines described a mutable shared playbook: four `playbook_*` tools, none of them
+  registered or on any allowlist, and the `domain` and `human` triggers, neither of
+  which ships. It reached the model on every distillation pass of every
+  experience-enabled configuration, where the only two things it could do with it were
+  spend turns on a call that does not exist or ignore that part of its instructions.
+  The prompt now describes the one artifact Learning produces, the per-session summary.
+  This is a deliberate divergence from the prototype's asset, registered as such in
+  `tests/unit/test_prompt_assets.py`.
+
 ### Tool descriptions
 
 - **`bash_exec`, `code_exec` and `exec_kubectl_cmd_safely` no longer branch on
