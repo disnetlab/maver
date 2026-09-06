@@ -81,6 +81,10 @@ class ApprovalCheckpoint(BaseModel):
     run_id: str
     run_ids: list[str]
 
+    sequence: int = 0
+    """The last event position this incident handed out, so the continuation carries on
+    from it. An order that restarted at 1 could no longer sort the incident's own log."""
+
     remediation_retries: int
     reassessment_count: int
     verify_retries: int
@@ -115,6 +119,7 @@ def save_checkpoint(
     state: IncidentState,
     pending: ApprovalPending,
     *,
+    sequence: int = 0,
     mode: str = "multi",
     target_stage: str = "full",
     fire_post_hooks: bool = True,
@@ -131,6 +136,8 @@ def save_checkpoint(
         store: Where the session lives.
         state: The incident state as the paused role was entered with it.
         pending: The raised pause, with the role's transcript attached.
+        sequence: The last event position handed out, for the continuation to resume the
+            order from.
         mode: The pipeline shape the incident was running.
         target_stage: How far the caller asked the pipeline to go.
         fire_post_hooks: Whether this caller wants the post-incident hooks fired.
@@ -158,6 +165,7 @@ def save_checkpoint(
         remediation_retries=state.get("remediation_retries", 0),
         reassessment_count=state.get("reassessment_count", 0),
         verify_retries=state.get("verify_retries", 0),
+        sequence=sequence,
         mode=mode,
         target_stage=target_stage,
         fire_post_hooks=fire_post_hooks,

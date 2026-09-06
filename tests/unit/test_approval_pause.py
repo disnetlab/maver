@@ -6,6 +6,7 @@ measured run. These are the tests that make it a mechanism rather than a claim.
 """
 
 import asyncio
+import dataclasses
 import json
 import pathlib
 from dataclasses import replace
@@ -16,7 +17,7 @@ import httpx
 import pytest
 import respx
 
-from kira.audit.journal import ListSink
+from kira.audit.journal import ListSink, SequenceRegistry
 from kira.contracts.lifecycle import RunStatus
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
@@ -907,3 +908,27 @@ async def test_the_pause_notifies_whoever_is_meant_to_answer(
     parked = storage.approvals.get_request(pending.value.request_id)
     assert parked is not None and parked.status == "pending"
     storage.close()
+
+
+async def test_the_event_order_survives_a_restart_across_the_pause(
+    tmp_path: pathlib.Path,
+) -> None:
+    """One incident, one order, whichever process answered the decision.
+
+    A pause outlives the process that raised it, and the continuation's allocator began
+    at 1 again: sorting the incident's log by ``sequence`` interleaved the continuation
+    with the run it continues, and the position no longer identifies an event.
+    """
+    deploy, _session_id, request_id = await parked_with(tmp_path)
+    deploy.storage.approvals.decide(
+        request_id, status="approved", decided_by="an operator", reason="looks right"
+    )
+    # The process that answers a decision is rarely the one that raised it. Everything
+    # durable is shared; only the in-memory allocator is not.
+    restarted = dataclasses.replace(deploy, sequences=SequenceRegistry())
+
+    assert await resume_after_decision(request_id, restarted) == "success"
+
+    positions = [event.sequence for event in restarted.sink.events]
+    assert positions == sorted(positions)
+    assert len(set(positions)) == len(positions)

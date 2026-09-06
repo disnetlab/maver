@@ -10,7 +10,6 @@ write still executes; it simply is not reconstructible, which is a deployment ch
 rather than something the loop should have to branch on.
 """
 
-import itertools
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -88,7 +87,16 @@ class SequenceAllocator:
         Args:
             start: The last position already handed out. The next is one past it.
         """
-        self._counter = itertools.count(start + 1)
+        self._last = start
+
+    @property
+    def last(self) -> int:
+        """The position handed out most recently.
+
+        Returns:
+            The position, or where the order was started when nothing has been.
+        """
+        return self._last
 
     def allocate(self) -> int:
         """Take the next position.
@@ -96,7 +104,8 @@ class SequenceAllocator:
         Returns:
             The position, one past the last handed out.
         """
-        return next(self._counter)
+        self._last += 1
+        return self._last
 
 
 class SequenceRegistry:
@@ -105,12 +114,12 @@ class SequenceRegistry:
     Held by the deployment rather than in a module global, so two deployments in one
     process are genuinely independent — the same reason the write lock lives there.
 
-    A process that did not run the incident begins a new order rather than continuing
-    the stored one: a resume after a decision, or a distilling job started from nothing
-    but a session id, restarts at 1. No port exposes a session's highest stored
-    position, and the only read that would produce one is an unindexed scan of a JSON
-    field in both backends, which is a large price for an ordering that is already
-    settled by the run each event belongs to.
+    A resume continues the order: the run that parked recorded its last position on the
+    checkpoint, so the continuation seeds its allocator from that rather than restarting
+    at 1. A distilling job started from nothing but a session id has no such record and
+    does begin a new order. No port exposes a session's highest stored position, and the
+    only read that would produce one is an unindexed scan of a JSON field in both
+    backends, which is a large price for a job whose events are read on their own.
     """
 
     def __init__(self, capacity: int = 256) -> None:
@@ -125,18 +134,21 @@ class SequenceRegistry:
         self._capacity = capacity
         self._allocators: dict[str, SequenceAllocator] = {}
 
-    def for_session(self, session_id: str) -> SequenceAllocator:
+    def for_session(self, session_id: str, *, start: int = 0) -> SequenceAllocator:
         """The allocator this session's journals write through.
 
         Args:
             session_id: The incident.
+            start: Where to continue from, honoured only when this process has no
+                allocator for the session yet. A process that already holds one is
+                mid-incident, and its own position is ahead of any stored number.
 
         Returns:
             The session's allocator, created on first use.
         """
         allocator = self._allocators.get(session_id)
         if allocator is None:
-            allocator = SequenceAllocator()
+            allocator = SequenceAllocator(start)
             self._allocators[session_id] = allocator
             while len(self._allocators) > self._capacity:
                 self._allocators.pop(next(iter(self._allocators)))

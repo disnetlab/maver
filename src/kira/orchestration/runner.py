@@ -775,6 +775,7 @@ def _park(
         deployment.storage.sessions,
         cast(IncidentState, pending.state),
         pending,
+        sequence=deployment.sequences.for_session(pending.session_id).last,
         mode=mode,
         target_stage=target_stage,
         fire_post_hooks=fire_post_hooks,
@@ -834,7 +835,12 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
             deployment.sink,
             session_id=checkpoint.session_id,
             stage=checkpoint.stage,
-            sequence=deployment.sequences.for_session(checkpoint.session_id),
+            # Where the run that parked left off. A process that did not raise the pause
+            # holds no allocator for this session, and one starting at 1 again would
+            # give the continuation's events the positions the first pass already used.
+            sequence=deployment.sequences.for_session(
+                checkpoint.session_id, start=checkpoint.sequence
+            ),
         )
         tools = tool_context_for(deployment, resources, role, checkpoint.session_id, journal)
         content = await _replay(checkpoint, record, tools, deployment, journal)
