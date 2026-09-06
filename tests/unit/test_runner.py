@@ -376,3 +376,32 @@ async def test_a_deployment_that_widens_writes_reaches_the_tool_and_not_only_the
         answer = await exec_kubectl_cmd_safely(ctx, cmd="kubectl delete deploy web -n shop")
 
     assert not answer.startswith("error:")
+
+
+def test_the_auxiliary_sampling_set_is_pinned_at_startup_too(tmp_path: pathlib.Path) -> None:
+    """Both sets are sent, so both are asserted where the deployment is composed.
+
+    The gate, the nominator and the selector run on the auxiliary set and nothing
+    checked it. A set that cannot be sent failed at the first helper call instead, in
+    the middle of an incident, on a configuration nobody could reconstruct afterwards.
+    """
+    settings = Settings(
+        server=ServerSettings(workdir=tmp_path),
+        memory=MemorySettings(enabled=False, learning_enabled=False),
+    )
+    profile = PROFILE.model_copy(
+        update={
+            "aux_sampling": PROFILE.sampling.model_copy(
+                update={"thinking_token_budget": 4096, "max_tokens": 512}
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="must be below max_tokens"):
+        Deployment(
+            settings=settings,
+            storage=build_storage(settings),
+            completion=FakeModel(),
+            profile=profile,
+            transport_for=lambda session_id: FakeTransport(),
+        )

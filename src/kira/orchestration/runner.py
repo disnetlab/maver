@@ -35,6 +35,7 @@ from kira.llm.sampling import (
     SamplingResolution,
     assert_sampling_is_pinned,
     resolve_sampling,
+    split_sampling,
 )
 from kira.llm.types import Completion, ToolResult
 from kira.memory.factory import StorageStack
@@ -149,6 +150,11 @@ class Deployment:
         # all, with the run completing on a configuration nobody could reconstruct.
         resolution = resolve_sampling(self.profile, self.settings)
         assert_sampling_is_pinned(self.profile, resolution)
+        # Both sets, because both are sent. The gate, the nominator and the selector run
+        # on the auxiliary one, and it was checked nowhere: a set that cannot be sent
+        # failed at the first helper call, in the middle of an incident.
+        aux = self.profile.aux_sampling or self.profile.sampling
+        assert_sampling_is_pinned(self.profile, split_sampling(aux, self.profile))
         object.__setattr__(self, "sampling", resolution)
 
 
