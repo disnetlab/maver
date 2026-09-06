@@ -16,7 +16,7 @@ one module permitted to build it, and this file only calls two methods on it.
 """
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
@@ -31,12 +31,9 @@ from kira.orchestration.routing import (
     after_verify,
 )
 
-__all__ = ["Engine", "LangGraphEngine", "SequentialEngine", "StageHook", "StepLimitExceeded"]
+__all__ = ["Engine", "LangGraphEngine", "SequentialEngine", "StepLimitExceeded"]
 
 _log = logging.getLogger(__name__)
-
-StageHook = Callable[[str, IncidentState], Awaitable[None]]
-"""Called with ``(node_name, state)`` after each role completes. It must not raise."""
 
 STEP_LIMIT = 25
 """How many role runs one incident may take before it is treated as a runaway.
@@ -73,14 +70,11 @@ class StepLimitExceeded(RuntimeError):
 class Engine(Protocol):
     """Runs the routing to completion."""
 
-    async def run(
-        self, state: IncidentState, *, on_stage: StageHook | None = None, start: str = ENTRY
-    ) -> IncidentState:
+    async def run(self, state: IncidentState, *, start: str = ENTRY) -> IncidentState:
         """Run the incident from its seeded state to a terminal one.
 
         Args:
             state: The incident state to run from.
-            on_stage: Notified after each role completes, with the accumulated state.
             start: Which role to run first. Anything but the entry point continues an
                 incident that stopped part-way.
 
@@ -98,14 +92,11 @@ class LangGraphEngine:
     """The object ``build_graph`` returned. Held as Any so this module stays free of the
     framework's types along with its imports."""
 
-    async def run(
-        self, state: IncidentState, *, on_stage: StageHook | None = None, start: str = ENTRY
-    ) -> IncidentState:
-        """Run the graph, streaming only when someone is listening.
+    async def run(self, state: IncidentState, *, start: str = ENTRY) -> IncidentState:
+        """Run the graph to a terminal state.
 
         Args:
             state: The incident state to run from.
-            on_stage: Notified after each role completes.
             start: Which role to run first. Only the entry point is supported.
 
         Returns:
@@ -125,19 +116,7 @@ class LangGraphEngine:
         # The executor's overflow subclasses the builtin RecursionError, which is how it
         # is translated here without importing the framework this file is kept free of.
         try:
-            if on_stage is None:
-                return cast(IncidentState, await self.graph.ainvoke(state, config=_RUN_CONFIG))
-
-            # Our nodes return a delta, so each update's value is merged onto the
-            # accumulated IncidentState; the hook is notified after each node completes.
-            accumulated: dict[str, Any] = dict(state)
-            async for update in self.graph.astream(
-                state, config=_RUN_CONFIG, stream_mode="updates"
-            ):
-                for node_name, node_delta in update.items():
-                    accumulated = {**accumulated, **node_delta}
-                    await on_stage(node_name, cast(IncidentState, accumulated))
-            return cast(IncidentState, accumulated)
+            return cast(IncidentState, await self.graph.ainvoke(state, config=_RUN_CONFIG))
         except RecursionError as exc:
             # Only the executor's own overflow, which subclasses the builtin. A node
             # that genuinely recursed away its stack raises the same class, and
@@ -161,14 +140,11 @@ class SequentialEngine:
     nodes: Mapping[str, NodeFn]
     policy: RoutingPolicy
 
-    async def run(
-        self, state: IncidentState, *, on_stage: StageHook | None = None, start: str = ENTRY
-    ) -> IncidentState:
+    async def run(self, state: IncidentState, *, start: str = ENTRY) -> IncidentState:
         """Run each role and follow its predicate until one routes to the end.
 
         Args:
             state: The incident state to run from.
-            on_stage: Notified after each role completes.
             start: Which role to run first. A continuation names the role that was
                 interrupted; the routing from there is the routing every run takes.
 
@@ -183,8 +159,6 @@ class SequentialEngine:
         for _ in range(STEP_LIMIT):
             delta = await self.nodes[current](accumulated)
             accumulated = cast(IncidentState, {**accumulated, **delta})
-            if on_stage is not None:
-                await on_stage(current, accumulated)
             route = _ROUTERS[current](accumulated, self.policy)
             if route is Route.END:
                 return accumulated

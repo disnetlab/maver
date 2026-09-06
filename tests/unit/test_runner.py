@@ -155,17 +155,10 @@ async def test_an_incident_runs_end_to_end_and_reaches_the_record(
 ) -> None:
     deploy, _, model = deployment(tmp_path)
     session = deploy.storage.sessions.create_session(ALERT)
-    seen: list[str] = []
 
-    async def on_stage(stage: str, state: Any) -> None:
-        seen.append(stage)
-
-    final = await run_incident(
-        ALERT, session.session_id, deploy, on_stage=on_stage, fire_post_hooks=False
-    )
+    final = await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
 
     assert model.callers == ["rca", "planning", "execution", "execution"]
-    assert seen == ["rca", "planning", "execution"]
     assert final["execution_result"] is not None and final["execution_result"].succeeded
 
     stored = deploy.storage.sessions.get_session(session.session_id)

@@ -47,11 +47,13 @@ def test_initial_state_seeds_every_declared_key() -> None:
 # --- the two engines agree ---------------------------------------------------------
 
 
-def pipeline_nodes() -> dict[str, Any]:
+def pipeline_nodes(seen: list[str]) -> dict[str, Any]:
     """Four fake roles walking one interesting path: a verification that first cannot
-    tell, looks again, and then confirms."""
+    tell, looks again, and then confirms. Each records that it ran, so the route is
+    read off the roles rather than off the executor being compared."""
 
     async def rca(state: IncidentState) -> dict[str, Any]:
+        seen.append("rca")
         return {
             "root_cause": RootCause(
                 fault_type="misconfig",
@@ -63,6 +65,7 @@ def pipeline_nodes() -> dict[str, Any]:
         }
 
     async def planning(state: IncidentState) -> dict[str, Any]:
+        seen.append("planning")
         return {
             "plan": Plan(
                 steps=[
@@ -74,6 +77,7 @@ def pipeline_nodes() -> dict[str, Any]:
         }
 
     async def execution(state: IncidentState) -> dict[str, Any]:
+        seen.append("execution")
         return {
             "execution_result": ExecutionResult(
                 succeeded=True,
@@ -84,6 +88,7 @@ def pipeline_nodes() -> dict[str, Any]:
         }
 
     async def verify(state: IncidentState) -> dict[str, Any]:
+        seen.append("verify")
         first = state.get("verify_result") is None
         # The wrapper charges the re-check in a real run; here the node does it, so the
         # test stays about the engine rather than about what surrounds a role.
@@ -102,15 +107,6 @@ def pipeline_nodes() -> dict[str, Any]:
     return {"rca": rca, "planning": planning, "execution": execution, "verify": verify}
 
 
-async def drive(engine: Engine) -> tuple[IncidentState, list[str]]:
-    seen: list[str] = []
-
-    async def on_stage(name: str, state: IncidentState) -> None:
-        seen.append(name)
-
-    return await engine.run(seeded(), on_stage=on_stage), seen
-
-
 @pytest.mark.asyncio
 async def test_both_engines_reach_the_same_end_by_the_same_route() -> None:
     """The cheapest evidence for the containment claim.
@@ -118,25 +114,16 @@ async def test_both_engines_reach_the_same_end_by_the_same_route() -> None:
     If the framework disappeared, deleting graph.py and defaulting to the sequential
     engine would be the whole migration. This is the test that says so.
     """
-    nodes = pipeline_nodes()
-    graphed, graph_stages = await drive(LangGraphEngine(build_graph(nodes, POLICY)))
-    walked, walk_stages = await drive(SequentialEngine(nodes, POLICY))
+    graph_stages: list[str] = []
+    walk_stages: list[str] = []
+    graphed = await LangGraphEngine(build_graph(pipeline_nodes(graph_stages), POLICY)).run(seeded())
+    walked = await SequentialEngine(pipeline_nodes(walk_stages), POLICY).run(seeded())
 
     assert graph_stages == walk_stages == ["rca", "planning", "execution", "verify", "verify"]
     assert graphed["verify_result"] == walked["verify_result"]
     assert graphed["root_cause"] == walked["root_cause"]
     assert graphed["plan"] == walked["plan"]
     assert graphed["execution_result"] == walked["execution_result"]
-
-
-@pytest.mark.asyncio
-async def test_the_unstreamed_path_returns_the_same_state() -> None:
-    """With no hook the graph is invoked rather than streamed, and the two paths must
-    not disagree about what the incident ended as."""
-    nodes = pipeline_nodes()
-    invoked = await LangGraphEngine(build_graph(nodes, POLICY)).run(seeded())
-    streamed, _ = await drive(LangGraphEngine(build_graph(nodes, POLICY)))
-    assert invoked["verify_result"] == streamed["verify_result"]
 
 
 @pytest.mark.asyncio
@@ -149,7 +136,7 @@ async def test_a_cycling_configuration_is_stopped(engine: str) -> None:
     thousand role runs — each a model call, and in the remediating role a cluster
     mutation — where the sequential engine stopped at twenty-five.
     """
-    nodes = pipeline_nodes()
+    nodes = pipeline_nodes([])
     runs: list[str] = []
 
     async def never_sure(state: IncidentState) -> dict[str, Any]:
@@ -326,7 +313,7 @@ async def test_a_node_that_recursed_away_its_stack_is_not_a_routing_loop() -> No
 
         return {"error": str(recurse(0))}
 
-    nodes = pipeline_nodes() | {"rca": deep}
+    nodes = pipeline_nodes([]) | {"rca": deep}
 
     with pytest.raises(RecursionError) as raised:
         await LangGraphEngine(build_graph(nodes, POLICY)).run(seeded())

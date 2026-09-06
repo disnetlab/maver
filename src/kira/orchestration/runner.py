@@ -47,7 +47,7 @@ from kira.middleware.write_gate import WriteGate
 from kira.observability.tracing import span
 from kira.observability.usage import RecordingCompletion
 from kira.orchestration.budget import RetryBudget
-from kira.orchestration.engine import Engine, LangGraphEngine, SequentialEngine, StageHook
+from kira.orchestration.engine import Engine, LangGraphEngine, SequentialEngine
 from kira.orchestration.graph import build_graph
 from kira.orchestration.hooks import fire_hooks
 from kira.orchestration.modes import MODES, ModeContext, resolve_mode
@@ -491,7 +491,6 @@ def _second_pass_delta(
 def _context_builder(
     deployment: Deployment,
     resources: IncidentResources,
-    on_stage: StageHook | None,
     resume_for: dict[str, list[dict[str, Any]]] | None = None,
     resume_stage: str = "",
     assignment: str = "",
@@ -532,13 +531,6 @@ def _context_builder(
             retrieving=retrieving,
         )
 
-        async def milestone(stage: str, delta: StateDelta) -> None:
-            # A role that answers more than one graded question announces each as it
-            # lands. The adapter above sees the same stage names either configuration
-            # produces, which is what lets one driver grade both.
-            if on_stage is not None:
-                await on_stage(stage, cast(IncidentState, {**state, **delta}))
-
         resumed = pending_resume.pop(spec.name, None)
         return RoleContext(
             spec=spec,
@@ -568,7 +560,6 @@ def _context_builder(
             run_id=run_id,
             session_id=state.get("session_id", ""),
             memory=tools.memory,
-            milestone=milestone,
             assignment=assignment,
             run_label=run_label,
             resume=resumed,
@@ -583,7 +574,6 @@ async def run_incident(
     session_id: str,
     deployment: Deployment,
     *,
-    on_stage: StageHook | None = None,
     fire_post_hooks: bool = True,
     finalize_run_status: bool = True,
     target_stage: TargetStage = "full",
@@ -594,10 +584,6 @@ async def run_incident(
         alert: The payload that raised the incident.
         session_id: The persisted session this run belongs to.
         deployment: The process's shared resources.
-        on_stage: Called with ``(stage_name, state)`` after each role completes. When
-            provided the graph is streamed, so a caller such as a benchmark episode can
-            react as artifacts become available rather than waiting for the end. It must
-            not raise.
         fire_post_hooks: When False the post-incident hooks are not scheduled, and the
             caller takes over that lifecycle — for an adapter that runs the distilling
             pass itself before releasing its environment.
@@ -648,7 +634,7 @@ async def run_incident(
             policy=RoutingPolicy.from_settings(deployment.settings),
             runs=_RunRecorder(deployment.storage),
             journal=journal,
-            build_context=_context_builder(deployment, resources, on_stage),
+            build_context=_context_builder(deployment, resources),
         )
         mode = resolve_mode(target_stage=target_stage, settings=deployment.settings)
         with span(
@@ -666,7 +652,6 @@ async def run_incident(
                 deployment,
                 deps,
                 resources,
-                on_stage=on_stage,
                 session_id=session_id,
                 journal=journal,
                 target_stage=target_stage,
@@ -683,7 +668,6 @@ async def _run_mode(
     deps: IncidentDeps,
     resources: IncidentResources,
     *,
-    on_stage: StageHook | None,
     session_id: str,
     journal: Journal,
     target_stage: TargetStage,
@@ -700,7 +684,6 @@ async def _run_mode(
                 deps=deps,
                 engine=_engine(deployment, deps, nodes),
                 nodes=nodes,
-                on_stage=on_stage,
             ),
         )
     except ApprovalPending as pending:
@@ -874,7 +857,7 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
             runs=_RunRecorder(deployment.storage),
             journal=journal,
             build_context=_context_builder(
-                deployment, resources, None, {role: transcript}, resume_stage=checkpoint.stage
+                deployment, resources, {role: transcript}, resume_stage=checkpoint.stage
             ),
         )
         # The same composition the first pass ran under. Building the roles a second

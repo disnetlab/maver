@@ -5,7 +5,6 @@ from kira.orchestration.engine import (
     Engine,
     LangGraphEngine,
     SequentialEngine,
-    StageHook,
     StepLimitExceeded,
 )
 from kira.orchestration.nodes import IncidentDeps, NodeFn, make_node
@@ -36,7 +35,6 @@ __all__ = [
     "RetryBudget",
     "RoutingPolicy",
     "SequentialEngine",
-    "StageHook",
     "StepLimitExceeded",
     "after_execution",
     "after_planning",

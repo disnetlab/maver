@@ -15,7 +15,7 @@ from kira.audit.journal import Journal, ListSink
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.middleware.base import MiddlewareStack
 from kira.roles import single
-from kira.roles.base import RoleContext, StateDelta
+from kira.roles.base import RoleContext
 from kira.settings.groups import MemorySettings, PipelineSettings
 from kira.settings.profiles import load_profile
 from kira.settings.root import Settings
@@ -79,9 +79,7 @@ class ScriptedModel:
         )
 
 
-def context(
-    tmp_path: pathlib.Path, model: ScriptedModel
-) -> tuple[RoleContext, list[tuple[str, StateDelta]]]:
+def context(tmp_path: pathlib.Path, model: ScriptedModel) -> RoleContext:
     sink = ListSink()
     journal = Journal(sink, session_id="s1", stage="single")
     tools = ToolContext(
@@ -91,12 +89,7 @@ def context(
         session_id="s1",
         journal=journal,
     )
-    announced: list[tuple[str, StateDelta]] = []
-
-    async def milestone(stage: str, delta: StateDelta) -> None:
-        announced.append((stage, delta))
-
-    ctx = RoleContext(
+    return RoleContext(
         spec=single.SINGLE,
         state={"session_id": "s1", "alert": ALERT},
         handback=None,
@@ -113,9 +106,7 @@ def context(
         write_lock=asyncio.Lock(),
         run_id="r1",
         session_id="s1",
-        milestone=milestone,
     )
-    return ctx, announced
 
 
 def offered(request: ModelRequest) -> set[str]:
@@ -128,7 +119,7 @@ async def test_the_second_phase_continues_the_first_phase_transcript(
     """Continuity is the point of the arm: a baseline that re-read the namespace from
     scratch for its remediation would be a different and weaker system."""
     model = ScriptedModel(("submit_diagnosis", DIAGNOSIS), ("submit_mitigation", MITIGATION))
-    ctx, announced = context(tmp_path, model)
+    ctx = context(tmp_path, model)
 
     outcome = await single.SINGLE.run(ctx)
 
@@ -138,14 +129,13 @@ async def test_the_second_phase_continues_the_first_phase_transcript(
     assert second[-1]["content"].startswith("TASK 1 diagnosis submitted.")
     assert outcome.delta["root_cause"].solution == DIAGNOSIS["solution"]
     assert outcome.delta["execution_result"].succeeded is True
-    assert [stage for stage, _ in announced] == ["rca", "execution"]
 
 
 async def test_only_one_finalizer_is_terminal_per_phase(tmp_path: pathlib.Path) -> None:
     """Offering both lets the model short-circuit the sequence by submitting a
     mitigation it has not performed while still diagnosing."""
     model = ScriptedModel(("submit_diagnosis", DIAGNOSIS), ("submit_mitigation", MITIGATION))
-    ctx, _ = context(tmp_path, model)
+    ctx = context(tmp_path, model)
 
     await single.SINGLE.run(ctx)
 
@@ -159,22 +149,20 @@ async def test_an_unfinalised_mitigation_still_reports_a_result(
     """The agent may already have applied changes, and the benchmark grades the cluster
     rather than the submission — so the remediation slot is filled either way."""
     model = ScriptedModel(("submit_diagnosis", DIAGNOSIS))
-    ctx, announced = context(tmp_path, model)
+    ctx = context(tmp_path, model)
 
     outcome = await single.SINGLE.run(ctx)
 
     assert outcome.delta["execution_result"].succeeded is False
     assert "not finalized" in outcome.delta["execution_result"].summary
-    assert [stage for stage, _ in announced] == ["rca", "execution"]
 
 
 async def test_a_failed_diagnosis_ends_the_run_with_nothing(tmp_path: pathlib.Path) -> None:
     model = ScriptedModel()
-    ctx, announced = context(tmp_path, model)
+    ctx = context(tmp_path, model)
 
     outcome = await single.SINGLE.run(ctx)
 
     assert outcome.artifact is None
     assert outcome.error is not None and outcome.error.startswith("single-agent diagnosis failed")
     assert outcome.delta == {}
-    assert announced == []

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 
 from kira.contracts.state import IncidentState, TargetStage
-from kira.orchestration.engine import Engine, StageHook
+from kira.orchestration.engine import Engine
 from kira.orchestration.nodes import IncidentDeps, NodeFn, make_node
 from kira.roles.registry import get_role
 from kira.settings.root import Settings
@@ -40,7 +40,6 @@ class ModeContext:
     without whatever wraps it — a diagnosis-only task under an arm that second-guesses
     its diagnosis would then be a different arm, silently.
     """
-    on_stage: StageHook | None = None
     start: str | None = None
     """Where a continuation re-enters, or None for a run that starts at the beginning.
 
@@ -100,18 +99,17 @@ async def run_multi(state: IncidentState, ctx: ModeContext) -> IncidentState:
         The terminal state.
     """
     if ctx.start is None:
-        return await ctx.engine.run(state, on_stage=ctx.on_stage)
-    return await ctx.engine.run(state, on_stage=ctx.on_stage, start=ctx.start)
+        return await ctx.engine.run(state)
+    return await ctx.engine.run(state, start=ctx.start)
 
 
 @mode("single")
 async def run_single(state: IncidentState, ctx: ModeContext) -> IncidentState:
     """Run the one-agent baseline.
 
-    Its two phases announce themselves as the pipeline's diagnosis and remediation
-    stages, which is what lets one environment driver grade either configuration
-    without knowing which it is looking at. The announcements come from inside the role,
-    because its diagnosis is graded before its remediation begins.
+    Its two phases write into the same diagnosis and remediation state slots the
+    pipeline uses, which is what lets one environment driver grade either configuration
+    without knowing which it is looking at.
 
     Args:
         state: The seeded incident state.
@@ -120,7 +118,7 @@ async def run_single(state: IncidentState, ctx: ModeContext) -> IncidentState:
     Returns:
         The terminal state.
     """
-    return await _run_one("single", state, ctx, announce=None)
+    return await _run_one("single", state, ctx)
 
 
 @mode("diagnose")
@@ -134,12 +132,10 @@ async def run_diagnose(state: IncidentState, ctx: ModeContext) -> IncidentState:
     Returns:
         The terminal state.
     """
-    return await _run_one("rca", state, ctx, announce="rca")
+    return await _run_one("rca", state, ctx)
 
 
-async def _run_one(
-    role: str, state: IncidentState, ctx: ModeContext, *, announce: str | None
-) -> IncidentState:
+async def _run_one(role: str, state: IncidentState, ctx: ModeContext) -> IncidentState:
     """Run one role through the same wrapper the graph uses, and merge its delta.
 
     Composed if the incident's own composition names it, and wrapped plainly otherwise:
@@ -148,10 +144,7 @@ async def _run_one(
     """
     node = ctx.nodes.get(role) or make_node(get_role(role), ctx.deps)
     delta = await node(state)
-    merged = cast(IncidentState, {**state, **delta})
-    if announce is not None and ctx.on_stage is not None:
-        await ctx.on_stage(announce, merged)
-    return merged
+    return cast(IncidentState, {**state, **delta})
 
 
 def registered_modes() -> Mapping[str, Any]:

@@ -30,7 +30,6 @@ from kira.tools.context import ToolContext
 from kira.tools.toolsets import ResolvedToolset
 
 __all__ = [
-    "MilestoneFn",
     "RoleContext",
     "RoleFn",
     "RoleOutcome",
@@ -143,18 +142,6 @@ class RoleContext:
     task, so there is no live state to read: what it gets is what was written down. The
     other roles leave this None.
     """
-    milestone: "MilestoneFn | None" = None
-    """Announce a graded result mid-run, for a role that produces more than one.
-
-    Every other role produces one artifact and the orchestration layer announces it on
-    the role's behalf. The single-agent configuration answers two separately graded
-    tasks in one continuous transcript, so its diagnosis has to reach an adapter before
-    its remediation begins — otherwise a benchmark that grades detection separately
-    receives both answers only at the end, or not at all if the remediation phase fails.
-
-    The name given is a pipeline stage name, not this role's own, because an adapter
-    keys on the stage vocabulary rather than on which configuration produced it.
-    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,9 +159,6 @@ class RoleOutcome:
 
 
 RoleFn = Callable[[RoleContext], Awaitable[RoleOutcome]]
-
-MilestoneFn = Callable[[str, StateDelta], Awaitable[None]]
-"""Called with a stage name and what the role has produced so far. Must not raise."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,8 +5,8 @@ memory-augmented pipeline. One goal-only prompt, the full read and write toolset
 retrieval. It answers the benchmark's own two-task contract as two passes of the shared
 loop over one continuous transcript:
 
-    TASK 1 (diagnosis)  -> submit_diagnosis   -> the `rca` milestone
-    TASK 2 (mitigation) -> submit_mitigation  -> the `execution` milestone
+    TASK 1 (diagnosis)  -> submit_diagnosis
+    TASK 2 (mitigation) -> submit_mitigation
 
 Both phases are one role run and one run row, so the arm's cost is one role's worth and
 not two. The two phases write into the same diagnosis and remediation state slots the
@@ -46,11 +46,6 @@ def _hide(tools: list[ToolSpec], name: str) -> list[ToolSpec]:
     sequence by submitting the mitigation it has not performed while still diagnosing.
     """
     return [tool for tool in tools if tool.name != name]
-
-
-async def _announce(ctx: RoleContext, stage: str, delta: StateDelta) -> None:
-    if ctx.milestone is not None:
-        await ctx.milestone(stage, delta)
 
 
 def _submitted_diagnosis(messages: list[Message]) -> tuple[SingleDiagnosis, list[Message]] | None:
@@ -151,7 +146,6 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
 
         diagnosis = SingleDiagnosis.model_validate(diagnosis_run.submission)
         diagnosis_transcript = diagnosis_run.transcript
-        await _announce(ctx, "rca", {"root_cause": diagnosis})
         # Continue the same transcript so the agent keeps its diagnosis context. Its
         # last turn is the submit call, which nothing answered, and a server rejects a
         # request whose tool call has no reply — so the dangling call is closed first.
@@ -202,7 +196,6 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         "execution_result": result,
         "trace_summaries": summaries,
     }
-    await _announce(ctx, "execution", delta)
     return RoleOutcome(
         artifact=result,
         transcript=mitigation_run.transcript,

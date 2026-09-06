@@ -314,20 +314,15 @@ async def test_a_hand_back_through_the_composed_node_charges_the_shared_budget(
         sink=ListSink(),
     )
     session = storage.sessions.create_session(ALERT)
-    entries: list[dict[str, Any]] = []
 
-    async def on_stage(name: str, state: Any) -> None:
-        if name == "rca":
-            entries.append(dict(state))
+    final = await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
 
-    final = await run_incident(
-        ALERT, session.session_id, deploy, on_stage=on_stage, fire_post_hooks=False
-    )
-
-    # The verdict is consumed as it is acted on, and the re-diagnosis is charged for.
-    assert len(entries) == 3
-    assert entries[1]["verify_result"] is None
-    assert entries[1]["reassessment_count"] == 1
+    # The verdict is consumed as it is acted on, so each hand-back buys exactly one more
+    # cycle: the gated pass's two diagnosis runs, then one re-diagnosis per verdict.
+    runs = storage.runs.runs_for(session.session_id)
+    stages = [run.agent_name for run in runs]
+    assert stages.count("rca") == 4
+    assert stages.count("verify") == 3
 
     # And the budget runs out, so the incident ends with a result rather than an
     # exception the harness records as a crash.
