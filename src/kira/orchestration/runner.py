@@ -650,10 +650,8 @@ async def _run_mode(
         # Not an error. Park the incident where it stopped and let the caller unwind
         # cleanly; nothing is persisted as terminal and no hook fires, because the
         # run has not finished — it is waiting.
-        _park_run(deployment, pending)
-        save_checkpoint(
-            deployment.storage.sessions,
-            cast(IncidentState, pending.state),
+        _park(
+            deployment,
             pending,
             mode=mode,
             target_stage=target_stage,
@@ -692,19 +690,44 @@ async def _run_mode(
     return final_state
 
 
-def _park_run(deployment: Deployment, pending: ApprovalPending) -> None:
-    """Close the paused role's row as waiting, rather than leaving it open.
+def _park(
+    deployment: Deployment,
+    pending: ApprovalPending,
+    *,
+    mode: str,
+    target_stage: str,
+    fire_post_hooks: bool,
+    finalize_run_status: bool,
+) -> None:
+    """Record an incident that stopped for a decision: close its row, then checkpoint it.
 
     A row left running is indistinguishable from a role that hung, and the continuation
     opens its own row: what happened is one attempt that stopped for a decision and a
-    second that carried on.
+    second that carried on. Both entries to the pipeline park, and while only one of
+    them closed the row, every incident needing a second decision left one open for good.
+
+    Args:
+        deployment: This process's resources.
+        pending: The pause raised by the gate.
+        mode: The shape the incident is running.
+        target_stage: How far the caller asked the incident to go.
+        fire_post_hooks: Whether the caller wants the post-incident hooks.
+        finalize_run_status: Whether the caller wants the run status closed here.
     """
-    if not pending.run_id:
-        return
-    deployment.storage.runs.finish_run(
-        pending.run_id,
-        status="awaiting_human",
-        error=f"awaiting approval request {pending.request_id}",
+    if pending.run_id:
+        deployment.storage.runs.finish_run(
+            pending.run_id,
+            status="awaiting_human",
+            error=f"awaiting approval request {pending.request_id}",
+        )
+    save_checkpoint(
+        deployment.storage.sessions,
+        cast(IncidentState, pending.state),
+        pending,
+        mode=mode,
+        target_stage=target_stage,
+        fire_post_hooks=fire_post_hooks,
+        finalize_run_status=finalize_run_status,
     )
 
 
@@ -806,9 +829,8 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
         except ApprovalPending as pending:
             # A second decision is needed. Re-park and leave the hooks alone: the
             # incident still has not finished.
-            save_checkpoint(
-                sessions,
-                cast(IncidentState, pending.state),
+            _park(
+                deployment,
                 pending,
                 mode=checkpoint.mode,
                 target_stage=checkpoint.target_stage,

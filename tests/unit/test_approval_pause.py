@@ -393,6 +393,48 @@ async def test_a_denial_comes_back_as_a_tool_result_and_the_run_finishes(
     deploy.storage.close()
 
 
+class TwoDecisionModel(ResumingModel):
+    """Writes on each of its first two execution turns, so two humans are asked."""
+
+    async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
+        if caller != "execution" or self.callers.count("execution") != 1:
+            return await super().complete(request, caller=caller)
+        self.requests.append(request)
+        self.callers.append(caller)
+        return self._turn(("second", "exec_kubectl_cmd_safely", {"cmd": "kubectl patch svc web"}))
+
+
+async def test_an_incident_needing_two_decisions_leaves_no_run_row_open(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A row left running is indistinguishable from a role that hung.
+
+    Only the first pass closed the paused row before checkpointing, so a plan with two
+    write steps — or any replan that writes again — left an `execution` row `running`
+    for good, inflating the running-run count of every operator view and post-hoc
+    analysis that reads `runs_for`.
+    """
+    deploy, _ = deployment(tmp_path)
+    object.__setattr__(deploy, "completion", TwoDecisionModel())
+    session = deploy.storage.sessions.create_session(ALERT)
+    with pytest.raises(ApprovalPending):
+        await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+
+    for _ in range(2):
+        stored = deploy.storage.sessions.get_session(session.session_id)
+        assert stored is not None and stored.awaiting_request_id
+        deploy.storage.approvals.decide(
+            stored.awaiting_request_id, status="approved", decided_by="an operator"
+        )
+        if await resume_after_decision(stored.awaiting_request_id, deploy) != "awaiting_human":
+            break
+
+    runs = deploy.storage.runs.runs_for(session.session_id)
+    assert [r.status for r in runs].count("awaiting_human") == 2
+    assert [r.agent_name for r in runs if r.status == "running"] == []
+    deploy.storage.close()
+
+
 async def test_a_second_resume_does_not_re_dispatch_the_write(
     tmp_path: pathlib.Path,
 ) -> None:
