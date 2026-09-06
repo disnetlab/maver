@@ -24,6 +24,8 @@ from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import httpx
+
 from kira.memory.ports import ApprovalRecord, ApprovalStore
 from kira.middleware.authority import (
     ActionRequest,
@@ -48,6 +50,13 @@ _log = logging.getLogger(__name__)
 
 TimeoutScheduler = Callable[[str, str], None]
 """Arms one request's expiry, given its id and when it expires."""
+
+_NOTIFICATIONS: set[asyncio.Task[None]] = set()
+"""Notifications still in flight.
+
+A task with no reference is collectable mid-await, so the set is what keeps a
+fire-and-forget post alive long enough to be sent.
+"""
 
 
 class ApprovalGrant:
@@ -196,6 +205,8 @@ class HumanApproval:
                 # which is worse.
                 _log.exception("could not arm the timeout for approval request %s", request_id)
 
+        self._notify(record)
+
         raise ApprovalPending(
             request_id=request_id,
             session_id=request.session_id,
@@ -204,6 +215,43 @@ class HumanApproval:
             tool_name=request.tool,
             tool_arguments=dict(request.arguments),
         )
+
+    def _notify(self, record: ApprovalRecord) -> None:
+        """Tell whoever is meant to answer that there is something to answer.
+
+        Detached from the pause on purpose. The row is already written, so the request
+        is reachable through the API and the CLI whatever happens here; a notification
+        awaited inline would put a third party's availability in front of a write the
+        run has already unwound for.
+        """
+        if self._settings.webhook_url is None:
+            return
+        task = asyncio.create_task(self._post(record))
+        _NOTIFICATIONS.add(task)
+        task.add_done_callback(_NOTIFICATIONS.discard)
+
+    async def _post(self, record: ApprovalRecord) -> None:
+        """Send one notification, and swallow whatever goes wrong with it."""
+        try:
+            async with httpx.AsyncClient(timeout=self._settings.webhook_timeout_s) as client:
+                await client.post(
+                    str(self._settings.webhook_url),
+                    json={
+                        "request_id": record.request_id,
+                        "session_id": record.session_id,
+                        "stage": record.stage,
+                        "tool": record.tool_name,
+                        "summary": record.summary,
+                        "expires_at": record.expires_at,
+                        "link": f"/api/v1/hitl/{record.request_id}",
+                    },
+                )
+        except Exception:
+            _log.warning(
+                "could not notify %s about approval request %s; it is still waiting in the store",
+                self._settings.webhook_url,
+                record.request_id,
+            )
 
 
 def authorities(

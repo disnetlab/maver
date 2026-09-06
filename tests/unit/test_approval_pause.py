@@ -5,25 +5,28 @@ autonomy, and in the prototype it was implemented for one stage and invoked in n
 measured run. These are the tests that make it a mechanism rather than a claim.
 """
 
+import asyncio
 import json
 import pathlib
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import httpx
 import pytest
+import respx
 
 from kira.audit.journal import ListSink
 from kira.contracts.lifecycle import RunStatus
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
 from kira.memory.ports import ApprovalRecord
-from kira.middleware.authority import ApprovalPending
+from kira.middleware.authority import ActionRequest, ApprovalPending
 from kira.middleware.human_approval import approval_granted, authorities, take_grant
 from kira.orchestration import jobs
 from kira.orchestration.resume import ApprovalCheckpoint, denial_result, load_checkpoint
 from kira.orchestration.runner import Deployment, resume_after_decision, run_incident
-from kira.settings.authority import AuthoritySettings
+from kira.settings.authority import AuthorityRule, AuthoritySettings
 from kira.settings.groups import (
     MemorySettings,
     PipelineSettings,
@@ -32,6 +35,7 @@ from kira.settings.groups import (
 )
 from kira.settings.profiles import load_profile
 from kira.settings.root import Settings
+from kira.tools.policy import ActionClass
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 
@@ -106,13 +110,15 @@ class FakeModel:
         )
 
 
-def deployment(tmp_path: pathlib.Path) -> tuple[Deployment, list[tuple[str, str]]]:
+def deployment(
+    tmp_path: pathlib.Path, rules: tuple[AuthorityRule, ...] = ()
+) -> tuple[Deployment, list[tuple[str, str]]]:
     settings = Settings(
         server=ServerSettings(workdir=tmp_path),
         pipeline=PipelineSettings(),
         memory=MemorySettings(enabled=False, learning_enabled=False),
         verify=VerifySettings(enabled=False),
-        authority=AuthoritySettings(mode="prompt", timeout_s=1800),
+        authority=AuthoritySettings(mode="prompt", timeout_s=1800, rules=rules),
     )
     storage = build_storage(settings)
     armed: list[tuple[str, str]] = []
@@ -795,3 +801,109 @@ async def test_a_request_whose_timeout_was_never_armed_still_expires(
     finally:
         jobs.unbind_deployment()
     deploy.storage.close()
+
+
+def _overdue(session_id: str, *, rule: str | None) -> ApprovalRecord:
+    return ApprovalRecord(
+        request_id=f"overdue-{rule}",
+        session_id=session_id,
+        kind="tool_call",
+        stage="execution",
+        status="pending",
+        summary="kubectl scale deploy/checkout --replicas=3 -n shop",
+        payload={"rule": rule},
+        expires_at=(datetime.now(UTC) - timedelta(hours=2)).isoformat(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("on_timeout", "settled"),
+    [("approve", ("approved", "rule:routine-scaling")), (None, ("timed_out", "generic human"))],
+)
+@pytest.mark.parametrize("noticed_by", ["armed_job", "sweep"])
+async def test_a_rule_decides_what_its_own_expiry_resolves_to(
+    on_timeout: str | None,
+    settled: tuple[str, str],
+    noticed_by: str,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An operator told to name the narrow class of actions that are safe unattended got
+    a denial at the one moment the field exists to cover: nothing read it. Denying is the
+    safe answer, not the configured one, and nothing reported the discrepancy.
+
+    Both ways an expiry is noticed, because arming the job can fail and the sweep is
+    what catches that: a rule that meant one thing per path would not be a policy.
+    """
+    rule = AuthorityRule(name="routine-scaling", mode="prompt", on_timeout=on_timeout)
+    deploy, _ = deployment(tmp_path, rules=(rule,))
+    session = deploy.storage.sessions.create_session(ALERT)
+    request = _overdue(session.session_id, rule="routine-scaling")
+    deploy.storage.approvals.create_request(request)
+    deploy.storage.sessions.set_run_status(
+        session.session_id, RunStatus.AWAITING_HUMAN, awaiting_request_id=request.request_id
+    )
+
+    scheduled: list[str] = []
+    monkeypatch.setattr(jobs, "schedule_approval_resume", scheduled.append)
+    jobs.bind_deployment(deploy)
+    try:
+        if noticed_by == "armed_job":
+            await jobs.expire_approval(request.request_id)
+        else:
+            await jobs.sweep_decided_approvals()
+    finally:
+        jobs.unbind_deployment()
+
+    decided = deploy.storage.approvals.get_request(request.request_id)
+    assert decided is not None
+    assert (decided.status, decided.decided_by) == settled
+    assert scheduled == [request.request_id]
+    deploy.storage.close()
+
+
+async def _drain_notifications() -> None:
+    """Let the detached notification finish, as a live process's loop would."""
+    current = asyncio.current_task()
+    await asyncio.gather(*(t for t in asyncio.all_tasks() if t is not current))
+
+
+@pytest.mark.parametrize("delivered", [True, False], ids=["delivered", "unreachable"])
+async def test_the_pause_notifies_whoever_is_meant_to_answer(
+    delivered: bool, tmp_path: pathlib.Path
+) -> None:
+    """The webhook was accepted, echoed by `config show` and sent by nothing, so an
+    incident parked in silence and the write was lost to the timeout thirty minutes
+    later. A notification that fails must still leave the request waiting: the row is the
+    record, and a third party's availability cannot stand in front of it."""
+    settings = AuthoritySettings(mode="prompt", webhook_url="http://hooks.test/hitl")
+    storage = build_storage(Settings(server=ServerSettings(workdir=tmp_path), authority=settings))
+    authority = authorities(settings, storage.approvals, lambda request_id, expires_at: None)
+    request = ActionRequest(
+        session_id="s1",
+        stage="execution",
+        tool="exec_kubectl_cmd_safely",
+        tool_call_id="c1",
+        arguments=PATCH,
+        action=ActionClass.WRITE,
+        summary="patch svc/user",
+    )
+
+    with respx.mock(base_url="http://hooks.test") as mocked:
+        route = mocked.post("/hitl")
+        if delivered:
+            route.mock(return_value=httpx.Response(202))
+        else:
+            route.mock(side_effect=httpx.ConnectError("nothing is listening"))
+        with pytest.raises(ApprovalPending) as pending:
+            await authority["prompt"].authorise(request)
+        await _drain_notifications()
+
+    assert route.called
+    body = json.loads(route.calls[0].request.content)
+    assert body["request_id"] == pending.value.request_id
+    assert body["tool"] == "exec_kubectl_cmd_safely"
+    assert body["link"] == f"/api/v1/hitl/{pending.value.request_id}"
+    parked = storage.approvals.get_request(pending.value.request_id)
+    assert parked is not None and parked.status == "pending"
+    storage.close()

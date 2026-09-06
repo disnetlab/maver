@@ -19,6 +19,7 @@ incomparable with one that never paused.
 """
 
 import logging
+from datetime import datetime
 from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict
@@ -37,9 +38,11 @@ from kira.contracts.state import IncidentState, TargetStage
 from kira.memory.ports import ApprovalRecord, ApprovalStore, SessionRecord, SessionStore
 from kira.middleware.authority import ApprovalPending
 from kira.orchestration.inflight import held_episode
+from kira.settings.authority import AuthoritySettings
 
 __all__ = [
     "ApprovalCheckpoint",
+    "approves_on_timeout",
     "denial_result",
     "load_checkpoint",
     "restored_state",
@@ -215,6 +218,49 @@ def load_checkpoint(
         # this one would apply a write against a state nobody approved it for.
         return "missing_checkpoint"
     return checkpoint, record
+
+
+def approves_on_timeout(
+    record: ApprovalRecord, authority: AuthoritySettings, *, now: str
+) -> str | None:
+    """Name who approves an expired request, when a rule said one class of call may.
+
+    The rule the gate matched is recorded on the request, so the answer comes from what
+    governed the call rather than from re-matching a policy that may have been edited
+    while the operator was away. Only a rule can approve on expiry, never the global
+    mode: an operator naming the narrow class of actions that are safe unattended is the
+    whole of the safety property, and a global switch would approve everything.
+
+    Args:
+        record: The request that may have run out of time.
+        authority: The gate's configuration.
+        now: The current timestamp.
+
+    Returns:
+        The decider to attribute the approval to, or None when the request denies.
+    """
+    if record.status != "pending" or not _has_expired(record.expires_at, now):
+        return None
+    name = record.payload.get("rule")
+    for rule in authority.rules:
+        if rule.name == name and rule.on_timeout == "approve":
+            return f"rule:{rule.name}"
+    return None
+
+
+def _has_expired(expires_at: str | None, now: str) -> bool:
+    """Say whether a deadline has passed, on the store's own terms.
+
+    An unparseable expiry is not evidence that anything has expired, which is what the
+    store's sweep does with one; here it is what keeps a job that fired early from
+    approving a write nobody has yet failed to answer.
+    """
+    if not expires_at:
+        return False
+    try:
+        return datetime.fromisoformat(expires_at) <= datetime.fromisoformat(now)
+    except ValueError:
+        return False
 
 
 def denial_result(record: ApprovalRecord) -> str:

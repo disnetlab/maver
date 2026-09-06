@@ -15,6 +15,7 @@ which is which for every entry.
 
 import pathlib
 import re
+from typing import get_args
 
 from kira.settings.root import Settings
 
@@ -41,8 +42,6 @@ DECLARED_FOR_UNBUILT_WORK = {
     # deleted because the shape of the configuration is part of the design, but an
     # operator setting one today changes nothing, and that is worth failing over the
     # day someone believes otherwise.
-    "authority.webhook_url": "pause notification is not implemented",
-    "authority.webhook_timeout_s": "pause notification is not implemented",
     "intake.kafka.topic": "the queue intake is a phase-two extra",
     "intake.kafka.group_id": "the queue intake is a phase-two extra",
     "model.request_timeout_s": "the profile's own limit is what the client sends",
@@ -57,9 +56,13 @@ DECLARED_FOR_UNBUILT_WORK = {
 
 def _paths(model: type, prefix: str = ""):
     for name, info in model.model_fields.items():
-        nested = getattr(info.annotation, "model_fields", None)
-        if nested:
-            yield from _paths(info.annotation, f"{prefix}{name}.")
+        # Into the element type as well as the field's own, because a tuple of settings
+        # models exposes no model_fields of its own: the walk stopped at
+        # `authority.rules` and no field of an authority rule was ever swept.
+        for annotation in (info.annotation, *get_args(info.annotation)):
+            if getattr(annotation, "model_fields", None):
+                yield from _paths(annotation, f"{prefix}{name}.")
+                break
         else:
             yield f"{prefix}{name}", name
 

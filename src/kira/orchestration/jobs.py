@@ -21,8 +21,9 @@ from kira.adapters.registry import get_adapter
 from kira.audit.journal import Journal
 from kira.contracts.events import EnvironmentEvent
 from kira.contracts.lifecycle import LifecycleState, RunStatus
+from kira.memory.ports import ApprovalRecord
 from kira.orchestration.inflight import clear_held_episodes, held_episode
-from kira.orchestration.resume import load_checkpoint
+from kira.orchestration.resume import approves_on_timeout, load_checkpoint
 from kira.orchestration.runner import Deployment, resume_after_decision
 from kira.orchestration.scheduler import scheduler_for
 
@@ -77,12 +78,43 @@ def bound_deployment() -> "Deployment":
     return _DEPLOYMENT
 
 
+def _approved_on_expiry(deployment: "Deployment", record: ApprovalRecord, now: str) -> bool:
+    """Settle one overdue request in favour of the rule that raised it, if it has one.
+
+    Both ways an expiry is noticed come through here — the job armed at the pause and
+    the sweep that catches a request whose job was never armed — because a rule meaning
+    one thing when the job fires and another when the sweep finds it is not a policy.
+
+    Args:
+        deployment: This process's resources.
+        record: A request that may have run out of time.
+        now: The current timestamp.
+
+    Returns:
+        True when the request was approved, so a caller can tell it from a timeout.
+    """
+    decided_by = approves_on_timeout(record, deployment.settings.authority, now=now)
+    if decided_by is None or not deployment.storage.approvals.decide(
+        record.request_id,
+        status="approved",
+        decided_by=decided_by,
+        reason="no operator answered, and the rule that raised it approves on expiry",
+    ):
+        return False
+    _log.info("approval request %s was approved on expiry by %s", record.request_id, decided_by)
+    return True
+
+
 async def expire_approval(request_id: str, **_: Any) -> str:
     """Time out a request nobody answered, and let the incident continue.
 
     A request left pending forever parks its incident forever. Timing out is a decision
     like any other — it is recorded, it is attributable to nobody, and the paused call
     comes back as a refusal rather than as an error.
+
+    Unless the rule that raised it said otherwise. An operator who names the narrow
+    class of actions that are safe unattended is making the whole safety property work
+    for them, and denying there is the safe answer rather than the configured one.
 
     Args:
         request_id: The request that has run out of time.
@@ -92,8 +124,15 @@ async def expire_approval(request_id: str, **_: Any) -> str:
         A short status for the job log.
     """
     deployment = bound_deployment()
+    approvals = deployment.storage.approvals
     now = datetime.now(UTC).isoformat()
-    expired = {record.request_id for record in deployment.storage.approvals.expire_due(now=now)}
+    pending = approvals.get_request(request_id)
+    # Asked before the expiry, because a decision is only recorded on a request that is
+    # still pending: expiring first would leave the rule nothing to decide.
+    if pending is not None and _approved_on_expiry(deployment, pending, now):
+        schedule_approval_resume(request_id)
+        return "approved_on_timeout"
+    expired = {record.request_id for record in approvals.expire_due(now=now)}
     if request_id not in expired:
         # Answered in the meantime, or already expired by an earlier sweep. Either way
         # there is nothing to do, and doing it twice would resume the same incident twice.
@@ -229,7 +268,10 @@ async def sweep_decided_approvals(**_: Any) -> str:
     deployment = bound_deployment()
     sessions = deployment.storage.sessions
     resumed = 0
-    for record in deployment.storage.approvals.expire_due(now=datetime.now(UTC).isoformat()):
+    now = datetime.now(UTC).isoformat()
+    for record in deployment.storage.approvals.list_requests(status="pending"):
+        _approved_on_expiry(deployment, record, now)
+    for record in deployment.storage.approvals.expire_due(now=now):
         _log.info(
             "approval %s passed its deadline with no decision and no armed timeout",
             record.request_id,
