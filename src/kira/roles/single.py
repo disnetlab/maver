@@ -112,9 +112,14 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
     # A continuation re-enters the phase that paused. Rebuilding phase one would re-ask
     # a question already answered, discard the result of the write the operator has just
     # approved, and let the agent reissue a mutation the cluster has taken.
-    resumed = _submitted_diagnosis(list(ctx.resume)) if ctx.resume is not None else None
-    if ctx.resume_stage == "single.mitigation" and resumed is not None:
-        diagnosis, diagnosis_transcript = resumed
+    continuation = (
+        _submitted_diagnosis(list(ctx.resume))
+        if ctx.resume is not None and ctx.resume_stage == "single.mitigation"
+        else None
+    )
+    if ctx.resume is not None and continuation is not None:
+        diagnosis, diagnosis_transcript = continuation
+        mitigation_opening: list[Message] = list(ctx.resume)
     else:
         opening = render(
             read_runtime("single", "diagnosis_task.txt"),
@@ -147,18 +152,14 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         diagnosis = SingleDiagnosis.model_validate(diagnosis_run.submission)
         diagnosis_transcript = diagnosis_run.transcript
         await _announce(ctx, "rca", {"root_cause": diagnosis})
-
-    # Continue the same transcript so the agent keeps its diagnosis context. Its last
-    # turn is the submit call, which nothing answered, and a server rejects a request
-    # whose tool call has no reply — so the dangling call is closed before the replay.
-    mitigation_opening: list[Message] = (
-        list(ctx.resume)
-        if ctx.resume_stage == "single.mitigation" and ctx.resume is not None
-        else [
+        # Continue the same transcript so the agent keeps its diagnosis context. Its
+        # last turn is the submit call, which nothing answered, and a server rejects a
+        # request whose tool call has no reply — so the dangling call is closed first.
+        mitigation_opening = [
             *close_dangling_tool_calls(diagnosis_transcript),
             {"role": "user", "content": read_runtime("single", "mitigation_task.txt")},
         ]
-    )
+
     mitigation_run = await run_until_submit(
         role="single.mitigation",
         tools=_hide(ctx.toolset.definitions, "submit_diagnosis"),
