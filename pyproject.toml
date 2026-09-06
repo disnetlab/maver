@@ -195,7 +195,14 @@ warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 
 [[tool.mypy.overrides]]
-module = ["litellm.*", "langgraph.*", "chromadb.*", "apscheduler.*", "kubernetes.*"]
+module = [
+    "litellm.*",
+    "langgraph.*",
+    "chromadb.*",
+    "apscheduler.*",
+    "kubernetes.*",
+    "snowballstemmer.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
