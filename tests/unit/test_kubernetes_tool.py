@@ -1,6 +1,13 @@
+import asyncio
+from pathlib import Path
+
 import pytest
 
+from kira.audit.journal import Journal
 from kira.settings.groups import ToolSettings
+from kira.tools.context import ToolContext
+from kira.tools.execution import bash_exec
+from kira.tools.host import ssh_exec
 from kira.tools.kubernetes import (
     KubernetesPolicy,
     _append_delete_wait_false,
@@ -11,6 +18,7 @@ from kira.tools.kubernetes import (
     kubectl_authority,
     tokenize,
 )
+from kira.tools.workspace import SessionWorkspace
 
 POLICY = KubernetesPolicy()
 
@@ -245,4 +253,55 @@ def test_an_in_container_command_still_names_the_pod_it_runs_in() -> None:
         "verb:exec",
         "namespace:shop",
         "resource:web-0",
+    )
+
+
+# --- the kubectl guard the sandbox and the host tool share -------------------------
+
+
+class _NoCluster:
+    name = "none"
+    capabilities = frozenset()
+    timeout_seconds = 30
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "systemctl restart kubelet && kubectl delete ns shop",
+        "systemctl restart kubelet\nkubectl delete ns shop",
+        "echo $(kubectl get ns chaos-mesh -o yaml)",
+        "echo `kubectl get secret db -o yaml`",
+        "(k3s kubectl delete ns shop)",
+    ],
+)
+async def test_kubectl_cannot_reach_a_shell_through_either_tool(
+    command: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One guard, because the two copies of it disagreed about what a separator is.
+
+    The host tool's copy saw `;`, `&` and `|` and neither a newline nor a subshell, and
+    ssh hands the command to the node's login shell, where a second line is a second
+    command run against a kubeconfig that is cluster-admin on a k3s host — outside every
+    screen the kubectl tool applies and outside the ServiceAccount's RBAC.
+    """
+
+    def never_runs(*argv: object, **kwargs: object) -> None:
+        raise AssertionError(f"a subprocess was started: {argv}")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", never_runs)
+    ctx = ToolContext(
+        transport=_NoCluster(),
+        workspace=SessionWorkspace(tmp_path),
+        role="execution",
+        session_id="s1",
+        journal=Journal(session_id="s1", stage="execution"),
+        settings=ToolSettings(host_recovery_nodes=frozenset({"worker1"})),
+    )
+
+    assert (await ssh_exec(ctx, node="worker1", command=command)).startswith(
+        "error: do not run kubectl through ssh_exec"
+    )
+    assert (await bash_exec(ctx, cmd=command)).startswith(
+        "error: do not run kubectl through bash_exec"
     )

@@ -23,6 +23,7 @@ from typing import Any
 
 from kira.tools.context import ToolContext, redact
 from kira.tools.errors import EXEC_OUTPUT_LIMIT, tool_error
+from kira.tools.execution import runs_kubectl
 from kira.tools.policy import always_writes
 from kira.tools.registry import Authority, tool
 
@@ -30,7 +31,6 @@ __all__ = ["ssh_exec"]
 
 _EXECUTION_STAGES = frozenset({"execution"})
 _NODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-_KUBECTL = re.compile(r"(?:^|[;&|]\s*)(?:sudo\s+)?(?:k3s\s+)?kubectl\b")
 _TIMEOUT_SECONDS = 45
 _MAX_COMMAND_CHARS = 4096
 
@@ -97,7 +97,7 @@ async def ssh_exec(ctx: ToolContext, node: str, command: str) -> str:
         return tool_error(
             "ssh_exec command contains an unsupported character or exceeds 4096 characters"
         )
-    if _KUBECTL.search(command):
+    if runs_kubectl(command):
         return tool_error(
             "do not run kubectl through ssh_exec. Use the Kubernetes tool "
             "for cluster reads and writes; ssh_exec is for host-level commands "

@@ -5,10 +5,14 @@ something across a log file, compute a difference — rather than to reach anyth
 The containment property is structural: the subprocess environment carries no cluster
 credentials, so there is no configuration in which a command here can mutate a cluster.
 
-The kubectl and ssh guards below are therefore not the safety boundary. They are about
-turn economy: a model that shells out to kubectl gets an authentication failure, reads it
-as a broken tool, and retries variants of the same command until its budget is gone.
-Naming the right tool in the refusal is what stops that.
+The kubectl and ssh guards below are therefore not the safety boundary *here*. They are
+about turn economy: a model that shells out to kubectl gets an authentication failure,
+reads it as a broken tool, and retries variants of the same command until its budget is
+gone. Naming the right tool in the refusal is what stops that.
+
+The kubectl one is shared with the host tool, where it *is* a safety boundary, which is
+why it lives in one place: the two copies had drifted, and the weaker of them guarded the
+tool that reaches a credentialed shell.
 
 The shell tool is called ``bash_exec`` and must not be renamed back. A middlebox between
 the cluster and a cleartext model endpoint resets any payload containing the literal
@@ -29,13 +33,15 @@ from kira.tools.policy import read_only
 from kira.tools.registry import tool
 from kira.tools.sandbox import SANDBOX_ERROR_PREFIX, sandboxed_command
 
-__all__ = ["bash_exec", "code_exec"]
+__all__ = ["bash_exec", "code_exec", "runs_kubectl"]
 
-# `kubectl` at command position only: at the start, or after a separator or pipe. So
-# `foo && kubectl get pods` is caught and `grep kubectl notes.txt` is not.
-_LEADING_KUBECTL = re.compile(r"(?:^|[\n;&|])\s*(?:sudo\s+)?kubectl\b")
-_LEADING_SSH = re.compile(r"(?:^|[\n;&|])\s*(?:sudo\s+)?ssh\b")
-_LEADING_SSH_TOOL = re.compile(r"(?:^|[\n;&|])\s*ssh_exec\b")
+# Command position only: the start of the command, or after a separator, a pipe or the
+# opening of a subshell. So `foo && kubectl get pods`, a second line, and
+# `echo $(kubectl get secret)` are all caught, and `grep kubectl notes.txt` is not.
+_AT_COMMAND_POSITION = r"(?:^|[\n;&|(`])\s*"
+_KUBECTL_COMMAND = re.compile(_AT_COMMAND_POSITION + r"(?:sudo\s+)?(?:k3s\s+)?kubectl\b")
+_LEADING_SSH = re.compile(_AT_COMMAND_POSITION + r"(?:sudo\s+)?ssh\b")
+_LEADING_SSH_TOOL = re.compile(_AT_COMMAND_POSITION + r"ssh_exec\b")
 
 # In Python source, a bare mention is not a shell-out. Both a reference and a way to run
 # it must be present, so a script that merely reads a kubectl-named file still runs.
@@ -62,6 +68,23 @@ _SSH_FROM_SANDBOX = (
     "do not run ssh from {origin}. Host mutations must use "
     "ssh_exec(node, command), which is execution-only and HITL-gated."
 )
+
+
+def runs_kubectl(command: str) -> bool:
+    """Report whether a shell command would run kubectl.
+
+    Shared with the host tool because the two copies of this question had drifted, and
+    the one that answered it for ``ssh_exec`` — the only tool that reaches a shell
+    holding the node's own kubeconfig, which on a k3s host is cluster-admin — was the
+    one that saw neither a newline nor a subshell.
+
+    Args:
+        command: The command as the model wrote it.
+
+    Returns:
+        True when kubectl runs at a command position within it.
+    """
+    return _KUBECTL_COMMAND.search(command) is not None
 
 
 async def _run(ctx: ToolContext, command: list[str], *, timeout: float, label: str) -> str:
@@ -117,7 +140,7 @@ async def bash_exec(ctx: ToolContext, cmd: str) -> str:
     Returns:
         Its output, or a string beginning with ``error:``.
     """
-    if _LEADING_KUBECTL.search(cmd):
+    if runs_kubectl(cmd):
         return tool_error(_KUBECTL_FROM_SHELL)
     if _LEADING_SSH.search(cmd):
         return tool_error(_SSH_FROM_SANDBOX.format(origin="bash_exec"))
