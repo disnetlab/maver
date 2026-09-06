@@ -565,6 +565,24 @@ class MemoryStoreContract:
         assert records.candidates("") == []
         assert records.candidates("nothingmatchesthisterm") == []
 
+    def test_candidates_are_found_through_morphology_and_never_through_a_stopword(
+        self, records: TextSearch
+    ) -> None:
+        """One normaliser, so a backend that skipped it builds a different pool.
+
+        This is the whole reason :mod:`kira.memory.lexemes` exists. Before it, an
+        embedded deployment answered "pod crash" with nothing where the server backend
+        answered with the record below, and answered a query of nothing but stopwords
+        with the entire corpus where the server answered with none of it.
+        """
+        records.upsert_summary(a_record("s1", evidence="the pods were crashing repeatedly"))
+        records.upsert_summary(a_record("s2", evidence="a node became unschedulable"))
+
+        assert [m.session_id for m in records.candidates("pod crash")] == ["s1"]
+        assert [m.session_id for m in records.candidates("nodes")] == ["s2"], "inflected query"
+        assert records.candidates("the and of") == [], "a stopword is not a search term"
+        assert records.candidates("was it not") == []
+
     def test_candidates_are_the_whole_matching_pool_not_a_ranked_top_k(
         self, records: TextSearch
     ) -> None:

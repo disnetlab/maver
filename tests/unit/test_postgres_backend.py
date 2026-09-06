@@ -35,6 +35,7 @@ from memory_contract import (
 )
 
 from kira.contracts.lifecycle import LifecycleState
+from kira.memory.backends.sqlite import SqliteStore
 from kira.memory.ports import TextSearch
 
 DSN = os.environ.get("POSTGRES_TEST_DSN", "")
@@ -274,3 +275,103 @@ def test_a_database_written_before_the_normaliser_is_reindexed_on_open(schema: s
         assert store.records.count() == 2
         assert [m.session_id for m in store.records.candidates("pod crash")] == ["old"]
         assert [m.session_id for m in store.records.candidates("resolve failure")] == ["new"]
+
+
+# Forty records and fifteen queries in the shapes real incident text takes: hyphenated
+# workload names, image tags, addresses, versions, slash-joined error pairs, inflected
+# prose, and stopwords. Small enough to read, wide enough that a backend which tokenised
+# differently could not pass by luck.
+_EVIDENCE = [
+    "the checkout pods were crashing repeatedly with OOMKilled",
+    "hotel-reservation frontend returns 503 for every request",
+    "astronomy-shop ad service exits immediately on start",
+    "social-network user-service times out calling mongodb",
+    "coredns resolution failures across kube-system",
+    "the node became unschedulable under disk pressure",
+    "RunContainerError/CrashLoopBackOff on all eight deployments",
+    "image yinfangchen/hotelreservation:latest cannot be pulled",
+    "nginx:1.21.3 replaced by a tag that does not exist",
+    "the readiness probe failed on 10.96.0.1 for ten minutes",
+    "cpu throttling raised p99 latency to 250ms",
+    "memory limit 512Mi exceeded by the recommendation service",
+    "pvc mongodb-data stayed Pending, unbound and unclaimed",
+    "the network policy blocked traffic between namespaces",
+    "certificate expired and the tls handshake was refused",
+    "configmap otel-collector-agent points at a missing endpoint",
+    "deployment/checkout was rolled back to the previous revision",
+    "replicas scaled to zero by a stale horizontal autoscaler",
+    "checkout-7d9f8b6c5-x2klm restarted 14 times in an hour",
+    "jaeger traces show 500 responses from the payment path",
+    "rate limiting returned 429 for a third of requests",
+    "the sidecar container was added and never became ready",
+    "internally routed requests error before reaching the service",
+    "kubelet evicted the pod for ephemeral storage",
+    "the service selector matched no pods at all",
+    "an init container hung waiting on a dependency",
+    "etcd was slow and the api server flapped",
+    "the admission webhook rejected every create",
+    "conntrack table exhaustion on the worker node",
+    "the pod cidr ran out of addresses",
+    "a wrong port made the service unreachable",
+    "the load generator saturated the frontend",
+    "mongodb connection refused after the restart",
+    "the geo service returned empty results",
+    "profile pods crashed on a malformed config",
+    "search latency doubled after the rollout",
+    "reservation writes failed with a duplicate key",
+    "the recommendation cache was never warmed",
+    "logs show 'executable file not found in $PATH'",
+    "no firing alerts remained after the rollout completed",
+]
+_QUERIES = [
+    "pod crash",
+    "crashing pods restarting",
+    "the and of",
+    "",
+    "oomkilled memory limit",
+    "crashloopbackoff",
+    "hotel-reservation frontend unreachable",
+    "deployment/checkout rolled back",
+    "10.96.0.1 probe failing",
+    "nginx:1.21.3 image pull",
+    "internally routed errors",
+    "added a sidecar",
+    "coredns kube-system resolution",
+    "checkout-7d9f8b6c5-x2klm restarts",
+    "nothingmatchesthisterm",
+]
+
+
+@pytest.mark.parametrize("scope", ["evidence", "lesson"])
+def test_the_two_backends_build_the_same_pool_for_the_same_corpus(schema: str, scope: Any) -> None:
+    """The claim the shared normaliser exists to make, checked against both databases.
+
+    A contract test cannot make it: it runs each backend in its own process against its
+    own fixture, so it can say each is self-consistent and never that the two agree. This
+    writes one corpus into both and compares candidate sets query by query.
+    """
+    corpus = [
+        a_record(f"s{index}", evidence=evidence, lesson=f"lesson for {evidence}")
+        for index, evidence in enumerate(_EVIDENCE)
+    ]
+    with (
+        closing(SqliteStore(":memory:")) as sqlite,
+        closing(PostgresStore(DSN, schema=schema)) as postgres,
+    ):
+        for record in corpus:
+            sqlite.records.upsert_summary(record)
+            postgres.records.upsert_summary(record)
+
+        pools = {}
+        for query in _QUERIES:
+            embedded = {m.session_id for m in sqlite.records.candidates(query, scope=scope)}
+            server = {m.session_id for m in postgres.records.candidates(query, scope=scope)}
+            assert embedded == server, f"{query!r} on {scope} pools differently"
+            pools[query] = embedded
+
+    # Two backends that both returned nothing for everything would agree and mean
+    # nothing, so what they agreed on is worth stating.
+    assert pools["pod crash"], "an inflected query has to reach the record it describes"
+    assert not pools["the and of"], "a stopword is not a search term"
+    assert not pools["nothingmatchesthisterm"]
+    assert sum(len(pool) for pool in pools.values()) > len(_QUERIES)
