@@ -239,6 +239,19 @@ class SessionStore(Protocol):
         """
         ...
 
+    def awaiting_sessions(self) -> list[SessionRecord]:
+        """Read every session parked on a human decision.
+
+        The one question the approval sweep has to ask, from the side that is bounded.
+        Nothing prunes decided requests, so scanning them grew a little longer every
+        time somebody answered one; the sessions parked right now are bounded by the
+        incidents in flight.
+
+        Returns:
+            The parked sessions, oldest first.
+        """
+        ...
+
     def get_states(self, session_ids: Sequence[str]) -> dict[str, str]:
         """Read the lifecycle state of many sessions at once.
 

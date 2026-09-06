@@ -542,6 +542,20 @@ class PostgresStore:
             ).fetchone()
         return None if row is None else _to_session(row)
 
+    def awaiting_sessions(self) -> list[SessionRecord]:
+        """Read every session parked on a human decision.
+
+        Returns:
+            The parked sessions, oldest first.
+        """
+        with self._db.read() as conn:
+            rows = conn.execute(
+                "SELECT * FROM sessions WHERE corpus_id = %s AND run_status = %s "
+                "ORDER BY started_at",
+                (self.corpus_id, RunStatus.AWAITING_HUMAN.value),
+            ).fetchall()
+        return [_to_session(row) for row in rows]
+
     def get_states(self, session_ids: Sequence[str]) -> dict[str, str]:
         """Read the lifecycle state of many sessions at once.
 

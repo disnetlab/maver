@@ -236,6 +236,30 @@ class MemoryStoreContract:
         assert resumed.checkpoint is None
         assert resumed.awaiting_request_id is None
 
+    def test_the_parked_sessions_are_the_ones_a_person_is_holding_now(
+        self, store: OperationalStore
+    ) -> None:
+        """What the approval sweep asks, instead of rereading every request ever
+        answered. Nothing prunes decided approvals, so that side of the question grows
+        forever; the sessions parked right now are bounded by the incidents in flight,
+        and each one names the single request it is waiting on."""
+        parked = store.create_session({})
+        store.set_run_status(
+            parked.session_id, RunStatus.AWAITING_HUMAN, awaiting_request_id="req-1"
+        )
+        running = store.create_session({})
+        store.set_run_status(running.session_id, RunStatus.RUNNING)
+        answered = store.create_session({})
+        store.set_run_status(
+            answered.session_id, RunStatus.AWAITING_HUMAN, awaiting_request_id="req-2"
+        )
+        store.set_run_status(answered.session_id, RunStatus.COMPLETED)
+
+        waiting = store.awaiting_sessions()
+
+        assert [record.session_id for record in waiting] == [parked.session_id]
+        assert waiting[0].awaiting_request_id == "req-1"
+
     def test_a_session_s_end_is_stamped_by_the_first_terminal_status_and_never_moves(
         self, store: OperationalStore
     ) -> None:

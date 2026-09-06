@@ -330,31 +330,49 @@ async def sweep_decided_approvals(**_: Any) -> str:
     Returns:
         A short status for the job log.
     """
-    deployment = bound_deployment()
-    sessions = deployment.storage.sessions
-    resumed = 0
+    return await asyncio.to_thread(_sweep, bound_deployment())
+
+
+def _sweep(deployment: Deployment) -> str:
+    """The sweep's store work, off the event loop and off the approval history.
+
+    Every store call in this process goes to a thread, and this one ran inline on a
+    repeating schedule: three unbounded queries and a session read per historical
+    record, once every poll interval, growing for as long as the store is kept. Nothing
+    prunes decided approvals, so at two thousand of them over a database on another host
+    it held the loop that serves every incident's model calls, every tool result and the
+    readiness probe for seconds at a time, and never came back down.
+
+    Driven from the sessions parked right now rather than from every request ever
+    answered, because that set is bounded by the incidents in flight. Each parked session
+    names the one request it is waiting on, so the question is a lookup rather than a
+    scan.
+    """
+    approvals = deployment.storage.approvals
     now = datetime.now(UTC).isoformat()
-    for record in deployment.storage.approvals.list_requests(status="pending"):
+    for record in approvals.list_requests(status="pending"):
         _approved_on_expiry(deployment, record, now)
-    for record in deployment.storage.approvals.expire_due(now=now):
+    for record in approvals.expire_due(now=now):
         _log.info(
             "approval %s passed its deadline with no decision and no armed timeout",
             record.request_id,
         )
-    for status in ("approved", "denied", "timed_out"):
-        for record in deployment.storage.approvals.list_requests(status=status):
-            session = sessions.get_session(record.session_id)
-            if session is None or session.run_status != RunStatus.AWAITING_HUMAN.value:
-                continue
-            if session.awaiting_request_id != record.request_id:
-                continue
-            _log.info(
-                "approval %s was decided elsewhere; continuing incident %s",
-                record.request_id,
-                record.session_id,
-            )
-            schedule_approval_resume(record.request_id)
-            resumed += 1
+
+    resumed = 0
+    for session in deployment.storage.sessions.awaiting_sessions():
+        request_id = session.awaiting_request_id
+        if request_id is None:
+            continue
+        decided = approvals.get_request(request_id)
+        if decided is None or decided.status == "pending":
+            continue
+        _log.info(
+            "approval %s was decided elsewhere; continuing incident %s",
+            request_id,
+            session.session_id,
+        )
+        schedule_approval_resume(request_id)
+        resumed += 1
     return f"resumed {resumed}" if resumed else "nothing waiting"
 
 
