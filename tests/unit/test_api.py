@@ -387,6 +387,31 @@ async def test_the_same_alert_twice_is_one_incident(tmp_path: pathlib.Path) -> N
     deploy.storage.close()
 
 
+async def test_the_deduplication_holds_when_the_reposts_arrive_together(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Asking whether an alert is already being handled and recording that it now is
+    have to be one step, exactly as asking for room and taking it do.
+
+    Between the two there were two database writes, and every request in a burst yields
+    at both — so each post of one alert passed a check no other had yet answered, and
+    four agents remediated the same fault against each other, on a cluster each of them
+    was also mutating.
+    """
+    deploy = deployment(tmp_path)
+    app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
+
+    async with client(app) as http:
+        replies = await asyncio.gather(
+            *(http.post("/api/v1/incidents", json={"alert": ALERT}) for _ in range(4))
+        )
+        assert [reply.status_code for reply in replies] == [202, 202, 202, 202]
+        assert len({reply.json()["session_id"] for reply in replies}) == 1
+        assert len(app.state.service.runs.live()) == 1
+        await settle(app.state.service)
+    deploy.storage.close()
+
+
 async def test_a_harness_key_cannot_make_one_alert_look_like_two(
     tmp_path: pathlib.Path,
 ) -> None:

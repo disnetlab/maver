@@ -11,8 +11,39 @@ not the one being asked to approve a write.
 """
 
 import asyncio
+from dataclasses import dataclass, field
 
-__all__ = ["RunRegistry"]
+__all__ = ["Claim", "RunRegistry"]
+
+
+@dataclass(slots=True)
+class _Held:
+    """What this process is doing about one alert, from the claim to the session."""
+
+    opened: asyncio.Event = field(default_factory=asyncio.Event)
+    session_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Claim:
+    """One intake's hold on an alert and on a slot, taken in a single step."""
+
+    fingerprint: str | None
+    """What identifies the alert, when the caller deduplicates on one."""
+    ours: bool
+    """Whether this caller is the one opening the incident. False when another request
+    got to the alert first, and this one is waiting for the session that request opens."""
+    _held: _Held
+
+    async def session(self) -> str | None:
+        """Wait for the incident the request ahead of this one is opening.
+
+        Returns:
+            The session already handling this alert, or None when the request that
+            claimed it gave up without opening one.
+        """
+        await self._held.opened.wait()
+        return self._held.session_id
 
 
 class RunRegistry:
@@ -22,12 +53,12 @@ class RunRegistry:
         """Start empty."""
         self._runs: dict[str, asyncio.Task[None] | None] = {}
         self._tasks: set[asyncio.Task[None]] = set()
-        self._by_alert: dict[str, str] = {}
+        self._alerts: dict[str, _Held] = {}
         self._reserved = 0
         self._draining = False
 
     def register(self, session_id: str, *, fingerprint: str | None = None) -> None:
-        """Start tracking a run.
+        """Start tracking a run, filling in the claim its intake took.
 
         Args:
             session_id: The incident.
@@ -35,8 +66,11 @@ class RunRegistry:
                 computed one. Used to recognise a repost of the same alert.
         """
         self._runs[session_id] = None
-        if fingerprint is not None:
-            self._by_alert[fingerprint] = session_id
+        if fingerprint is None:
+            return
+        held = self._alerts.setdefault(fingerprint, _Held())
+        held.session_id = session_id
+        held.opened.set()
 
     def attach(self, session_id: str, task: asyncio.Task[None]) -> None:
         """Hold the task carrying a registered run.
@@ -63,9 +97,9 @@ class RunRegistry:
             session_id: The incident.
         """
         self._runs.pop(session_id, None)
-        for fingerprint, tracked in list(self._by_alert.items()):
-            if tracked == session_id:
-                del self._by_alert[fingerprint]
+        for fingerprint, held in list(self._alerts.items()):
+            if held.session_id == session_id:
+                del self._alerts[fingerprint]
 
     def cancel(self, session_id: str) -> bool:
         """Ask a run this process is carrying to stop.
@@ -97,22 +131,6 @@ class RunRegistry:
             remove themselves.
         """
         return set(self._tasks)
-
-    def find(self, fingerprint: str) -> str | None:
-        """Find a live run already working on this alert.
-
-        Deliberately only the live ones, and deliberately only in this process. An
-        alerting source retries on a timescale of seconds, which is what this covers.
-        A restart clears it, and a restart also loses the run it was tracking — so a
-        repost after one is a new incident, correctly.
-
-        Args:
-            fingerprint: What identifies the alert.
-
-        Returns:
-            The session already handling it, or None.
-        """
-        return self._by_alert.get(fingerprint)
 
     def at_capacity(self, limit: int) -> bool:
         """Whether this process is already carrying as many incidents as it should.
@@ -150,37 +168,69 @@ class RunRegistry:
         """
         self._draining = True
 
-    def reserve(self, limit: int) -> bool:
-        """Take one of this process's slots, without awaiting anything.
+    def claim(self, fingerprint: str | None, limit: int) -> Claim | None:
+        """Take one of this process's slots, and the alert with it, in a single step.
 
-        Asking whether there is room and taking the room have to be one step. Opening a
-        session and marking it running are two database writes, and every request in a
-        burst yields at both — so each of them passed a capacity check that no other had
-        yet invalidated, and a process configured for two carried seven. A bound that
-        holds only when requests arrive one at a time is not a bound, and this one exists
-        because oversubscribing a private endpoint wedges it rather than queueing.
+        Asking whether an alert is already being handled and recording that it now is
+        have to be one step, for the same reason asking whether there is room and taking
+        the room do. Opening a session and marking it running are two database writes,
+        and every request in a burst yields at both — so each of them passed checks no
+        other had yet answered: a process configured for two carried seven, and four
+        posts of one alert started four agents remediating the same fault against each
+        other. A bound that holds only when requests arrive one at a time is not a
+        bound, and neither is deduplication.
+
+        Deduplication is deliberately over live runs only, and deliberately only in this
+        process. An alerting source retries on a timescale of seconds, which is what this
+        covers. A restart clears it, and a restart also loses the run it was tracking —
+        so a repost after one is a new incident, correctly.
 
         Args:
+            fingerprint: What identifies the alert, or None for an intake with nothing
+                to deduplicate on.
             limit: The configured ceiling.
 
         Returns:
-            True when a slot was taken. The caller releases it once the run it started
-            is registered, or once it is certain none will be.
+            A claim for this caller to fill by registering a session, a claim another
+            request already holds — whose session id this one waits for — or None when
+            the process is draining or already full.
         """
+        held = self._alerts.get(fingerprint) if fingerprint is not None else None
+        if held is not None:
+            return Claim(fingerprint=fingerprint, ours=False, _held=held)
         if self._draining or self.at_capacity(limit):
-            return False
+            return None
         self._reserved += 1
-        return True
+        held = _Held()
+        if fingerprint is not None:
+            self._alerts[fingerprint] = held
+        return Claim(fingerprint=fingerprint, ours=True, _held=held)
 
-    def release(self) -> None:
-        """Give back a reserved slot.
+    def release(self, claim: Claim) -> None:
+        """Give back what a claim took.
 
-        Paired with :meth:`reserve` by the caller rather than consumed by
-        :meth:`register`, because runs are registered on paths that never reserved —
-        a resumed incident among them — and a counter two callers decrement is one that
-        drifts.
+        Released by the caller rather than consumed by :meth:`register`, because runs
+        are registered on paths that never claimed — a resumed incident among them — and
+        a counter two callers decrement is one that drifts. The slot is held across the
+        two writes that open the session, because that is the window a burst passes
+        through, and given back once the run it started is registered or once it is
+        certain none will be. A claim that opened nothing releases the alert too, so a
+        request waiting behind it is answered rather than left waiting for an incident
+        that is not coming.
+
+        Args:
+            claim: What :meth:`claim` returned. Releasing a claim this caller does not
+                hold is a no-op.
         """
+        if not claim.ours:
+            return
         self._reserved = max(0, self._reserved - 1)
+        if claim.fingerprint is None:
+            return
+        held = self._alerts.get(claim.fingerprint)
+        if held is not None and held.session_id is None:
+            del self._alerts[claim.fingerprint]
+            held.opened.set()
 
     def live(self) -> list[str]:
         """Which incidents are running here.

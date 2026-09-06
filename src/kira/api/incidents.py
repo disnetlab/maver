@@ -89,11 +89,29 @@ async def create_incident(body: IncidentRequest, service: ServiceDep) -> dict[st
             headers={"Retry-After": "30"},
         )
 
+    limit = service.deployment.settings.server.max_concurrent_incidents
+    claim = service.runs.claim(fingerprint(body.alert), limit)
+    if claim is None:
+        # Refused rather than queued. The queue would be invisible to the caller and
+        # every run already in flight would slow down to make room for it; a refusal an
+        # alerting source can retry is the honest answer.
+        raise HTTPException(
+            status_code=429,
+            detail=f"already handling {limit} incidents",
+            headers={"Retry-After": "60"},
+        )
+
     # A retrying alert source posting the same alert twice wants one incident, not two
     # agents remediating the same fault against each other. Answered with the run that
     # is already on it, in the same shape, so the caller needs no new branch.
-    existing = service.runs.find(fingerprint(body.alert))
-    if existing is not None:
+    if not claim.ours:
+        existing = await claim.session()
+        if existing is None:
+            raise HTTPException(
+                status_code=503,
+                detail="the incident this alert raised could not be opened",
+                headers={"Retry-After": "30"},
+            )
         record = await asyncio.to_thread(service.deployment.storage.sessions.get_session, existing)
         _log.info("alert already being handled by %s; not starting a second run", existing)
         return {
@@ -103,23 +121,10 @@ async def create_incident(body: IncidentRequest, service: ServiceDep) -> dict[st
             "started_at": record.started_at if record is not None else "",
         }
 
-    limit = service.deployment.settings.server.max_concurrent_incidents
-    if not service.runs.reserve(limit):
-        # Refused rather than queued. The queue would be invisible to the caller and
-        # every run already in flight would slow down to make room for it; a refusal an
-        # alerting source can retry is the honest answer.
-        raise HTTPException(
-            status_code=429,
-            detail=f"already handling {limit} incidents",
-            headers={"Retry-After": "60"},
-        )
     try:
         return await start_incident(body.alert, target_stage=body.target_stage, service=service)
     finally:
-        # The slot is held across the two writes that open the session, because that is
-        # the window a burst passes through, and given back once the run it started is
-        # registered under its own id — or once it is certain none will be.
-        service.runs.release()
+        service.runs.release(claim)
 
 
 @router.get("/incidents/{session_id}")
