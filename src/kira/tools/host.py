@@ -18,7 +18,10 @@ prompts that name it, is post-parity work.
 """
 
 import asyncio
+import contextlib
+import os
 import re
+import signal
 
 from kira.tools.context import ToolContext, redact
 from kira.tools.errors import EXEC_OUTPUT_LIMIT, timed_out, tool_error
@@ -31,6 +34,7 @@ __all__ = ["ssh_exec"]
 _EXECUTION_STAGES = frozenset({"execution"})
 _NODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _TIMEOUT_SECONDS = 45
+_REAP_SECONDS = 5.0
 _MAX_COMMAND_CHARS = 4096
 
 # The binaries this tool exists to run. The argument goes to the node's login shell, and
@@ -237,11 +241,20 @@ async def ssh_exec(ctx: ToolContext, node: str, command: str) -> str:
         command,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        # In its own process group, as the direct transport's kubectl is, so the bound
+        # below can reach what ssh started as well as ssh itself.
+        start_new_session=True,
     )
     try:
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=_TIMEOUT_SECONDS)
     except TimeoutError:
-        process.kill()
+        # kill() reaches ssh alone, and anything it left behind keeps the inherited
+        # pipes open after the model has been told the call was abandoned on time. The
+        # reap is bounded for the same reason the call is.
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(process.wait(), _REAP_SECONDS)
         return timed_out("ssh_exec", _TIMEOUT_SECONDS)
 
     rendered = redact(

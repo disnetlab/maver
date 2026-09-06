@@ -6,6 +6,8 @@ because a tool that pre-truncated would hide the pointer to the saved file.
 """
 
 import asyncio
+import os
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -139,12 +141,17 @@ async def test_a_bounded_tool_reports_its_timeout_through_the_shared_builder(
     """
 
     class Hangs:
+        # No such process, so the group kill below finds nothing and says so the way a
+        # process that has already gone does.
+        pid = -1
+
         async def communicate(self) -> tuple[bytes, bytes]:
             await asyncio.sleep(10)
             raise AssertionError("the bound should have fired")
 
-        def kill(self) -> None:
+        async def wait(self) -> int:
             """Nothing was started."""
+            return -1
 
     async def spawn(*argv: object, **kwargs: object) -> Hangs:
         return Hangs()
@@ -164,3 +171,39 @@ async def test_a_bounded_tool_reports_its_timeout_through_the_shared_builder(
 
     assert call_timed_out(result)
     assert result == timed_out("ssh_exec", host._TIMEOUT_SECONDS)
+
+
+async def test_a_hung_ssh_takes_what_it_started_with_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bound has to end the call's process tree, not only its direct child.
+
+    ssh's own children — a ProxyCommand, a control master, whatever a wrapper on the
+    PATH started — inherit the pipes, and killing ssh alone leaves them holding the
+    incident's file descriptors and still running after the model has been told the call
+    was abandoned on time. This is the treatment the direct transport's kubectl gets,
+    and the two subprocess call sites should not differ on it.
+
+    The stand-in for ssh forks before it hangs, waits well past the bound, and leaves
+    the evidence in a file, so what is asserted is that the child died with its parent.
+    """
+    marker = tmp_path / "the-child-outlived-its-parent"
+    fake = tmp_path / "ssh"
+    fake.write_text(f"#!/bin/sh\n( sleep 1.3; touch {marker} ) &\nsleep 30\n")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(host, "_TIMEOUT_SECONDS", 0.8)
+    ctx = ToolContext(
+        transport=FakeTransport(),
+        workspace=SessionWorkspace(tmp_path),
+        role="execution",
+        session_id="s1",
+        journal=Journal(session_id="s1", stage="execution"),
+        settings=ToolSettings(host_recovery_nodes=frozenset({"worker1"})),
+    )
+
+    result = await ssh_exec(ctx, node="worker1", command="systemctl start kubelet")
+    await asyncio.sleep(1.2)
+
+    assert call_timed_out(result)
+    assert not marker.exists()
