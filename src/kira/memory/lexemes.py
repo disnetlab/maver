@@ -10,9 +10,11 @@ nothing but stopwords matched the whole corpus rather than none of it.
 
 Doing it here rather than in each backend is what makes the two identical *by
 construction* rather than by inspection. Both store the terms this module produces beside
-the raw text and index those; PostgreSQL's generated vectors become
-``to_tsvector('simple', <terms>)``, and SQLite's FTS5 table indexes the same string. An
-adopter who will not run PostgreSQL still gets the retriever that was measured.
+the raw text and index those, taking the terms as written: PostgreSQL's generated vectors
+are built with ``array_to_tsvector`` rather than ``to_tsvector('simple', ...)``, whose
+parser would split a hyphenated term again, and SQLite's FTS5 table keeps ``-`` and ``.``
+as token characters for the same reason. An adopter who will not run PostgreSQL still
+gets the retriever that was measured.
 
 Scoring is unaffected and deliberately so: :mod:`kira.memory.bm25` keeps tokenising the
 raw text, because raw tokens are what the published numbers scored.
