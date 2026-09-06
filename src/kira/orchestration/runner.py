@@ -26,7 +26,7 @@ from typing import Any, cast
 
 from kira.adapters.base import AdapterTool
 from kira.audit.journal import EventSink, Journal, NullSink, SequenceRegistry
-from kira.contracts.events import StageEvent
+from kira.contracts.events import InterventionEvent, StageEvent
 from kira.contracts.lifecycle import RunStatus
 from kira.contracts.routing import HandBack, Route
 from kira.contracts.state import IncidentState, TargetStage
@@ -87,6 +87,7 @@ __all__ = [
     "Deployment",
     "IncidentResources",
     "incident_context",
+    "record_hook_failures",
     "resume_after_decision",
     "run_incident",
     "tool_context_for",
@@ -282,6 +283,35 @@ _RUN_STATUS: Mapping[str, AgentRunStatus] = {
 """A halt is a role doing its job, so its row records the halt rather than a failure.
 The prototype's row said `failed`, which made a deliberate stop indistinguishable from a
 crash in every count taken downstream. See :mod:`kira.orchestration.outcomes`."""
+
+
+def record_hook_failures(journal: Journal) -> Callable[[str, str, BaseException], None]:
+    """Send a hook that raised to the incident's own log as well as to the process log.
+
+    A shaping or reviewing hook that fails is skipped, and skipped silently it is a
+    cross-cutting concern that was configured, was reached, and did not run — invisible
+    to any reconstruction of the incident, which is the record the auditability claim
+    rests on. The stack's default reports to a Python logger no run reconstruction will
+    ever see.
+
+    Args:
+        journal: The incident's log.
+
+    Returns:
+        The callback a :class:`MiddlewareStack` reports hook failures through.
+    """
+
+    def report(hook: str, phase: str, exc: BaseException) -> None:
+        _log.warning("hook %s failed in %s and was skipped: %s", hook, phase, exc, exc_info=exc)
+        journal.record(
+            InterventionEvent(
+                control="hook_failure",
+                action="bypassed",
+                detail=f"{hook} raised in {phase}: {type(exc).__name__}: {exc}",
+            )
+        )
+
+    return report
 
 
 def _engine(deployment: Deployment, deps: IncidentDeps, nodes: Mapping[str, NodeFn]) -> Engine:
@@ -521,7 +551,8 @@ def _context_builder(
                         journal=journal,
                     ),
                     *deployment.hooks,
-                ]
+                ],
+                on_error=record_hook_failures(journal),
             ),
             write_lock=deployment.write_lock,
             toolset=build_toolset(spec.name, tools, extras=deployment.tool_extras),
@@ -924,7 +955,8 @@ async def _replay(
                 journal=journal,
             ),
             *deployment.hooks,
-        ]
+        ],
+        on_error=record_hook_failures(journal),
     )
     # The grant is what the operator approved, read from the request they were shown;
     # the call is what the checkpoint says to run. Sourcing both from the checkpoint

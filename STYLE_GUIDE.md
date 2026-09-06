@@ -137,8 +137,13 @@ experiment configuration, or reuse it across roles? Then it is a hook. The proto
 loop reached 1,269 lines because the answer was always yes and the code always said
 otherwise.
 
-A failing hook must never take down a run. Hooks are wrapped; an exception is logged
-to the event log and the call proceeds.
+What a failing hook costs depends on the phase, and the split is deliberate. A shaping
+or reviewing hook that raises is recorded to the incident's event log as a bypassed
+intervention and skipped, because a run cut short by a misbehaving accessory is worse
+than a run that lost one accessory. A **wrapping** hook that raises is not swallowed: it
+has already taken responsibility for the call, and continuing as though it had not is
+how an unauthorised cluster write gets dispatched. Do not write a `wrap_tool_call` hook
+that catches its own exception and calls `handler(request)` anyway.
 
 ## 6. Configuration
 

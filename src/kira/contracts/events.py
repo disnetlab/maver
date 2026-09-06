@@ -201,7 +201,7 @@ class SubmissionEvent(BaseModel):
 
 
 class InterventionEvent(BaseModel):
-    """A runtime control acting on a stalled or looping generation."""
+    """A runtime control acting on a stalled or looping generation, or failing to."""
 
     kind: Literal["intervention"] = "intervention"
     control: Literal[
@@ -213,11 +213,13 @@ class InterventionEvent(BaseModel):
         "tool_choice",
         "turn_limit",
         "timeout",
+        "hook_failure",
     ]
     action: Literal["warned", "refused", "rescued", "bypassed", "ended_run"]
     """``bypassed`` is a control that was reached and not applied — because its own
-    budget was spent, or because the endpoint being served cannot accept it. It is not
-    ``warned``: nothing was said to the model and nothing was refused. It exists as its
+    budget was spent, because the endpoint being served cannot accept it, or because it
+    raised and was skipped. It is not ``warned``: nothing was said to the model and
+    nothing was refused. It exists as its
     own value because a control's dose is a divisor, and a bypass counted as a
     consultation inflates the denominator."""
     detail: str

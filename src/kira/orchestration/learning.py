@@ -21,7 +21,12 @@ from kira.middleware.base import MiddlewareStack
 from kira.middleware.write_gate import WriteGate
 from kira.observability.usage import RecordingCompletion
 from kira.orchestration.jobs import bound_deployment
-from kira.orchestration.runner import Deployment, incident_context, tool_context_for
+from kira.orchestration.runner import (
+    Deployment,
+    incident_context,
+    record_hook_failures,
+    tool_context_for,
+)
 from kira.roles.base import RoleContext
 from kira.roles.prompting import visible_alert
 from kira.roles.registry import get_role
@@ -135,7 +140,8 @@ async def run_learning(
                             journal=journal,
                         ),
                         *deployment.hooks,
-                    ]
+                    ],
+                    on_error=record_hook_failures(journal),
                 ),
                 write_lock=deployment.write_lock,
                 toolset=build_toolset(spec.name, tools, extras=deployment.tool_extras),

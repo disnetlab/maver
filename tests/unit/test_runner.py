@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from kira.audit.journal import ListSink
+from kira.contracts.events import InterventionEvent
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
 from kira.orchestration.runner import Deployment, run_incident
@@ -134,6 +135,7 @@ def deployment(tmp_path: pathlib.Path, **overrides: Any) -> tuple[Deployment, Li
             profile=PROFILE,
             transport_for=lambda session_id: transport,
             sink=sink,
+            hooks=overrides.pop("hooks", ()),
         ),
         sink,
         model,
@@ -299,4 +301,34 @@ async def test_a_run_row_records_what_the_model_was_not_offered(
     # being replaced by what the role recorded when it closed.
     assert planning.metadata["after"] == rca.agent_run_id
     assert "tools_withheld" in planning.metadata
+    deploy.storage.close()
+
+
+async def test_a_hook_that_raises_is_recorded_and_the_incident_carries_on(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A shaping hook that fails is skipped, and skipped silently it is a concern that
+    was configured, was reached, and did not run — reported to a Python logger no run
+    reconstruction will ever see, on a claim that says every harness intervention
+    reaches the incident's own log."""
+
+    class Broken:
+        name = "broken"
+
+        def before_model(self, ctx: Any, request: Any) -> Any:
+            raise RuntimeError("boom")
+
+    deploy, sink, _ = deployment(tmp_path, hooks=[Broken()])
+    session = deploy.storage.sessions.create_session(ALERT)
+
+    final = await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+
+    assert final["execution_result"] is not None
+    failures = [
+        e.payload
+        for e in sink.events
+        if isinstance(e.payload, InterventionEvent) and e.payload.control == "hook_failure"
+    ]
+    assert failures and failures[0].action == "bypassed"
+    assert failures[0].detail == "broken raised in before_model: RuntimeError: boom"
     deploy.storage.close()

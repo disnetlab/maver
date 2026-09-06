@@ -188,8 +188,13 @@ Declared as a union rather than as one protocol with four optional methods, beca
 Python has no way to say a protocol member is optional: a single protocol naming all
 four would be satisfied by no real hook, which is what it was. The stack checks for each
 method at the point it would call it, so a hook that implements one phase is a valid
-hook. A hook that raises is logged and skipped rather than ending the run, because a run
-cut short by a misbehaving accessory is worse than a run that lost one accessory.
+hook.
+
+A shaping or reviewing hook that raises is recorded and skipped rather than ending the
+run, because a run cut short by a misbehaving accessory is worse than a run that lost
+one accessory. A wrapping hook is not skipped: it has already taken responsibility for
+the call, and carrying on as though it had not is how an authority check gets bypassed.
+See :meth:`MiddlewareStack.run_tool`.
 """
 
 
