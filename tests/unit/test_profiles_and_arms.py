@@ -127,6 +127,16 @@ class TestProfileValidation:
         with pytest.raises(ValidationError, match="extra_body_fields"):
             ModelProfile.model_validate(_profile_dict(sampling=sampling))
 
+    def test_a_native_knob_in_the_auxiliary_set_is_refused_too(self) -> None:
+        """The auxiliary set is sent to the same endpoint as the primary one. Checked
+        only on the primary, a hosted profile carrying native knobs for its gate and
+        selector loaded, litellm dropped them at the endpoint, and every helper event
+        recorded them as applied."""
+        aux = dict(_profile_dict()["sampling"])  # type: ignore[arg-type]
+        aux["top_k"] = 20
+        with pytest.raises(ValidationError, match=r"aux_sampling\.top_k"):
+            ModelProfile.model_validate(_profile_dict(aux_sampling=aux))
+
     def test_a_reasoning_budget_must_leave_room_for_an_answer(self) -> None:
         sampling = dict(_profile_dict()["sampling"])  # type: ignore[arg-type]
         sampling["thinking_token_budget"] = 8192

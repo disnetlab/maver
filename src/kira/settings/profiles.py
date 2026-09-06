@@ -229,10 +229,16 @@ class ModelProfile(_Frozen):
                 f"extra_body_fields is {sorted(fields)}; a hosted route rejects the "
                 "entire request when it receives one"
             )
-        for knob in _NATIVE_ONLY:
-            if getattr(self.sampling, knob) is not None and knob not in fields:
+        # Both sets, because both are sent. A helper call made under an auxiliary set
+        # the route drops is the same failure one turn later, and every gate and
+        # selector event would record knobs the endpoint never saw.
+        declared = {"sampling": self.sampling, "aux_sampling": self.aux_sampling}
+        for name, sampling in declared.items():
+            for knob in _NATIVE_ONLY:
+                if sampling is None or getattr(sampling, knob) is None or knob in fields:
+                    continue
                 raise ValueError(
-                    f"sampling.{knob} is set but is not listed in "
+                    f"{name}.{knob} is set but is not listed in "
                     f"quirks.extra_body_fields; it has no field in the OpenAI schema, "
                     "so it would be silently dropped or rejected"
                 )
