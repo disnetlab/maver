@@ -15,9 +15,11 @@ from kira.tools.kubernetes import (
     _reject,
     _selectors,
     classify,
+    exec_kubectl_cmd_safely,
     kubectl_authority,
     tokenize,
 )
+from kira.tools.policy import _widened_stages
 from kira.tools.workspace import SessionWorkspace
 
 POLICY = KubernetesPolicy()
@@ -305,3 +307,57 @@ async def test_kubectl_cannot_reach_a_shell_through_either_tool(
     assert (await bash_exec(ctx, cmd=command)).startswith(
         "error: do not run kubectl through bash_exec"
     )
+
+
+# --- the second enforcement point, inside the tool ---------------------------------
+
+
+class _EchoCluster(_NoCluster):
+    capabilities = frozenset({"kubernetes", "kubernetes.write"})
+
+    async def kubectl(self, argv: list[str]) -> str:
+        return "DISPATCHED " + " ".join(argv)
+
+
+def _context(tmp_path: Path, role: str) -> ToolContext:
+    return ToolContext(
+        transport=_EchoCluster(),
+        workspace=SessionWorkspace(tmp_path),
+        role=role,
+        session_id="s1",
+        journal=Journal(session_id="s1", stage=role),
+    )
+
+
+async def test_a_cluster_write_is_refused_inside_the_tool_and_not_only_at_the_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The second of the two enforcement points the documents promise.
+
+    This tool is on every role's allowlist because the diagnostic roles read with it, so
+    the allowlist is not the check the documents took it for, and `build_toolset` has no
+    read/write logic. With the gate absent or misconfigured nothing else stood between a
+    diagnosing role and a mutation: called directly as rca, it dispatched
+    `kubectl delete deployment web -n shop`.
+    """
+    write = "kubectl delete deployment web -n shop"
+
+    assert await exec_kubectl_cmd_safely(_context(tmp_path, "rca"), cmd=write) == (
+        "error: kubectl writes are not permitted for the rca agent (read-only)"
+    )
+    assert "DISPATCHED" in await exec_kubectl_cmd_safely(_context(tmp_path, "execution"), cmd=write)
+    # The reads the diagnostic roles hold the tool for are untouched.
+    assert "DISPATCHED" in await exec_kubectl_cmd_safely(
+        _context(tmp_path, "rca"), cmd="kubectl get pods -n shop"
+    )
+
+    # The operator's widening reaches the tool as well as the gate. Two knobs
+    # disagreeing would refuse a write the gate had allowed, with nothing to say why.
+    monkeypatch.setenv("KIRA_AUTHORITY__ADDITIONAL_WRITE_STAGES", "verify")
+    _widened_stages.cache_clear()
+    try:
+        assert "DISPATCHED" in await exec_kubectl_cmd_safely(
+            _context(tmp_path, "verify"), cmd=write
+        )
+    finally:
+        _widened_stages.cache_clear()

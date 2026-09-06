@@ -20,7 +20,7 @@ from typing import Any
 from kira.settings.groups import ToolSettings
 from kira.tools.context import ToolContext, deliver, redact
 from kira.tools.errors import OUTPUT_LIMIT, tool_error
-from kira.tools.policy import ActionClass, ToolPolicy, register_policy
+from kira.tools.policy import ActionClass, ToolPolicy, may_write, register_policy
 from kira.tools.registry import Authority, tool
 
 __all__ = [
@@ -390,8 +390,16 @@ def _reject(argv: Sequence[str], policy: KubernetesPolicy) -> str | None:
     return None
 
 
+_TOOL = "exec_kubectl_cmd_safely"
+
+
+def _stage_refusal(stage: str) -> str:
+    """Render the refusal a role that may not write is shown."""
+    return f"error: kubectl writes are not permitted for the {stage} agent (read-only)"
+
+
 @tool(
-    name="exec_kubectl_cmd_safely",
+    name=_TOOL,
     safety="cluster_write",
     requires={"kubernetes"},
     authority=kubectl_authority,
@@ -400,8 +408,11 @@ def _reject(argv: Sequence[str], policy: KubernetesPolicy) -> str | None:
 async def exec_kubectl_cmd_safely(ctx: ToolContext, cmd: str, save_as: str | None = None) -> str:
     """Run one kubectl command.
 
-    Authority is settled by the approval gate before this is reached; what happens here
-    is the screening that applies to every role equally.
+    The stage check here duplicates the approval gate's on purpose, the way the host
+    tool's does: this tool is on every role's allowlist because the diagnostic roles
+    read with it, so a gate that was misconfigured or absent would be the only thing
+    between a diagnosing role and a cluster mutation. It reads the same classifier and
+    the same stages the gate does, so the two cannot disagree about one call.
 
     Args:
         ctx: The run's context.
@@ -412,9 +423,14 @@ async def exec_kubectl_cmd_safely(ctx: ToolContext, cmd: str, save_as: str | Non
         The command's output, or a refusal beginning with ``error:``.
     """
     argv = tokenize(cmd)
-    refusal = _reject(argv, KubernetesPolicy.from_settings(ctx.settings))
+    policy = KubernetesPolicy.from_settings(ctx.settings)
+    refusal = _reject(argv, policy)
     if refusal is not None:
         return refusal
+    # `exec` is exempt, as it is at the gate: an in-container command was permitted for
+    # every role in every measured run, and refusing it here would change that.
+    if classify(argv, policy) == "write" and not may_write(_TOOL, ctx.role):
+        return _stage_refusal(ctx.role)
 
     argv = _append_delete_wait_false(_bound_blocking_wait(argv, ctx.transport.timeout_seconds))
     raw = await ctx.transport.kubectl(argv)
@@ -613,7 +629,7 @@ def _targets(arguments: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 register_policy(
-    "exec_kubectl_cmd_safely",
+    _TOOL,
     ToolPolicy(
         classify=lambda args, tools: _ACTION_BY_AUTHORITY[kubectl_authority(args, tools)],
         write_stages=frozenset({"execution", "single.mitigation"}),
@@ -622,8 +638,6 @@ register_policy(
         summarise=lambda args: str(args.get("cmd", "")),
         selectors=_selectors,
         targets=_targets,
-        stage_refusal=lambda stage: (
-            f"error: kubectl writes are not permitted for the {stage} agent (read-only)"
-        ),
+        stage_refusal=_stage_refusal,
     ),
 )

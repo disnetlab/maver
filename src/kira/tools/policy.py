@@ -14,11 +14,13 @@ refuse them outside the execution stage, which would break diagnosis in every ro
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from functools import lru_cache
 from typing import Any
 
+from kira.settings.authority import AuthoritySettings
 from kira.settings.groups import ToolSettings
 
-__all__ = ["ActionClass", "ToolPolicy", "policy_for", "register_policy"]
+__all__ = ["ActionClass", "ToolPolicy", "may_write", "policy_for", "register_policy"]
 
 
 class ActionClass(StrEnum):
@@ -102,6 +104,41 @@ def policy_for(tool_name: str) -> ToolPolicy | None:
         Its policy, or None.
     """
     return _POLICIES.get(tool_name)
+
+
+@lru_cache(maxsize=1)
+def _widened_stages() -> frozenset[str]:
+    """The stages an operator has opened writes to, beyond each tool's own set.
+
+    The gate is handed its settings; a tool is handed only the tool-layer ones. A tool
+    screening itself without reading this would refuse a stage the operator opened and
+    the gate allowed, which is two knobs disagreeing with no error to say why. Settings
+    are frozen once loaded, so one read here cannot drift from what the gate was built
+    with.
+    """
+    return AuthoritySettings().additional_write_stages
+
+
+def may_write(tool_name: str, stage: str) -> bool:
+    """Report whether a stage may issue a write through one tool.
+
+    A tool knows the role it was bound to, while the gate is told which phase of that
+    role is running, and a write policy can name one phase because the single-agent
+    configuration answers both graded questions over one transcript. So a role whose
+    phase may write passes here, and which phase it is stays the gate's decision: this
+    is the coarser of the two checks by construction, and it is the one that still holds
+    when the gate is misconfigured.
+
+    Args:
+        tool_name: The tool being called.
+        stage: The calling role or phase.
+
+    Returns:
+        True when the tool's own policy, or the deployment's widening of it, allows it.
+    """
+    policy = policy_for(tool_name)
+    allowed = (policy.write_stages if policy is not None else frozenset()) | _widened_stages()
+    return stage in allowed or any(phase.split(".", 1)[0] == stage for phase in allowed)
 
 
 def read_only(tool_name: str) -> None:

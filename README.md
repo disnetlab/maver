@@ -41,7 +41,7 @@ the data archive, not here.
 | Claim | Kind | Command |
 |---|---|---|
 | Roles exchange typed artifacts, never transcripts, and one incident runs end to end under either executor | D | `uv run pytest tests/unit/test_runner.py` |
-| Diagnosis and planning are read-only; only execution holds write-capable tools, enforced when the toolset is built | D | `uv run pytest tests/unit/test_toolsets.py` |
+| Only execution writes: a stage-aware gate refuses a write from any other role, and the kubectl tool refuses it again on its own | D | `uv run pytest tests/unit/test_write_gate.py tests/unit/test_kubernetes_tool.py` |
 | A stage-aware gate classifies read, write, exec and blocked, and refuses a write outside the stages that may issue one | D | `uv run pytest tests/unit/test_write_gate.py tests/unit/test_kubernetes_tool.py` |
 | Any write can be held for a person: the run parks durably, and a decision resumes the same incident from the role that was interrupted | D | `uv run pytest tests/unit/test_approval_pause.py` |
 | Execution opens on a forced read and cannot report a plan applied without having touched the cluster | D | `uv run pytest tests/unit/test_roles_execution.py` |
