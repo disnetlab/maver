@@ -87,6 +87,13 @@ class TestAssets:
         with pytest.raises(PromptError, match="not found"):
             read_asset("roles/does_not_exist.txt")
 
+    def test_an_asset_path_cannot_leave_the_package(self) -> None:
+        """The prototype refused this and the three readers layered above still do; the
+        one they funnel through lost it. It is reachable through the roles entry point,
+        where a third party's RoleSpec.prompt would be read into a system prompt."""
+        with pytest.raises(PromptError, match="escapes the package"):
+            read_asset("../../../pyproject.toml")
+
     def test_an_override_is_read_from_outside_the_package(self, tmp_path: Path) -> None:
         target = tmp_path / "rca.txt"
         target.write_text("custom {{KUBECTL_GUIDANCE}}", encoding="utf-8")

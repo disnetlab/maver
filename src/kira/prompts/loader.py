@@ -70,10 +70,16 @@ def read_asset(relative_path: str) -> str:
         The asset's text.
 
     Raises:
-        PromptError: When the asset does not exist.
+        PromptError: When the path leaves the package, or the asset does not exist.
     """
     resource = files("kira.prompts")
     for part in relative_path.split("/"):
+        # Containment lives here rather than in the three readers layered above,
+        # because this is the one they all funnel through and the one a third-party
+        # RoleSpec.prompt reaches: an escaping name is read straight into a system
+        # prompt.
+        if not part or part == ".." or part.startswith("."):
+            raise PromptError(f"prompt path escapes the package: {relative_path!r}")
         resource = resource / part
     try:
         # Stripped on load, matching the prototype's own loader. Every asset ships with
