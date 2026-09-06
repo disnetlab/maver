@@ -16,7 +16,10 @@ fail only where it matters.
 """
 
 import ast
+import os
 import pathlib
+import subprocess
+import sys
 
 SCRIPTS = pathlib.Path(__file__).resolve().parents[2] / "scripts"
 ENTRY = SCRIPTS / "sregym-driver.py"
@@ -30,12 +33,30 @@ DRIVER = (
 )
 
 
-def test_the_harness_entry_point_still_finds_the_driver() -> None:
-    source = ENTRY.read_text(encoding="utf-8")
-    assert DRIVER.exists(), "the driver moved and the harness entry point still points here"
-    # The literal path segments the loader joins, so a rename of any one of them fails.
-    for segment in ("src", "kira", "adapters", "sregym", "driver.py"):
-        assert f'"{segment}"' in source
+def test_the_harness_entry_point_loads_the_driver_and_runs_it() -> None:
+    """Run it, because reading it is what let the one silent failure through.
+
+    This used to recompute the driver's path itself and then look for the segments the
+    script joins. Both assertions stayed true through a change to the index the script
+    counts back from, and through a move of either file — the two ways the path it
+    hard-codes actually breaks. Nothing else references that path, so the place it
+    breaks is the evaluation host, part-way through a campaign, recorded as an agent
+    failure.
+
+    Reaching the health check's own refusal proves the loader resolved the file and
+    called ``main()``, which is the whole of the contract this file exists for.
+    """
+    result = subprocess.run(
+        [sys.executable, str(ENTRY)],
+        env={**os.environ, "HEALTH_TIMEOUT": "0", "AGENT_URL": "http://127.0.0.1:1"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "agent not reachable" in result.stdout + result.stderr
 
 
 def test_the_driver_imports_only_the_standard_library() -> None:
@@ -50,10 +71,3 @@ def test_the_driver_imports_only_the_standard_library() -> None:
 
     assert "kira" not in imported
     assert imported <= set(__import__("sys").stdlib_module_names)
-
-
-def test_the_driver_exposes_the_entry_point_the_script_calls() -> None:
-    tree = ast.parse(DRIVER.read_text(encoding="utf-8"))
-    assert any(isinstance(node, ast.FunctionDef) and node.name == "main" for node in tree.body), (
-        "the entry point calls main() and the driver no longer defines one"
-    )
