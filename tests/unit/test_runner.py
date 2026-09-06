@@ -82,7 +82,7 @@ class FakeTransport:
     """A cluster that answers reads and records the namespaces it was asked about."""
 
     name = "fake"
-    capabilities = frozenset({"kubernetes", "kubernetes.write", "metrics", "logs", "traces"})
+    capabilities = frozenset({"kubernetes", "metrics", "logs", "traces"})
     timeout_seconds = 30
 
     def __init__(self) -> None:

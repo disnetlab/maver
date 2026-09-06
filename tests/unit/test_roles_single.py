@@ -33,7 +33,7 @@ FINALIZERS = {"submit_diagnosis", "submit_mitigation"}
 
 class FakeTransport:
     name = "fake"
-    capabilities = frozenset({"kubernetes", "kubernetes.write", "metrics", "logs", "traces"})
+    capabilities = frozenset({"kubernetes", "metrics", "logs", "traces"})
     timeout_seconds = 30
 
     async def kubectl(self, argv: list[str]) -> str:

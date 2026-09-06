@@ -312,7 +312,7 @@ async def test_kubectl_cannot_reach_a_shell_through_either_tool(
 
 
 class _EchoCluster(_NoCluster):
-    capabilities = frozenset({"kubernetes", "kubernetes.write"})
+    capabilities = frozenset({"kubernetes"})
 
     async def kubectl(self, argv: list[str]) -> str:
         return "DISPATCHED " + " ".join(argv)

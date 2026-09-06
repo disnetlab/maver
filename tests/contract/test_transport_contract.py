@@ -53,9 +53,7 @@ class _Conforming:
     """
 
     name = "conforming"
-    capabilities = frozenset(
-        {"kubernetes", "kubernetes.write", "kubernetes.rollback", "metrics", "logs", "traces"}
-    )
+    capabilities = frozenset({"kubernetes", "kubernetes.rollback", "metrics", "logs", "traces"})
     timeout_seconds = 30
 
     def __init__(self, *, reachable: bool = True) -> None:
@@ -110,9 +108,14 @@ class _MissingTraceQuery(_Conforming):
 
 
 class _MisspeltCapability(_Conforming):
-    """One character wrong, and the cluster-write tools are gone from every role."""
+    """One character wrong, and the metrics tools are gone from every role that reads them.
 
-    capabilities = frozenset({"kubernetes", "kubernetes.writes", "metrics", "logs", "traces"})
+    Misspelt against a word a tool genuinely requires, because a typo in a word nothing
+    requires costs nothing and would show the property passing over a deviation with no
+    effect.
+    """
+
+    capabilities = frozenset({"kubernetes", "metric", "logs", "traces"})
 
 
 class _SubSecondTimeout(_Conforming):
@@ -207,7 +210,7 @@ class _EdgesWithoutTheirEnvelope(_Conforming):
 class _SilentRollback(_Conforming):
     """A transport with no journal of inverses answering as though it had undone a write."""
 
-    capabilities = frozenset({"kubernetes", "kubernetes.write", "metrics", "logs", "traces"})
+    capabilities = frozenset({"kubernetes", "metrics", "logs", "traces"})
 
 
 CASES = [

@@ -40,9 +40,7 @@ FIXTURE = json.loads(
     ).read_text(encoding="utf-8")
 )
 
-CAPABILITIES = frozenset(
-    {"kubernetes", "kubernetes.write", "kubernetes.rollback", "metrics", "logs", "traces", "host"}
-)
+CAPABILITIES = frozenset({"kubernetes", "kubernetes.rollback", "metrics", "logs", "traces", "host"})
 
 
 class FakeTransport:

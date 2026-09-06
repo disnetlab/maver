@@ -20,7 +20,6 @@ __all__ = ["CAPABILITIES", "Capability", "ToolTransport", "TraceOperation"]
 
 Capability = Literal[
     "kubernetes",
-    "kubernetes.write",
     "kubernetes.rollback",
     "metrics",
     "logs",
@@ -29,16 +28,16 @@ Capability = Literal[
 """What a transport can serve.
 
 Split finely enough that a real gap is expressible. ``kubernetes.rollback`` is separate
-from ``kubernetes.write`` because replaying an inverse command needs a journal of what
-was applied, which a transport talking straight to an API server does not keep.
+because replaying an inverse command needs a journal of what was applied, which a
+transport talking straight to an API server does not keep.
 
-``kubernetes.write`` is required *alongside* ``kubernetes`` by the one tool that can
-mutate a cluster, which is what makes withholding it mean something. What it cannot mean
-is reads without writes: one tool serves both, so withholding the word withholds kubectl
-altogether, and which roles may write through it is the approval gate's decision rather
-than a transport's. Stated here because the word was in the vocabulary and in both
-transports while no tool required it, so an environment could withhold it and still be
-handed every write.
+``kubernetes`` covers reading and writing alike, because one tool serves both. So the
+vocabulary cannot say "reads but no writes": a separate word for writing would either be
+required by that tool, and withholding it would withhold every cluster read as well,
+from the diagnostic roles that hold kubectl only to read; or it would be required by
+nothing, and withholding it would cost a write nothing. Write authority is not a
+transport's to grant: it is settled by the approval gate, and again by the tool's own
+stage check.
 
 There is no word here for reaching a node. Host recovery runs a command over SSH from
 this process rather than through a transport, so what decides whether it is available is
@@ -50,7 +49,6 @@ that can.
 CAPABILITIES: frozenset[str] = frozenset(
     {
         "kubernetes",
-        "kubernetes.write",
         "kubernetes.rollback",
         "metrics",
         "logs",

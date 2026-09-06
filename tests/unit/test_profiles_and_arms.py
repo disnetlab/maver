@@ -368,7 +368,7 @@ class _AnyTransport:
     """Every capability, so a tool that is dropped is dropped for the arm's reason."""
 
     name = "any"
-    capabilities = frozenset({"kubernetes", "kubernetes.write", "metrics", "logs", "traces"})
+    capabilities = frozenset({"kubernetes", "metrics", "logs", "traces"})
     timeout_seconds = 30
 
 

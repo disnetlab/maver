@@ -77,9 +77,7 @@ class EpisodeTransport:
     """The transport the adapter builds for one episode, and the only one that rolls back."""
 
     name = "episode"
-    capabilities = frozenset(
-        {"kubernetes", "kubernetes.write", "kubernetes.rollback", "metrics", "logs", "traces"}
-    )
+    capabilities = frozenset({"kubernetes", "kubernetes.rollback", "metrics", "logs", "traces"})
     timeout_seconds = 30
 
     def __init__(self) -> None:
@@ -97,7 +95,7 @@ class BaseTransport:
     """The deployment's own transport, which knows nothing about any harness session."""
 
     name = "base"
-    capabilities = frozenset({"kubernetes", "kubernetes.write", "metrics", "logs", "traces"})
+    capabilities = frozenset({"kubernetes", "metrics", "logs", "traces"})
     timeout_seconds = 30
 
     def __init__(self) -> None:

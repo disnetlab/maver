@@ -107,9 +107,10 @@ class DirectTransport:
 
         served = set()
         if self._binary is not None:
-            # Whether a write is *accepted* is RBAC's answer, given per call. This says
-            # only that nothing in the transport refuses to issue one.
-            served |= {"kubernetes", "kubernetes.write"}
+            # Reads and writes alike: whether a write is *accepted* is RBAC's answer,
+            # given per call, and which roles may attempt one is the approval gate's.
+            # This says only that nothing in the transport refuses to issue a command.
+            served.add("kubernetes")
         if self._prometheus is not None:
             served.add("metrics")
         if self._loki is not None:

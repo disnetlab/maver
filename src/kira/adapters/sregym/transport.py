@@ -56,9 +56,7 @@ TOOL_SERVER: dict[str, str] = {
 }
 """Which of the four servers answers each tool."""
 
-_CAPABILITIES = frozenset(
-    {"kubernetes", "kubernetes.write", "kubernetes.rollback", "metrics", "logs", "traces"}
-)
+_CAPABILITIES = frozenset({"kubernetes", "kubernetes.rollback", "metrics", "logs", "traces"})
 """Rollback is served here and nowhere else: the journal of inverse commands is the
 harness's own session state, keyed on the correlation header, and no transport talking
 straight to an API server can reconstruct it."""

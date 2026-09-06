@@ -66,10 +66,7 @@ def test_an_unconfigured_backend_costs_its_tools_before_the_run(tmp_path: Path) 
     assert resolved.dropped["get_logs"] == "transport lacks logs"
     # No kubectl on this host, so the cluster tools go the same way rather than failing
     # on every call.
-    assert (
-        resolved.dropped["exec_kubectl_cmd_safely"]
-        == "transport lacks kubernetes, kubernetes.write"
-    )
+    assert resolved.dropped["exec_kubectl_cmd_safely"] == "transport lacks kubernetes"
 
 
 async def test_rollback_is_never_offered_and_says_why_if_reached() -> None:

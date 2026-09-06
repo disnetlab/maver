@@ -31,9 +31,7 @@ class FakeTransport:
         return 60
 
 
-ALL = frozenset(
-    {"kubernetes", "kubernetes.write", "kubernetes.rollback", "metrics", "logs", "traces"}
-)
+ALL = frozenset({"kubernetes", "kubernetes.rollback", "metrics", "logs", "traces"})
 
 
 def context(tmp_path, capabilities=ALL, memory=None) -> ToolContext:
@@ -61,23 +59,21 @@ def test_a_capability_the_transport_lacks_removes_its_tools_before_the_run(tmp_p
     assert "get_metrics" in offered
 
 
-def test_an_environment_that_cannot_be_written_to_is_not_handed_the_write_tool(
-    tmp_path,
-) -> None:
-    """The word was in the vocabulary and in both transports, and no tool required it.
+@pytest.mark.parametrize("role", sorted(ROLE_TOOLSETS))
+def test_the_word_kubernetes_alone_buys_kubectl_for_every_role(tmp_path, role: str) -> None:
+    """One tool serves cluster reads and cluster writes, so it needs one capability.
 
-    So a transport declaring `kubernetes` alone — or misspelling the write word, which
-    is the deviation the transport contract exists to catch — was handed the one tool
-    that mutates a cluster anyway, and the gap surfaced mid-incident as a tool error the
-    model works around. Withholding it costs kubectl entirely, reads included: one tool
-    serves both, and who may write through it is the gate's decision, not a transport's.
+    A second word for writing was briefly required alongside the first, which withheld
+    kubectl entirely from a transport advertising `kubernetes` alone — including from the
+    diagnostic roles, which hold the tool only to read, and which then lost every cluster
+    read silently while the drop record said the transport could not be written to. Who
+    may write through the tool is the approval gate's decision and the tool's own stage
+    check, not a capability's.
     """
-    resolved = build_toolset(
-        "execution", context(tmp_path, capabilities=ALL - {"kubernetes.write"})
-    )
+    resolved = build_toolset(role, context(tmp_path, capabilities=frozenset({"kubernetes"})))
 
-    assert "exec_kubectl_cmd_safely" not in {d.name for d in resolved.definitions}
-    assert resolved.dropped["exec_kubectl_cmd_safely"] == "transport lacks kubernetes.write"
+    assert "exec_kubectl_cmd_safely" in {d.name for d in resolved.definitions}
+    assert "exec_kubectl_cmd_safely" not in resolved.dropped
 
 
 def test_memory_tools_go_when_the_configuration_has_no_store(tmp_path) -> None:
