@@ -114,9 +114,11 @@ def _filter_json_text(text: str) -> str | None:
     and a repr is one line — so a single hidden series fell through to the line-based
     branch, lost that one line, and took the whole result with it.
 
-    Re-serialised in the encoding it arrived in, because the alert partitioning
-    downstream reads a repr with :func:`ast.literal_eval`, which a JSON rendering
-    carrying ``true`` or ``null`` would not parse.
+    Re-serialised in the encoding it arrived in, because a tool result is an interface:
+    the health gate parses a filtered pod inventory back with :func:`ast.literal_eval`
+    for exactly this reason, and a JSON rendering carrying ``true`` or ``null`` would
+    not parse. Changing the encoding of every metrics and kubectl result is a behaviour
+    change, not a side effect of a redaction fix.
     """
     for parse in (json.loads, ast.literal_eval):
         try:
