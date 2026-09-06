@@ -24,8 +24,8 @@ from dataclasses import dataclass
 
 from kira.audit.journal import Journal
 from kira.contracts.events import ModelCallEvent, ModelCallStartedEvent
-from kira.llm.client import prompt_digest
-from kira.llm.sampling import SamplingResolution, applied_sampling
+from kira.llm.client import prompt_digest, sent_sampling
+from kira.llm.sampling import SamplingResolution
 from kira.llm.types import Completion, ModelRequest, ModelResponse
 from kira.settings.profiles import ModelProfile
 
@@ -87,9 +87,7 @@ class RecordingCompletion:
                     caller=caller,
                     model=self.profile.model,
                     profile=self.profile.name,
-                    sampling=applied_sampling(
-                        request.sampling, self.profile, self.sampling
-                    ).as_record(),
+                    sampling=sent_sampling(request, self.profile, self.sampling).as_record(),
                     duration_ms=int((time.monotonic() - started) * 1000),
                     attempt=getattr(exc, "attempts", 1),
                     error="cancelled"
@@ -103,9 +101,7 @@ class RecordingCompletion:
                 caller=caller,
                 model=self.profile.model,
                 profile=self.profile.name,
-                sampling=applied_sampling(
-                    request.sampling, self.profile, self.sampling
-                ).as_record(),
+                sampling=sent_sampling(request, self.profile, self.sampling).as_record(),
                 prompt_tokens=response.usage.prompt_tokens,
                 completion_tokens=response.usage.completion_tokens,
                 reasoning_tokens=response.usage.reasoning_tokens,

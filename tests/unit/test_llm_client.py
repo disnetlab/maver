@@ -396,6 +396,27 @@ class TestRequestAssembly:
         )
         assert captured["kwargs"]["reasoning_effort"] == "low"
 
+    async def test_a_rescue_turn_is_recorded_on_the_set_it_was_sent_on(self) -> None:
+        """The rescue levers are applied after the rule that resolves the set, so a
+        record derived from the rule alone said the turn ran on the profile's reasoning
+        effort — and carried the same digest as an ordinary turn, so the one field that
+        exists to tell two configurations apart could not. The rescue is the turn that
+        produces the graded submission in the cells it fires on."""
+        captured: dict[str, Any] = {}
+        client, events = _client(
+            "claude-sonnet-4-6", completion=_capture(captured, _Raw(_Msg("hi")))
+        )
+
+        await client.complete(
+            ModelRequest(system="s", messages=(), lite_reasoning=True), caller="rca"
+        )
+        rescue, sent = events[-1].sampling, captured["kwargs"]["reasoning_effort"]
+        await _complete(client)
+        ordinary = events[-1].sampling
+
+        assert rescue["reasoning_effort"] == sent == "low"
+        assert rescue["digest"] != ordinary["digest"]
+
 
 def test_backoff_grows_and_is_capped() -> None:
     """Matches what the library did internally, so a run's timing profile is unchanged."""
@@ -499,7 +520,7 @@ def test_the_profile_determines_where_the_call_goes_and_as_whom(
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     client = LLMClient(load_profile("qwen3.6-35b-a3b", MODELS), load_settings())
 
-    kwargs = client._build_kwargs(
+    kwargs, _ = client._build_kwargs(
         ModelRequest(system="s", messages=[{"role": "user", "content": "hi"}], tools=())
     )
 
@@ -516,7 +537,7 @@ def test_a_quoted_key_in_the_environment_is_not_sent_with_its_quotes(
     monkeypatch.setenv("ANTHROPIC_API_KEY", '"sk-ant-quoted-by-an-env-file"\n')
     client = LLMClient(load_profile("claude-sonnet-4-6", MODELS), load_settings())
 
-    kwargs = client._build_kwargs(
+    kwargs, _ = client._build_kwargs(
         ModelRequest(system="s", messages=[{"role": "user", "content": "hi"}], tools=())
     )
 
@@ -530,7 +551,7 @@ def test_an_override_displaces_the_profile(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setenv("KIRA_MODEL__API_KEY", "sk-from-the-operator")
     client = LLMClient(load_profile("qwen3.6-35b-a3b", MODELS), load_settings())
 
-    kwargs = client._build_kwargs(
+    kwargs, _ = client._build_kwargs(
         ModelRequest(system="s", messages=[{"role": "user", "content": "hi"}], tools=())
     )
 

@@ -38,6 +38,7 @@ __all__ = [
     "carry_reasoning_forward",
     "extract_reasoning_text",
     "prompt_digest",
+    "sent_sampling",
     "serialise_assistant",
 ]
 
@@ -45,6 +46,47 @@ _log = logging.getLogger(__name__)
 
 _BACKOFF_BASE_S = 1.0
 _BACKOFF_CAP_S = 30.0
+
+
+def sent_sampling(
+    request: ModelRequest, profile: ModelProfile, resolved: SamplingResolution
+) -> SamplingResolution:
+    """The set a call is sent on, rescue levers included.
+
+    ``applied_sampling`` answers which set a call runs on, and a rescue turn then
+    displaces two of its knobs — after that rule has been consulted. Derived from the
+    rule alone, the record said a rescue turn ran on the profile's reasoning effort,
+    with a digest identical to an ordinary turn's, so the one field that exists to tell
+    two configurations apart could not. The rescue is the turn that produces the graded
+    submission in the cells it fires on.
+
+    Args:
+        request: The call.
+        profile: The profile, for the rescue levers and the native extension fields.
+        resolved: The agent's set, already resolved against settings.
+
+    Returns:
+        The resolution that reaches the provider.
+    """
+    applied = applied_sampling(request.sampling, profile, resolved)
+    if not request.lite_reasoning:
+        return applied
+    # A rescue turn asks only for a schema-valid submission, and a greedy local model
+    # will otherwise spend the whole budget in its reasoning channel and be cut off
+    # before emitting one.
+    top_level = dict(applied.top_level)
+    extra_body = dict(applied.extra_body)
+    if profile.quirks.rescue_disable_thinking:
+        extra_body.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
+    if profile.quirks.rescue_reasoning_effort is not None:
+        top_level["reasoning_effort"] = profile.quirks.rescue_reasoning_effort
+    return SamplingResolution(
+        applied.profile_name,
+        {**applied.values, **top_level, **extra_body},
+        top_level,
+        extra_body,
+        applied.overrides,
+    )
 
 
 def extract_reasoning_text(message: Any) -> str:
@@ -401,14 +443,14 @@ class LLMClient:
                 return from_env
         return self.profile.endpoint.api_key_literal
 
-    def _build_kwargs(self, request: ModelRequest) -> dict[str, Any]:
+    def _build_kwargs(self, request: ModelRequest) -> tuple[dict[str, Any], SamplingResolution]:
         """Assemble the provider request.
 
         Args:
             request: The neutral request.
 
         Returns:
-            Keyword arguments for the completion call.
+            Keyword arguments for the completion call, and the sampling set they carry.
         """
         profile = self.profile
         messages: list[Message] = []
@@ -422,18 +464,9 @@ class LLMClient:
         # would silently run every gate on the agent's sampling, which is the failure it
         # exists to prevent: a gate at temperature 1.0 with a presence penalty answers
         # differently each time it is asked the same question.
-        applied = applied_sampling(request.sampling, profile, self.sampling)
-        top_level = dict(applied.top_level)
-        extra_body = dict(applied.extra_body)
-
-        if request.lite_reasoning:
-            # A rescue turn asks only for a schema-valid submission, and a greedy local
-            # model will otherwise spend the whole budget in its reasoning channel and
-            # be cut off before emitting one.
-            if profile.quirks.rescue_disable_thinking:
-                extra_body.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
-            if profile.quirks.rescue_reasoning_effort is not None:
-                top_level["reasoning_effort"] = profile.quirks.rescue_reasoning_effort
+        applied = sent_sampling(request, profile, self.sampling)
+        top_level = applied.top_level
+        extra_body = applied.extra_body
 
         kwargs: dict[str, Any] = {
             "model": profile.model,
@@ -467,7 +500,7 @@ class LLMClient:
                 choice = profile.quirks.tool_choice
             if choice is not None:
                 kwargs["tool_choice"] = choice
-        return kwargs
+        return kwargs, applied
 
     async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
         """Run one completion, retrying only what retrying can fix.
@@ -482,12 +515,10 @@ class LLMClient:
         Raises:
             ModelCallError: When the call failed and retrying did not help.
         """
-        kwargs = self._build_kwargs(request)
-        # The same rule the kwargs were built from, so what is reported is what was
-        # sent. Reporting self.sampling here recorded the agent's set on every gate,
-        # nominator and selector call — the calls that carry their own set precisely
-        # because they must not run on the agent's.
-        applied = applied_sampling(request.sampling, self.profile, self.sampling)
+        # The object the kwargs were built from, not a second resolution of the same
+        # rule: reported from the rule alone, a rescue turn recorded the reasoning
+        # effort the profile declares rather than the one it displaced.
+        kwargs, applied = self._build_kwargs(request)
         attempts = self.profile.limits["num_retries"] + 1
         last: ModelCallError | None = None
 
