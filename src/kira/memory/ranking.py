@@ -78,10 +78,13 @@ class Bm25Ranker:
     min_score_per_token: float = 0.5
     """Floor on a hit's score divided by the query's token count.
 
-    Divided by token count so the threshold does not move with query length. Zero
-    disables the floor, which restores always returning the whole pool — what the
-    prototype shipped, and what an arm reproducing one of its campaigns pins through
-    ``memory.min_score_per_token``.
+    Divided by token count so the threshold does not move with query length. Zero or
+    less disables the floor rather than setting it at zero, which restores always
+    returning the whole pool — what the prototype shipped, and what an arm reproducing
+    one of its campaigns pins through ``memory.min_score_per_token``. Zero cannot be a
+    threshold here because a BM25 score is not bounded below: Okapi floors a negative
+    IDF at a fraction of the mean IDF, so every score in a small or homogeneous pool is
+    negative, and that is the pool one strongly matching precedent produces.
     """
     k1: float = bm25.DEFAULT_K1
     b: float = bm25.DEFAULT_B
@@ -95,16 +98,19 @@ class Bm25Ranker:
             documents: The candidate documents.
 
         Returns:
-            ``(index, score)`` pairs above the floor, best first.
+            ``(index, score)`` pairs above the floor, best first. The whole pool when
+            the floor is disabled.
         """
         tokens = bm25.tokenize(query)
         if not tokens or not documents:
             # Not the same as "everything scores zero". With an empty query every score
-            # is zero and a zero floor admits all of them, which is the whole pool
+            # is zero and a disabled floor admits all of them, which is the whole pool
             # returned in arbitrary order under the name of a search.
             return []
-        floor = self.min_score_per_token * len(tokens)
         ranked = bm25.rank(list(documents), query, k1=self.k1, b=self.b, epsilon=self.epsilon)
+        if self.min_score_per_token <= 0:
+            return ranked
+        floor = self.min_score_per_token * len(tokens)
         kept: list[tuple[int, float]] = []
         for index, score in ranked:
             if score < floor:

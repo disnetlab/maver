@@ -580,7 +580,9 @@ class MemorySettings(SettingsGroup):
         description=(
             "Relevance floor under a hit, as its lexical score over the query's token "
             "count, which is what lets a retrieval answer that nothing is comparable. "
-            "Zero disables it and returns k records whatever they score. The prototype "
+            "Zero or less disables it and returns k records whatever they score, rather "
+            "than setting the floor at zero: a BM25 score is not bounded below, so a "
+            "zero threshold would drop a whole small or homogeneous pool. The prototype "
             "shipped this off and no campaign set it, so an arm reproducing one pins "
             "zero here rather than inheriting a floor that would cut its dose."
         ),

@@ -107,6 +107,26 @@ def test_a_real_match_still_comes_back_above_the_floor() -> None:
     assert hits[0].score is not None
 
 
+def test_a_zero_floor_disables_the_floor_rather_than_setting_it_at_zero() -> None:
+    """A BM25 score is not bounded below, so zero is not the bottom of the scale.
+
+    Okapi floors a negative IDF at a fraction of the mean IDF, which makes every score
+    in a small or homogeneous pool negative — and one strongly matching precedent in a
+    young corpus produces exactly that pool. Treating zero as a threshold would answer
+    "nothing is comparable" for the case the mechanism exists to serve, and would give
+    the arms that pin 0.0 to reproduce the prototype's dose a floor instead of none.
+    """
+    only_record = [memory("s0", "checkout pod OOMKilled memory limit exceeded")]
+    query = "checkout pod OOMKilled memory limit exceeded"
+    assert bm25.rank([only_record[0].evidence_text], query)[0][1] < 0
+
+    disabled = Retriever(text=FakeText(only_record), ranker=Bm25Ranker(min_score_per_token=0.0))
+    assert [hit.session_id for hit in disabled.search(query)] == ["s0"]
+
+    enabled = Retriever(text=FakeText(only_record), ranker=Bm25Ranker(min_score_per_token=0.5))
+    assert enabled.search(query) == []
+
+
 def test_the_harness_exclusion_withholds_a_run_s_own_record() -> None:
     """Leave-one-out is supplied per cell by the evaluation harness, not inferred."""
     retriever = Retriever(text=FakeText(CORPUS), ranker=Bm25Ranker(min_score_per_token=0.0))
