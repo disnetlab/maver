@@ -29,9 +29,11 @@ around, and it will try again, differently, and again.
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
+import signal
 import time
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -60,6 +62,9 @@ _LOG_LIMIT = 100
 _RANGE_POINTS = 100
 _MIN_STEP_SECONDS = 15
 """Bounds on a range query's resolution, so one query cannot fill a context window."""
+
+_REAP_SECONDS = 5.0
+"""How long a killed kubectl is waited on before the call returns without it."""
 
 _NO_ROLLBACK = (
     "rollback is not available on this transport: undoing a cluster write means "
@@ -170,6 +175,9 @@ class DirectTransport:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=self._env,
+                # In its own process group, so the timeout below can reach what kubectl
+                # started as well as kubectl itself.
+                start_new_session=True,
             )
         except OSError as exc:
             return tool_error(f"kubectl could not be executed: {exc}")
@@ -178,8 +186,16 @@ class DirectTransport:
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
         except TimeoutError:
-            process.kill()
-            await process.wait()
+            # Signalling the group rather than the process is what makes the deadline a
+            # bound. kill() reaches kubectl alone, and wait() returns only once every
+            # copy of the pipes is closed, so anything kubectl started that inherited
+            # them — a wrapper script, an exec credential plugin holding kubectl's own
+            # stderr — kept the call alive for its whole life while the model was told
+            # it had been abandoned on time. The reap is bounded for the same reason.
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(process.wait(), _REAP_SECONDS)
             return timed_out(
                 "kubectl",
                 timeout,

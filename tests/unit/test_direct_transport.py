@@ -9,6 +9,7 @@ result the loop can recognise.
 """
 
 import stat
+import time
 from pathlib import Path
 
 import httpx
@@ -19,6 +20,7 @@ from pydantic import ValidationError
 from kira.audit.journal import Journal
 from kira.settings.groups import TransportSettings
 from kira.tools.context import ToolContext
+from kira.tools.errors import call_timed_out
 from kira.tools.kubernetes import exec_kubectl_cmd_safely
 from kira.tools.metrics import _parse_alerts, partition_incident_alerts
 from kira.tools.toolsets import build_toolset
@@ -181,3 +183,27 @@ def test_a_timeout_that_is_not_a_limit_is_refused_and_floored() -> None:
 
     unchecked = TransportSettings.model_construct(kubectl_binary=ABSENT_KUBECTL, timeout_s=0)
     assert DirectTransport(unchecked).timeout_seconds == 1
+
+
+async def test_a_command_that_leaves_a_child_behind_still_returns_on_the_deadline(
+    tmp_path: Path,
+) -> None:
+    """The deadline has to bound the call, not the process tree the call started.
+
+    Killing kubectl alone leaves the pipes open in whatever it started, and the reap
+    that follows returns only when they close: against a stub that leaves a 30-second
+    sleep behind, a 2-second deadline returned after 30 seconds while telling the model
+    it had been abandoned on time. A wrapper script and an exec credential plugin —
+    client-go hands the plugin kubectl's own stderr — are both this shape.
+    """
+    fake = tmp_path / "kubectl"
+    fake.write_text("#!/bin/sh\nsleep 30\n")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    bound = transport(kubectl_binary=str(fake), timeout_s=1)
+
+    started = time.monotonic()
+    result = await bound.kubectl(["get", "pods"])
+    elapsed = time.monotonic() - started
+
+    assert call_timed_out(result)
+    assert elapsed < 5
