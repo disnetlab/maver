@@ -573,6 +573,19 @@ class MemorySettings(SettingsGroup):
         "MEMORY_SEARCH_TOP_K",
         description="Records returned by a retrieval.",
     )
+    candidate_pool: int = setting(
+        500,
+        "KIRA_MEMORY__CANDIDATE_POOL",
+        description=(
+            "Ceiling on the candidate pool a backend hands the ranker. It bounds the "
+            "cost of a retrieval and, because BM25's inverse document frequency is "
+            "computed over the pool it is given, it is also the population a score is "
+            "relative to. The pool is taken in write order rather than by rank, so that "
+            "the ranker rather than the database decides relevance — which means a "
+            "corpus larger than this drops its newest records from every retrieval. "
+            "Raise it above the corpus size for a deployment that has outgrown it."
+        ),
+    )
     min_score_per_token: float = setting(
         0.5,
         "KIRA_MEMORY__MIN_SCORE_PER_TOKEN",

@@ -1,14 +1,30 @@
 """Opening the configured stores, once, at startup."""
 
+import logging
 import pathlib
 import sys
 
 import pytest
 
 from kira.memory.factory import build_storage
+from kira.memory.ports import SessionMemory
 from kira.memory.ranking import Bm25Ranker
 from kira.settings.groups import MemorySettings, ServerSettings
 from kira.settings.root import Settings
+
+
+def a_record(session_id: str, evidence: str) -> SessionMemory:
+    return SessionMemory(
+        session_id=session_id,
+        evidence_text=evidence,
+        lesson_text="",
+        incident_summary="",
+        lifecycle_state="tentative_success",
+        fault_category="",
+        alert_name="",
+        namespace="",
+        affected_resource="",
+    )
 
 
 def settings_for(tmp_path: pathlib.Path, **memory: object) -> Settings:
@@ -42,6 +58,36 @@ def test_the_retrieval_floor_reaches_the_retriever(tmp_path: pathlib.Path) -> No
         assert stack.retriever.ranker.min_score_per_token == 0.0
     finally:
         stack.close()
+
+
+def test_the_candidate_pool_reaches_the_backend_and_an_outgrown_one_says_so(
+    tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A backend fills the pool in write order, so a corpus past the ceiling loses its
+    newest records from every retrieval — the ones a deployment has most recently
+    learned. Left at a constructor default nothing could reach, an adopter crossed the
+    ceiling and the store went quiet with no error and no way to raise it."""
+    query = "checkout deployment OOMKilled memory limit exceeded"
+    corpus = [a_record(f"s{i}", "checkout deployment unrelated symptom") for i in range(3)]
+    corpus.append(a_record("newest", query))
+
+    def search_with(pool: int) -> list[str]:
+        stack = build_storage(settings_for(tmp_path, candidate_pool=pool, min_score_per_token=0.0))
+        try:
+            for record in corpus:
+                stack.index.upsert_summary(record)
+            return [hit.session_id for hit in stack.retriever.search(query)]
+        finally:
+            stack.close()
+
+    with caplog.at_level(logging.WARNING, logger="kira.memory.retrieval"):
+        assert "newest" not in search_with(3)
+    assert "raise memory.candidate_pool" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="kira.memory.retrieval"):
+        assert search_with(10)[0] == "newest"
+    assert "raise memory.candidate_pool" not in caplog.text
 
 
 def test_an_unavailable_backend_fails_at_startup_and_says_what_to_install(

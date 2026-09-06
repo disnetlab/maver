@@ -54,8 +54,12 @@ class Retriever:
     text: TextSearch
     k: int = 5
     pool: int = 500
-    """How many candidates to rank. Corpora here are hundreds of records, so this is
-    normally the whole temporally valid corpus."""
+    """How many candidates to rank, from ``memory.candidate_pool``.
+
+    Corpora here are hundreds of records, so this is normally the whole temporally valid
+    corpus. A backend fills it in write order rather than by rank — ranking is the
+    retriever's job, not the database's — so a corpus larger than this loses its newest
+    records from every retrieval, which is why an outgrown pool says so below."""
     ranker: Ranker = field(default_factory=Bm25Ranker)
     """Scores the pool and decides how much of it is worth returning.
 
@@ -100,6 +104,15 @@ class Retriever:
         candidates = self.text.candidates(query, limit=self.pool, scope=scope, exclude=exclude)
         if not candidates:
             return []
+        if len(candidates) >= self.pool:
+            # The pool is filled oldest first, so what a full one drops is the recent
+            # experience this deployment most wants back. Silence here is how a store
+            # that has outgrown its pool looks exactly like one that is working.
+            _log.warning(
+                "the candidate pool filled at %d records, so the newest were not scored; "
+                "raise memory.candidate_pool above the corpus size",
+                self.pool,
+            )
 
         documents = [_document(memory, scope) for memory in candidates]
         states = self._current_states(candidates)
