@@ -28,7 +28,7 @@ import textwrap
 from pathlib import Path
 
 from kira.tools.context import ToolContext, deliver
-from kira.tools.errors import EXEC_OUTPUT_LIMIT, format_exit_result, tool_error
+from kira.tools.errors import EXEC_OUTPUT_LIMIT, format_exit_result, timed_out, tool_error
 from kira.tools.policy import read_only
 from kira.tools.registry import tool
 from kira.tools.sandbox import SANDBOX_ERROR_PREFIX, sandboxed_command
@@ -112,7 +112,7 @@ async def _run(ctx: ToolContext, command: list[str], *, timeout: float, label: s
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
     except TimeoutError:
         process.kill()
-        return tool_error(f"{label} timed out after {timeout:.0f}s")
+        return timed_out(label, timeout)
 
     output = stdout.decode(errors="replace")
     if process.returncode == 126 and output.startswith(SANDBOX_ERROR_PREFIX):

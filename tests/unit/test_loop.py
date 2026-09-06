@@ -20,8 +20,11 @@ from kira.roles.policy import (
     repeat_breaker_message,
 )
 from kira.settings.groups import PipelineSettings, RuntimeSettings
+from kira.tools.context import ToolContext
 from kira.tools.errors import call_failed
+from kira.tools.execution import _run
 from kira.tools.registry import ToolOutput
+from kira.tools.workspace import SessionWorkspace
 
 FIXTURE = (
     pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "prototype_control_messages.json"
@@ -888,3 +891,45 @@ def test_the_settings_default_to_the_same_limits() -> None:
     """
     resolved = LoopLimits.from_settings(RuntimeSettings(), max_turns=PipelineSettings().max_turns)
     assert {name: getattr(resolved, name) for name in MEASURED_LIMITS} == MEASURED_LIMITS
+
+
+async def test_a_tool_that_hit_its_bound_is_recorded_as_an_intervention(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A bound the harness imposed and enforced is a harness intervention, and it
+    surfaced only as one more failed tool call. The control vocabulary has carried
+    ``timeout`` with no producer, so grouping a run's interventions by control offered
+    an empty bucket that reads as "no tool ever timed out" — the wrong conclusion to
+    make easy next to a blocking delete that once ran for forty-seven minutes."""
+    ctx = ToolContext(
+        transport=None,
+        workspace=SessionWorkspace(tmp_path),
+        role="rca",
+        session_id="s1",
+        journal=Journal(session_id="s1", stage="rca"),
+    )
+
+    async def blocks() -> str:
+        return await _run(ctx, ["/bin/sh", "-c", "sleep 5"], timeout=0.05, label="shell")
+
+    model = FakeModel([turn(call("blocks", {}, id="t1")), turn(call(SUBMIT, {"ok": True}, id="s"))])
+    sink = ListSink()
+
+    await run_until_submit(
+        model=model,
+        role="rca",
+        system="s",
+        tools=[spec("blocks"), spec(SUBMIT)],
+        dispatch={"blocks": blocks},
+        submit_tool=SUBMIT,
+        messages=[{"role": "user", "content": "go"}],
+        journal=Journal(sink, session_id="s1", stage="rca"),
+    )
+
+    [timeout] = [
+        e.payload
+        for e in sink.events
+        if isinstance(e.payload, InterventionEvent) and e.payload.control == "timeout"
+    ]
+    assert timeout.action == "refused"
+    assert timeout.detail.startswith("blocks: error: shell timed out after")

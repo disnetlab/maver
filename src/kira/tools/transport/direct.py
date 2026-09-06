@@ -40,7 +40,7 @@ from urllib.parse import quote
 import httpx
 
 from kira.settings.groups import TransportSettings
-from kira.tools.errors import format_exit_result, tool_error
+from kira.tools.errors import format_exit_result, timed_out, tool_error
 from kira.tools.transport.base import ToolTransport, TraceOperation
 
 __all__ = ["DirectTransport", "direct_transport"]
@@ -176,9 +176,11 @@ class DirectTransport:
         except TimeoutError:
             process.kill()
             await process.wait()
-            return tool_error(
-                f"kubectl was killed after {timeout:.0f}s. A command that blocks — "
-                "a wait, or a rollout status — needs its own shorter --timeout."
+            return timed_out(
+                "kubectl",
+                timeout,
+                "A command that blocks — a wait, or a rollout status — needs its own "
+                "shorter --timeout.",
             )
 
         out = stdout.decode(errors="replace")

@@ -50,7 +50,7 @@ from kira.roles.policy import (
     repair_submission,
     repeat_breaker_message,
 )
-from kira.tools.errors import call_failed
+from kira.tools.errors import call_failed, call_timed_out
 from kira.tools.registry import RETRIEVAL_PROVENANCE, ToolOutput
 
 __all__ = ["LoopResult", "SubmitGuard", "ToolFn", "run_until_submit"]
@@ -558,6 +558,19 @@ async def run_until_submit(
                     retrieval=result.metadata.get(RETRIEVAL_PROVENANCE, []),
                 )
             )
+            if call_timed_out(result.content):
+                # A bound the harness imposed and enforced, which the tool-call event
+                # records only as a failure like any other. Grouping interventions by
+                # control is how a run is read back, and the archive's forty-seven
+                # minute blocking delete is the reason an empty timeout bucket must not
+                # be easy to mistake for a run in which nothing was ever killed.
+                log.record(
+                    InterventionEvent(
+                        control="timeout",
+                        action="refused",
+                        detail=f"{call_.name}: {result.content.split(chr(10), 1)[0]}",
+                    )
+                )
             return result
 
         async def execute_all(calls: Sequence[ToolCall]) -> list[ToolResult]:

@@ -15,8 +15,11 @@ constants with a provenance, not a parameter each call site picks for itself.
 __all__ = [
     "EXEC_OUTPUT_LIMIT",
     "OUTPUT_LIMIT",
+    "TIMEOUT_MARKER",
     "call_failed",
+    "call_timed_out",
     "format_exit_result",
+    "timed_out",
     "tool_error",
 ]
 
@@ -92,3 +95,43 @@ def call_failed(content: str) -> bool:
         return True
     head = content.split("\n", 1)[0]
     return head.startswith("exit_code=") and not head.startswith("exit_code=0")
+
+
+TIMEOUT_MARKER = "timed out after"
+"""The phrase a bounded tool leaves in its failure so the loop can recognise one.
+
+A timeout is a harness intervention, not an ordinary tool failure, and it surfaced as
+neither: the enum of controls has carried ``timeout`` with no producer, so grouping a
+run's interventions by control offered a permanently empty bucket that reads as "no
+tool ever timed out". A marker in the text rather than a second return channel, because
+a tool returns a string and the two bounded call sites are three layers below the loop.
+"""
+
+
+def timed_out(what: str, bound_s: float, guidance: str = "") -> str:
+    """Build the failure a tool returns when its own bound killed the work.
+
+    Args:
+        what: The tool or command that was killed, as the model should read it.
+        bound_s: The bound it exceeded, in seconds.
+        guidance: What the model should do differently, when there is something.
+
+    Returns:
+        The message, carrying :data:`TIMEOUT_MARKER`.
+    """
+    body = f"{what} {TIMEOUT_MARKER} {bound_s:.0f}s"
+    return tool_error(f"{body}. {guidance}" if guidance else body)
+
+
+def call_timed_out(content: str) -> bool:
+    """Say whether a tool result records a bound that was hit.
+
+    Args:
+        content: The tool result, as the model will read it.
+
+    Returns:
+        True when the tool reported its own timeout.
+    """
+    # The tool's own refusal and its first line only, so a cluster read whose payload
+    # quotes the phrase — a pod event, a probe failure — is not read as one.
+    return content.startswith("error:") and TIMEOUT_MARKER in content.split("\n", 1)[0]
