@@ -86,8 +86,15 @@ def test_a_halted_diagnosis_ends_the_incident() -> None:
 
 
 def test_a_missing_or_halted_plan_ends_the_incident() -> None:
+    """The halt is the half that matters. A plan may carry steps and halt anyway, and
+    the remediating role checks no such flag, so this predicate is all that stands
+    between a plan whose author declined to authorise it and those steps being applied.
+    """
     assert after_planning(state(plan=plan()), POLICY) is Route.EXECUTION
     assert after_planning(state(), POLICY) is Route.END
+    halted = plan(halt=True, halt_reason="the fix needs an owner the agent does not have")
+    assert halted.steps
+    assert after_planning(state(plan=halted), POLICY) is Route.END
 
 
 def test_a_clean_apply_verifies_only_where_verification_is_enabled() -> None:
@@ -128,6 +135,11 @@ def test_recovery_ends_and_a_wrong_cause_re_diagnoses() -> None:
         ),
     )
     assert after_verify(wrong, POLICY) is Route.RCA
+
+    # And stops re-diagnosing once the budget is gone. This is the only bound on the
+    # cycle: every turn of it is another mutation of the cluster.
+    spent = state(**{**wrong, "remediation_retries": POLICY.remediation_retries})
+    assert after_verify(spent, POLICY) is Route.END
 
 
 def test_inconclusive_looks_once_more_then_stops() -> None:
