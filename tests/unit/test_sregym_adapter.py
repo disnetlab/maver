@@ -8,6 +8,7 @@ rest of the run's cluster access with it. And the four HTTP calls the external d
 makes, because they were written against the prototype and cannot move.
 """
 
+import ast
 import json
 import pathlib
 from typing import Any
@@ -200,6 +201,59 @@ class TestEvidenceFilter:
         assert json.loads(filtered)["data"]["result"] == [
             {"metric": {"__name__": "up", "namespace": "shop", "pod": "user-1"}}
         ]
+
+    def test_a_result_in_the_encoding_the_transports_emit_keeps_its_real_series(
+        self,
+    ) -> None:
+        """Neither transport emits JSON: both render structured telemetry as the Python
+        repr of a list of dictionaries. A repr is one line, so it fell to the line-based
+        filter, lost that line, and came back as an empty cluster with no ``error:``
+        prefix for the loop or the audit log to notice.
+        """
+        body = str(
+            {
+                "resultType": "vector",
+                "result": [
+                    {"metric": {"__name__": "up", "pod": "user-1"}, "value": [1757000000, "0"]},
+                    {"metric": {"__name__": "up", "pod": "locust-master-0"}},
+                ],
+            }
+        )
+        filtered = EvidenceFilter().filter_result(body)
+
+        assert "locust" not in filtered
+        # Still a repr: the alert partitioning downstream reads one with literal_eval.
+        assert ast.literal_eval(filtered)["result"] == [
+            {"metric": {"__name__": "up", "pod": "user-1"}, "value": [1757000000, "0"]}
+        ]
+
+    def test_a_body_it_removed_entirely_is_not_reported_as_an_empty_cluster(self) -> None:
+        """An empty cluster is a claim about the cluster, and a model acts on it."""
+        assert EvidenceFilter().filter_result("locust-master-0   1/1   Running\n") == (
+            "Result withheld. This is not a finding that nothing was there.\n"
+        )
+
+    def test_the_injector_is_lost_even_when_it_is_the_whole_response(self) -> None:
+        """A single-resource read is a bare object, so the rule that drops a hidden list
+        element never saw it: ``get networkchaos <name> -o json`` handed back the
+        injected fault's action, target and magnitude, which is the diagnosis.
+        """
+        body = json.dumps(
+            {
+                "apiVersion": "chaos-mesh.org/v1alpha1",
+                "kind": "NetworkChaos",
+                "metadata": {"name": "delay-geo", "namespace": "test-hotel-reservation"},
+                "spec": {
+                    "action": "delay",
+                    "selector": {"labelSelectors": {"io.kompose.service": "geo"}},
+                    "delay": {"latency": "500ms"},
+                },
+            }
+        )
+        filtered = EvidenceFilter().filter_result(body)
+
+        assert "geo" not in filtered
+        assert "delay" not in filtered
 
     def test_a_trace_naming_the_load_generator_is_dropped(self) -> None:
         body = json.dumps(
