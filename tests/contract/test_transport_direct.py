@@ -13,7 +13,19 @@ from pathlib import Path
 import httpx
 import pytest
 import respx
-from transport_contract import ALERTS, KUBECTL_JSON, SERVICES, ToolTransportContract
+from transport_contract import (
+    ALERTS,
+    DEPENDENCIES,
+    KUBECTL_JSON,
+    LOG_COUNTS,
+    LOG_ENTRIES,
+    METRIC_SERIES,
+    OPERATIONS,
+    SAMPLE_AT,
+    SERVICES,
+    TRACES,
+    ToolTransportContract,
+)
 
 from kira.settings.groups import TransportSettings
 from kira.tools.transport.direct import DirectTransport
@@ -47,6 +59,36 @@ def _kubectl_stub(tmp_path: Path) -> Path:
     return script
 
 
+# Loki writes a log entry's timestamp in nanoseconds and a metric sample's in seconds,
+# over the same endpoint, which is the difference the rendering has to notice.
+_STREAMS = {
+    "status": "success",
+    "data": {
+        "resultType": "streams",
+        "result": [
+            {"stream": {"pod": pod}, "values": [[str(SAMPLE_AT * 1_000_000_000), message]]}
+            for pod, message in LOG_ENTRIES
+        ],
+    },
+}
+
+_MATRIX = {
+    "status": "success",
+    "data": {
+        "resultType": "matrix",
+        "result": [
+            {"metric": {"pod": pod}, "values": [[SAMPLE_AT, count]]} for pod, count in LOG_COUNTS
+        ],
+    },
+}
+
+
+def _logs(request: httpx.Request) -> httpx.Response:
+    """Answer a LogQL query in the shape the query asked for."""
+    query = request.url.params.get("query", "")
+    return httpx.Response(200, json=_MATRIX if "count_over_time" in query else _STREAMS)
+
+
 class TestDirectTransport(ToolTransportContract):
     @pytest.fixture
     def transport(self, tmp_path: Path) -> Iterator[DirectTransport]:
@@ -56,8 +98,27 @@ class TestDirectTransport(ToolTransportContract):
                     200, json={"status": "success", "data": {"alerts": ALERTS}}
                 )
             )
+            router.get(f"{PROMETHEUS}/api/v1/query").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "status": "success",
+                        "data": {"resultType": "vector", "result": METRIC_SERIES},
+                    },
+                )
+            )
+            router.get(f"{LOKI}/loki/api/v1/query_range").mock(side_effect=_logs)
             router.get(f"{JAEGER}/api/services").mock(
                 return_value=httpx.Response(200, json={"data": SERVICES})
+            )
+            router.get(f"{JAEGER}/api/operations").mock(
+                return_value=httpx.Response(200, json={"data": OPERATIONS})
+            )
+            router.get(f"{JAEGER}/api/traces").mock(
+                return_value=httpx.Response(200, json={"data": TRACES})
+            )
+            router.get(f"{JAEGER}/api/dependencies").mock(
+                return_value=httpx.Response(200, json=DEPENDENCIES)
             )
             yield DirectTransport(
                 TransportSettings(

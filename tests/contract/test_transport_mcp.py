@@ -6,20 +6,45 @@ servers answer from the contract's payloads in the encoding the harness's own se
 use, which is a Python literal rather than JSON.
 """
 
+import time
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from transport_contract import ALERTS, KUBECTL_JSON, SERVICES, ToolTransportContract
+from transport_contract import (
+    ALERTS,
+    DEPENDENCIES,
+    KUBECTL_JSON,
+    LOG_COUNTS,
+    LOG_ENTRIES,
+    METRIC_SERIES,
+    OPERATIONS,
+    SAMPLE_AT,
+    SERVICES,
+    TRACES,
+    ToolTransportContract,
+)
 
 from kira.adapters.sregym.transport import McpTransport
 
 SEAM = "kira.adapters.sregym.transport"
 
+_STAMP = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(SAMPLE_AT))
+
+
+def _lines(rows: list[tuple[str, str]]) -> str:
+    """Render what the harness's log server returns: one line per entry."""
+    return "\n".join(f"[{_STAMP}] [pod={pod}] {body}" for pod, body in rows)
+
+
 _ANSWER = {
     "exec_kubectl_cmd_safely": KUBECTL_JSON,
     "get_alerts": repr(ALERTS),
+    "get_metrics": repr({"resultType": "vector", "result": METRIC_SERIES}),
     "get_services": repr(SERVICES),
+    "get_operations": repr(OPERATIONS),
+    "get_traces": repr(TRACES),
+    "get_dependency_graph": repr(DEPENDENCIES),
 }
 
 
@@ -39,6 +64,9 @@ class _Session:
         return None
 
     async def call_tool(self, name: str, arguments: Any, **kwargs: Any) -> _Result:
+        if name == "get_logs":
+            counted = "count_over_time" in str((arguments or {}).get("query", ""))
+            return _Result(_lines(LOG_COUNTS if counted else LOG_ENTRIES))
         return _Result(_ANSWER.get(name, "ok"))
 
     async def __aenter__(self) -> "_Session":

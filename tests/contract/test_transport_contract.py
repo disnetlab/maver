@@ -9,18 +9,39 @@ property is for, and the last test refuses to let a property exist without one.
 """
 
 import json
+import time
 from collections.abc import Sequence
 from inspect import isawaitable, signature
 from typing import Any
 
 import pytest
-from transport_contract import ALERTS, KUBECTL_JSON, NAMESPACE, SERVICES, ToolTransportContract
+from transport_contract import (
+    ALERTS,
+    DEPENDENCIES,
+    KUBECTL_JSON,
+    LOG_COUNTS,
+    LOG_ENTRIES,
+    METRIC_SERIES,
+    NAMESPACE,
+    OPERATIONS,
+    SAMPLE_AT,
+    SERVICES,
+    TRACES,
+    ToolTransportContract,
+)
 
 from kira.tools.errors import tool_error
 
 UNREACHABLE = tool_error("the backend is not reachable")
 
 CHECKS = [name for name in dir(ToolTransportContract) if name.startswith("test_")]
+
+_STAMP = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(SAMPLE_AT))
+
+
+def _lines(rows: list[tuple[str, str]]) -> str:
+    """One line per entry, labelled and dated, which is the shape the contract asks for."""
+    return "\n".join(f"[{_STAMP}] [pod={pod}] {body}" for pod, body in rows)
 
 
 class _Conforming:
@@ -32,7 +53,9 @@ class _Conforming:
     """
 
     name = "conforming"
-    capabilities = frozenset({"kubernetes", "kubernetes.write", "metrics", "logs", "traces"})
+    capabilities = frozenset(
+        {"kubernetes", "kubernetes.write", "kubernetes.rollback", "metrics", "logs", "traces"}
+    )
     timeout_seconds = 30
 
     def __init__(self, *, reachable: bool = True) -> None:
@@ -51,7 +74,7 @@ class _Conforming:
         return self._answer("nothing to undo")
 
     async def query_metrics(self, query: str, *, window_minutes: int | None = None) -> str:
-        return self._answer("[]")
+        return self._answer(repr({"resultType": "vector", "result": METRIC_SERIES}))
 
     async def query_alerts(self) -> str:
         return self._answer(repr(ALERTS))
@@ -63,10 +86,17 @@ class _Conforming:
         return self._answer(f"Values for label {label!r}:\n  - {NAMESPACE}")
 
     async def query_logs(self, query: str, *, last_n_minutes: int = 15) -> str:
-        return self._answer("No logs found matching the query.")
+        counted = "count_over_time" in query
+        return self._answer(_lines(LOG_COUNTS if counted else LOG_ENTRIES))
 
     async def query_traces(self, operation: str, **kwargs: Any) -> str:
-        return self._answer(repr(SERVICES) if operation == "services" else "None")
+        answers = {
+            "services": repr(SERVICES),
+            "operations": repr(OPERATIONS),
+            "traces": repr(TRACES),
+            "dependencies": repr(DEPENDENCIES),
+        }
+        return self._answer(answers.get(operation, "None"))
 
 
 class _MissingTraceQuery(_Conforming):
@@ -138,6 +168,48 @@ class _ProseServiceCatalogue(_Conforming):
         return self._answer("Services: checkout, frontend")
 
 
+class _UnlabelledLogs(_Conforming):
+    """Every entry on one line, with the labels that place them dropped.
+
+    Which pod said what is the discriminating fact in a log read, and the evidence
+    policy drops a line at a time: one line means one hidden term deletes the answer.
+    """
+
+    async def query_logs(self, query: str, *, last_n_minutes: int = 15) -> str:
+        return self._answer(" ".join(body for _, body in LOG_ENTRIES))
+
+
+class _ProseMetrics(_Conforming):
+    """A metrics answer written for a reader, where the evidence policy needs structure."""
+
+    async def query_metrics(self, query: str, *, window_minutes: int | None = None) -> str:
+        return self._answer("checkout-1 is up and frontend-2 is not")
+
+
+class _ProseTraces(_Conforming):
+    """Traces the span filter cannot read, so the tool refuses them as a scope error."""
+
+    async def query_traces(self, operation: str, **kwargs: Any) -> str:
+        if operation == "traces":
+            return self._answer("one trace through checkout, and one through other-app")
+        return await super().query_traces(operation, **kwargs)
+
+
+class _EdgesWithoutTheirEnvelope(_Conforming):
+    """The edge list where the layer above rewrites ``data`` inside the graph it hands on."""
+
+    async def query_traces(self, operation: str, **kwargs: Any) -> str:
+        if operation == "dependencies":
+            return self._answer(repr(DEPENDENCIES["data"]))
+        return await super().query_traces(operation, **kwargs)
+
+
+class _SilentRollback(_Conforming):
+    """A transport with no journal of inverses answering as though it had undone a write."""
+
+    capabilities = frozenset({"kubernetes", "kubernetes.write", "metrics", "logs", "traces"})
+
+
 CASES = [
     (_MissingTraceQuery, "test_it_satisfies_the_protocol"),
     (_MisspeltCapability, "test_declared_capabilities_are_in_the_vocabulary"),
@@ -147,6 +219,20 @@ CASES = [
     (_EnvelopedKubectl, "test_a_successful_kubectl_returns_its_own_output_unwrapped"),
     (_RawAlertEnvelope, "test_firing_alerts_reach_the_partitioning_that_scopes_them"),
     (_ProseServiceCatalogue, "test_the_service_catalogue_reaches_the_scoping_that_narrows_it"),
+    (
+        _UnlabelledLogs,
+        "test_log_reads_arrive_one_line_per_entry_with_the_labels_that_place_them",
+    ),
+    (_ProseMetrics, "test_a_metrics_body_is_structured_enough_to_be_filtered"),
+    (_ProseTraces, "test_traces_reach_the_span_filter_that_narrows_them"),
+    (
+        _EdgesWithoutTheirEnvelope,
+        "test_the_dependency_graph_reaches_the_edge_filter_that_narrows_it",
+    ),
+    (
+        _SilentRollback,
+        "test_a_rollback_answer_agrees_with_the_capability_that_was_declared",
+    ),
 ]
 
 

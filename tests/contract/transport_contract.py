@@ -28,20 +28,42 @@ to different clusters. Only that each returns something the layer above can cons
 """
 
 import json
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from kira.tools.errors import call_failed
 from kira.tools.metrics import _parse_alerts, partition_incident_alerts
 from kira.tools.snapshot import _load_items
 from kira.tools.traces import (
     _PASSTHROUGH_LIMIT,
     _candidate_names_from_inventory,
+    _filter_traces_to_candidates,
     _parse_structured,
     _unparseable_scope_error,
 )
 from kira.tools.transport.base import CAPABILITIES, ToolTransport
 
-__all__ = ["ALERTS", "KUBECTL_JSON", "NAMESPACE", "SERVICE", "SERVICES", "ToolTransportContract"]
+__all__ = [
+    "ALERTS",
+    "DEPENDENCIES",
+    "FOREIGN_SERVICE",
+    "KUBECTL_JSON",
+    "LOG_COUNTS",
+    "LOG_ENTRIES",
+    "LOG_METRIC_QUERY",
+    "LOG_QUERY",
+    "METRIC_QUERY",
+    "METRIC_SERIES",
+    "NAMESPACE",
+    "OPERATIONS",
+    "SAMPLE_AT",
+    "SAMPLE_YEAR",
+    "SERVICE",
+    "SERVICES",
+    "TRACES",
+    "ToolTransportContract",
+]
 
 NAMESPACE = "shop"
 SERVICE = "checkout"
@@ -76,6 +98,70 @@ watching a parser accept it.
 
 SERVICES = [SERVICE, "frontend"]
 """What the trace backend says is reporting spans."""
+
+FOREIGN_SERVICE = "other-app"
+"""A name the same backend knows and this incident does not own."""
+
+SAMPLE_AT = 1_757_000_000
+"""One fixed instant every sample and log entry below is stamped with.
+
+A whole second in epoch seconds, so a transport that reads it in the wrong unit lands in
+1970 rather than a second away from the right answer.
+"""
+
+SAMPLE_YEAR = time.strftime("%Y", time.localtime(SAMPLE_AT))
+
+LOG_QUERY = f'{{namespace="{NAMESPACE}"}}'
+LOG_METRIC_QUERY = f'sum by (pod) (count_over_time({{namespace="{NAMESPACE}"}}[1m]))'
+
+LOG_ENTRIES = [
+    ("checkout-1", "connection refused talking to cart"),
+    ("frontend-2", "upstream request timed out"),
+]
+"""Two log entries from two pods, as ``(pod, message)``.
+
+Two of them, and from different pods, because the failure this is here for is a
+rendering that drops the labels: one entry cannot show that the pods became
+indistinguishable.
+"""
+
+LOG_COUNTS = [("checkout-1", "17"), ("frontend-2", "3")]
+"""The same two pods, counted. LogQL answers ``count_over_time`` over the log endpoint
+in a different shape from a log read, and it is a shape the model is invited to ask for."""
+
+METRIC_QUERY = f'up{{namespace="{NAMESPACE}"}}'
+
+METRIC_SERIES = [
+    {"metric": {"__name__": "up", "pod": "checkout-1"}, "value": [SAMPLE_AT, "1"]},
+    {"metric": {"__name__": "up", "pod": "frontend-2"}, "value": [SAMPLE_AT, "0"]},
+]
+"""One instant query's series."""
+
+OPERATIONS = ["GET /cart", "POST /checkout"]
+"""What the trace backend says one service reports."""
+
+TRACES = [
+    {
+        "traceID": "abc123",
+        "spans": [
+            {"spanID": "s1", "operationName": "POST /checkout", "processID": "p1"},
+            {"spanID": "s2", "operationName": "GET /elsewhere", "processID": "p2"},
+        ],
+        "processes": {
+            "p1": {"serviceName": SERVICE},
+            "p2": {"serviceName": FOREIGN_SERVICE},
+        },
+    }
+]
+"""One trace crossing out of the incident, which is the case the span filter exists for."""
+
+DEPENDENCIES = {
+    "data": [
+        {"parent": SERVICE, "child": "frontend", "callCount": 12},
+        {"parent": SERVICE, "child": FOREIGN_SERVICE, "callCount": 3},
+    ]
+}
+"""Two edges, one of them leaving the namespace."""
 
 
 async def _every_call(transport: ToolTransport) -> list[tuple[str, Any]]:
@@ -238,3 +324,93 @@ class ToolTransportContract:
         assert isinstance(services, list)
         assert all(isinstance(name, str) for name in services)
         assert set(services) == set(SERVICES)
+
+    async def test_log_reads_arrive_one_line_per_entry_with_the_labels_that_place_them(
+        self, transport: ToolTransport
+    ) -> None:
+        """Two readers need that shape, and neither of them says so when it is missing.
+
+        The model attributes an entry from its labels and dates it against the incident
+        boundary from its timestamp, and the evidence policy drops a line at a time — so
+        a rendering that runs the entries together loses all of them the moment one
+        names something the environment hides. The metric form of the same query, which
+        the tool's own description invites, is the one that broke: read as a stream it
+        rendered bare numbers with the labels gone and every timestamp in 1970, and
+        carried no error prefix to say the read had failed.
+        """
+        for query, expected in ((LOG_QUERY, LOG_ENTRIES), (LOG_METRIC_QUERY, LOG_COUNTS)):
+            lines = [line for line in (await transport.query_logs(query)).splitlines() if line]
+            assert len(lines) == len(expected)
+            for label, body in expected:
+                placed = [line for line in lines if label in line and body in line]
+                assert len(placed) == 1
+                assert SAMPLE_YEAR in placed[0]
+
+    async def test_a_metrics_body_is_structured_enough_to_be_filtered(
+        self, transport: ToolTransport
+    ) -> None:
+        """An evidence policy filters a structured body structurally and any other body
+        by dropping the lines that name a hidden term. A metrics rendering that is
+        neither JSON nor a Python literal therefore loses every series when one of them
+        mentions the load generator, and the model is handed a withheld-result notice
+        where the answer to the query it wrote should have been."""
+        parsed = _parse_structured(await transport.query_metrics(METRIC_QUERY))
+
+        assert isinstance(parsed, dict)
+        series = parsed.get("result")
+        assert isinstance(series, list)
+        assert [one["metric"]["pod"] for one in series] == [
+            one["metric"]["pod"] for one in METRIC_SERIES
+        ]
+
+    async def test_traces_reach_the_span_filter_that_narrows_them(
+        self, transport: ToolTransport
+    ) -> None:
+        """A trace crosses application boundaries, so scoping the service it was asked
+        for is not enough: the spans inside it are narrowed too. A payload the filter
+        cannot parse is refused rather than passed through, so an unreadable rendering
+        costs the model the trace tools for the rest of the run — and the operations
+        listing, which nothing parses, reaches it exactly as the backend wrote it."""
+        listed = await transport.query_traces("operations", service=SERVICE)
+        assert all(operation in listed for operation in OPERATIONS)
+
+        raw = await transport.query_traces("traces", service=SERVICE, last_n_minutes=15)
+        filtered = _filter_traces_to_candidates(raw, frozenset({SERVICE}))
+        assert filtered is not None
+        kept = _parse_structured(filtered)
+        assert isinstance(kept, list) and len(kept) == 1
+        assert [span["operationName"] for span in kept[0]["spans"]] == ["POST /checkout"]
+        assert FOREIGN_SERVICE not in str(kept)
+
+    async def test_the_dependency_graph_reaches_the_edge_filter_that_narrows_it(
+        self, transport: ToolTransport
+    ) -> None:
+        """The envelope rather than the edges, because the filter above rewrites the
+        edge list in place and hands the whole graph on. An edge with one end outside
+        the namespace is dropped there, and a graph that arrives unreadable is refused:
+        keeping a half-inside edge would name a service the model has no scoped way to
+        look at, so the only thing it could do with the name is follow it out of the
+        incident."""
+        graph = _parse_structured(await transport.query_traces("dependencies", last_n_minutes=30))
+
+        assert isinstance(graph, dict)
+        edges = graph.get("data")
+        assert isinstance(edges, list)
+        assert [(edge["parent"], edge["child"]) for edge in edges] == [
+            (edge["parent"], edge["child"]) for edge in DEPENDENCIES["data"]
+        ]
+
+    async def test_a_rollback_answer_agrees_with_the_capability_that_was_declared(
+        self, transport: ToolTransport
+    ) -> None:
+        """The rollback tools are withheld before a run from a transport that does not
+        declare the capability, so the only way these are reached at all is a caller
+        that ignored it. Answering such a caller with something that reads as success
+        would tell an agent a write had been undone by a transport that keeps no journal
+        of inverses and cannot undo anything."""
+        offered = "kubernetes.rollback" in transport.capabilities
+
+        for answer in (await transport.rollbackable_commands(), await transport.rollback_last()):
+            assert answer.strip()
+            if not offered:
+                assert call_failed(answer)
