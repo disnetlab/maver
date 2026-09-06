@@ -31,6 +31,7 @@ import logging
 from typing import Any
 
 from kira.contracts.artifacts import ExecutionResult, RootCause
+from kira.contracts.events import InterventionEvent
 from kira.llm.types import Message, ToolChoice
 from kira.prompts.loader import compose_role_prompt, read_runtime, render
 from kira.roles.base import RoleContext, RoleOutcome, RoleSpec
@@ -46,6 +47,10 @@ _log = logging.getLogger(__name__)
 _INITIAL_EXECUTION_TOOL = "exec_kubectl_cmd_safely"
 
 _KUBELET_MARKERS = ("stopped", "not posting", "notready", "not ready", "nodestatusunknown")
+
+_UNFORCEABLE_PROFILES: set[str] = set()
+"""Profiles already reported as unable to carry the forced opening read, so the warning
+is written once per process rather than once per incident."""
 
 
 def requires_kubelet_recovery(root_cause: Any) -> bool:
@@ -159,6 +164,37 @@ def _initial_message(plan: Any, root_cause: Any) -> str:
     )
 
 
+def _forced_opening(ctx: RoleContext, root_cause: Any) -> ToolChoice | None:
+    """The tool the first turn is forced to call, when the endpoint will accept one.
+
+    A serving stack that needs ``tool_choice: auto`` cannot be sent a forced choice, so
+    the role loses a property its own docstring and the README state it has: the model
+    may open on a mutation. The choice is not sent anyway — the endpoint would reject
+    the request — but a property this system claims must not go missing in silence.
+
+    Args:
+        ctx: The role run's context.
+        root_cause: The diagnosis, or None.
+
+    Returns:
+        The forced choice, or None when there is none or the profile cannot carry it.
+    """
+    forced = initial_execution_tool_choice(
+        root_cause, {tool.name for tool in ctx.toolset.definitions}
+    )
+    if forced is None or ctx.profile.quirks.tool_choice != "auto":
+        return forced
+    detail = (
+        f"profile {ctx.profile.name} serves tool_choice=auto, so the forced opening "
+        "read is not sent and the first turn may be a mutation"
+    )
+    ctx.journal.record(InterventionEvent(control="tool_choice", action="bypassed", detail=detail))
+    if ctx.profile.name not in _UNFORCEABLE_PROFILES:
+        _UNFORCEABLE_PROFILES.add(ctx.profile.name)
+        _log.warning("%s", detail)
+    return None
+
+
 async def _run(ctx: RoleContext) -> RoleOutcome:
     plan = ctx.state.get("plan")
     if plan is None:
@@ -208,9 +244,7 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
             submit_validator=ctx.spec.submit_model.model_validate,
             submit_guard=_submit_guard,
             serial_tool_calls=ctx.spec.serial_tool_calls,
-            initial_tool_choice=initial_execution_tool_choice(
-                root_cause, {tool.name for tool in ctx.toolset.definitions}
-            ),
+            initial_tool_choice=_forced_opening(ctx, root_cause),
         )
 
     artifact = (

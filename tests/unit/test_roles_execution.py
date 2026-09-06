@@ -15,6 +15,7 @@ import pytest
 
 from kira.audit.journal import Journal, ListSink
 from kira.contracts.artifacts import Plan, RootCause
+from kira.contracts.events import InterventionEvent
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.middleware.base import MiddlewareStack
 from kira.roles import execution
@@ -26,7 +27,11 @@ from kira.tools.context import ToolContext
 from kira.tools.toolsets import build_toolset
 from kira.tools.workspace import SessionWorkspace
 
-PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
+PROFILES = {
+    name: load_profile(name, pathlib.Path("configs/models"))
+    for name in ("qwen3.6-35b-a3b", "qwen3.8-27b", "claude-sonnet-4-6")
+}
+PROFILE = PROFILES["qwen3.6-35b-a3b"]
 
 FIXTURE = json.loads(
     (
@@ -109,8 +114,10 @@ def context(
     model: FakeModel | None = None,
     write_lock: asyncio.Lock | None = None,
     resume: list[dict[str, Any]] | None = None,
+    profile: Any = PROFILE,
+    sink: ListSink | None = None,
 ) -> tuple[RoleContext, FakeModel]:
-    sink = ListSink()
+    sink = sink or ListSink()
     journal = Journal(sink, session_id="s1", stage="execution")
     tools = ToolContext(
         transport=FakeTransport(),
@@ -137,7 +144,7 @@ def context(
         toolset=build_toolset("execution", tools),
         tool_context=tools,
         journal=journal,
-        profile=PROFILE,
+        profile=profile,
         middleware=MiddlewareStack(),
         write_lock=write_lock or asyncio.Lock(),
         run_id="r1",
@@ -171,17 +178,39 @@ def test_a_stopped_kubelet_gets_the_directive_and_the_least_privileged_repair() 
     ) == {"type": "function", "function": {"name": "ssh_exec"}}
 
 
-async def test_an_ordinary_incident_is_forced_to_open_on_a_read(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("profile_name", sorted(PROFILES))
+async def test_an_ordinary_incident_is_forced_to_open_on_a_read(
+    tmp_path: pathlib.Path, profile_name: str
+) -> None:
     """The model cannot open with a mutation. This is one of the four code properties
-    that make Check-and-Set followable rather than merely instructed."""
-    ctx, model = context(tmp_path)
+    that make Check-and-Set followable rather than merely instructed.
+
+    Over every shipped profile, because one of them cannot carry it: the serving stack
+    behind `qwen3.8-27b` requires `tool_choice: auto`, which is a request-level setting
+    and not a per-turn one, so the forced choice is not sent. That is the profile the
+    denser-model comparison runs on, and a property the README claims was being lost
+    with no event, no warning and no test.
+    """
+    profile = PROFILES[profile_name]
+    sink = ListSink()
+    ctx, model = context(tmp_path, profile=profile, sink=sink)
 
     await execution.EXECUTION.run(ctx)
 
-    assert model.requests[0].tool_choice == {
-        "type": "function",
-        "function": {"name": "exec_kubectl_cmd_safely"},
-    }
+    dropped = [
+        e.payload
+        for e in sink.events
+        if isinstance(e.payload, InterventionEvent) and e.payload.control == "tool_choice"
+    ]
+    if profile.quirks.tool_choice == "auto":
+        assert model.requests[0].tool_choice == "auto"
+        assert [(d.action, profile_name in d.detail) for d in dropped] == [("bypassed", True)]
+    else:
+        assert model.requests[0].tool_choice == {
+            "type": "function",
+            "function": {"name": "exec_kubectl_cmd_safely"},
+        }
+        assert dropped == []
 
 
 @pytest.mark.parametrize(
