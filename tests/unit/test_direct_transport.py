@@ -207,3 +207,47 @@ async def test_a_command_that_leaves_a_child_behind_still_returns_on_the_deadlin
 
     assert call_timed_out(result)
     assert elapsed < 5
+
+
+@respx.mock
+async def test_a_metric_query_keeps_its_series_labels_and_its_own_clock() -> None:
+    """LogQL answers count_over_time, rate and sum by over the same log endpoint.
+
+    Read as a stream, such a result lost the only discriminating label — two pods
+    rendered as indistinguishable bare numbers — and had its seconds divided by a
+    billion, dating every sample to 1970 at the moment the model was placing events
+    against the incident boundary. Nothing carried the error prefix, so the loop, the
+    repeat breaker and the event log all counted it as a good read.
+    """
+    when = 1_757_000_000
+    matrix = {
+        "status": "success",
+        "data": {
+            "resultType": "matrix",
+            "result": [
+                {"metric": {"pod": "user-1"}, "values": [[when, "17"]]},
+                {"metric": {"pod": "cart-9"}, "values": [[when, "3"]]},
+            ],
+        },
+    }
+    vector = {
+        "status": "success",
+        "data": {
+            "resultType": "vector",
+            "result": [{"metric": {"pod": "user-1"}, "value": [when, "9"]}],
+        },
+    }
+    respx.get(f"{LOKI}/loki/api/v1/query_range").mock(
+        side_effect=[httpx.Response(200, json=matrix), httpx.Response(200, json=vector)]
+    )
+    bound = transport(loki_url=LOKI)
+    clock = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(when))
+
+    ranged = await bound.query_logs('sum by (pod) (count_over_time({namespace="shop"}[1m]))')
+    instant = await bound.query_logs('sum by (pod) (count_over_time({namespace="shop"}[1m]))')
+
+    assert ranged.splitlines() == [
+        f"[{clock}] [pod=user-1] 17",
+        f"[{clock}] [pod=cart-9] 3",
+    ]
+    assert instant.splitlines() == [f"[{clock}] [pod=user-1] 9"]

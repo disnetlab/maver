@@ -528,37 +528,73 @@ def _render_data_list(body: Any) -> str:
 
 
 def _render_log_lines(body: Any) -> str:
-    """Render matching log streams one line at a time.
+    """Render a log query's result in whichever shape the backend answered.
 
     Args:
         body: The decoded response.
 
     Returns:
-        One line per entry, prefixed with its timestamp and stream labels, or a notice
-        that nothing matched.
+        One line per entry or per sample, prefixed with its timestamp and its series
+        labels, or a notice that nothing matched.
     """
     data = body.get("data") if isinstance(body, dict) else None
-    streams = data.get("result") if isinstance(data, dict) else None
-    if not isinstance(streams, list) or not streams:
+    result = data.get("result") if isinstance(data, dict) else None
+    if not isinstance(result, list) or not result:
         return "No logs found matching the query."
 
+    # The same endpoint answers a LogQL metric query — count_over_time, rate, sum by —
+    # in a different shape: the series identity sits under `metric` rather than `stream`
+    # and the timestamps are seconds rather than nanoseconds. Read as a stream, such a
+    # result rendered as bare numbers with every label dropped and every timestamp in
+    # 1970, and carried no error prefix to say the read had gone wrong.
+    kind = data.get("resultType") if isinstance(data, dict) else None
+    metric = str(kind or "") in {"matrix", "vector"}
+    lines = _sample_lines(result) if metric else _entry_lines(result)
+    return "\n".join(lines) if lines else "No log entries found."
+
+
+def _series_labels(series: Mapping[str, Any], key: str) -> str:
+    """Render one series' identity as the model reads it."""
+    labels = series.get(key)
+    if not isinstance(labels, dict):
+        return ""
+    return ", ".join(f"{name}={value}" for name, value in labels.items())
+
+
+def _entry_lines(streams: Sequence[Any]) -> list[str]:
+    """One line per log entry of a stream result."""
     lines: list[str] = []
     for stream in streams:
         if not isinstance(stream, dict):
             continue
-        labels = stream.get("stream")
-        rendered = (
-            ", ".join(f"{key}={value}" for key, value in labels.items())
-            if isinstance(labels, dict)
-            else ""
-        )
+        rendered = _series_labels(stream, "stream")
         entries = stream.get("values")
         for entry in entries if isinstance(entries, list) else []:
             if not isinstance(entry, list) or len(entry) != 2:
                 continue
             stamp, line = entry
             lines.append(f"[{_local_time(stamp)}] [{rendered}] {line}")
-    return "\n".join(lines) if lines else "No log entries found."
+    return lines
+
+
+def _sample_lines(series: Sequence[Any]) -> list[str]:
+    """One line per sample of a metric result, matrix or vector."""
+    lines: list[str] = []
+    for one in series:
+        if not isinstance(one, dict):
+            continue
+        rendered = _series_labels(one, "metric")
+        # A matrix carries a series of samples; a vector carries the one it reduced to.
+        samples = one.get("values")
+        if not isinstance(samples, list):
+            single = one.get("value")
+            samples = [single] if single is not None else []
+        for sample in samples:
+            if not isinstance(sample, list) or len(sample) != 2:
+                continue
+            stamp, value = sample
+            lines.append(f"[{_sample_time(stamp)}] [{rendered}] {value}")
+    return lines
 
 
 def _local_time(nanoseconds: Any) -> str:
@@ -574,6 +610,14 @@ def _local_time(nanoseconds: Any) -> str:
         return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(nanoseconds) / 1e9))
     except (TypeError, ValueError, OSError, OverflowError):
         return str(nanoseconds)
+
+
+def _sample_time(seconds: Any) -> str:
+    """Render a metric sample's timestamp, which the backend writes in seconds."""
+    try:
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(seconds)))
+    except (TypeError, ValueError, OSError, OverflowError):
+        return str(seconds)
 
 
 def _stated_error(body: Mapping[str, Any]) -> str:
