@@ -67,16 +67,19 @@ READ_FIRST = ("exec_kubectl_cmd_safely", {"command": "kubectl get svc user -o ya
 class FakeModel:
     """Reads the target, then submits — the shortest run the guard will accept."""
 
-    def __init__(self, *submissions: dict[str, Any], delay: float = 0.0) -> None:
+    def __init__(
+        self, *submissions: dict[str, Any], delay: float = 0.0, opening_read: bool = True
+    ) -> None:
         self.submissions = list(submissions)
         self.requests: list[ModelRequest] = []
         self.delay = delay
+        self.opening_read = opening_read
 
     async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
         self.requests.append(request)
         if self.delay:
             await asyncio.sleep(self.delay)
-        if len(self.requests) == 1:
+        if self.opening_read and len(self.requests) == 1:
             name, arguments = READ_FIRST
         else:
             name, arguments = "submit_execution_result", self.submissions.pop(0)
@@ -105,6 +108,7 @@ def context(
     plan: Plan | None = PLAN,
     model: FakeModel | None = None,
     write_lock: asyncio.Lock | None = None,
+    resume: list[dict[str, Any]] | None = None,
 ) -> tuple[RoleContext, FakeModel]:
     sink = ListSink()
     journal = Journal(sink, session_id="s1", stage="execution")
@@ -138,6 +142,7 @@ def context(
         write_lock=write_lock or asyncio.Lock(),
         run_id="r1",
         session_id="s1",
+        resume=resume,
     )
     return ctx, completion
 
@@ -256,3 +261,53 @@ async def test_two_remediations_never_overlap(tmp_path: pathlib.Path) -> None:
     await asyncio.gather(execution.EXECUTION.run(first), execution.EXECUTION.run(second))
 
     assert peak == 1
+
+
+APPLIED_WRITE: list[dict[str, Any]] = [
+    {"role": "user", "content": "apply the plan"},
+    {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "w1",
+                "type": "function",
+                "function": {
+                    "name": "exec_kubectl_cmd_safely",
+                    "arguments": json.dumps({"command": "kubectl patch svc user -p '{}'"}),
+                },
+            }
+        ],
+    },
+    {
+        "role": "tool",
+        "tool_call_id": "w1",
+        "name": "exec_kubectl_cmd_safely",
+        "content": "service/user patched",
+    },
+]
+"""The transcript a continuation opens on: the approved write, and its replayed result."""
+
+
+async def test_a_resumed_run_may_submit_on_the_turn_after_the_approved_write(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The guard counts commands, and a continuation's commands are behind it.
+
+    The count restarted at zero on a resume while the transcript in front of the model
+    held the write and its result, so the first submit after an approval was refused
+    with text saying no command had been run and instructing the model to apply the
+    planned mutation. A model that complies reissues a change the cluster has taken and
+    parks the incident on a second decision for it.
+    """
+    # Three submissions, so a run that rejects the first two and reaches the guard's
+    # bypass fails on the assertion below rather than on an exhausted script.
+    ctx, model = context(
+        tmp_path, model=FakeModel(*[VALID_RESULT] * 3, opening_read=False), resume=APPLIED_WRITE
+    )
+
+    outcome = await execution.EXECUTION.run(ctx)
+
+    assert outcome.artifact is not None
+    # One turn: a rejection would have handed the submission back and taken another.
+    assert len(model.requests) == 1

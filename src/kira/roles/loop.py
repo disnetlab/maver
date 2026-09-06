@@ -228,7 +228,14 @@ async def run_until_submit(
     stack = middleware or MiddlewareStack()
     log = journal or Journal(session_id=session_id, stage=role)
 
-    state = _State(transcript=list(messages))
+    # A continuation opens on the transcript it was paused in, so the commands it
+    # already ran are in front of the model. Counting from zero told the guards that
+    # read this that nothing had been run, and Execution's answer to that is to instruct
+    # the model to apply a mutation the cluster has already taken.
+    state = _State(
+        transcript=list(messages),
+        tool_calls_made=sum(1 for message in messages if message.get("role") == "tool"),
+    )
     opening = list(messages)
     submit_only = [t for t in tools if t.name == submit_tool]
     repeats = RepeatedCallTracker(limits)
