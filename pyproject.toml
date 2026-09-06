@@ -55,6 +55,10 @@ dependencies = [
     "opentelemetry-api>=1.30",
     "opentelemetry-sdk>=1.30",
     "opentelemetry-exporter-otlp-proto-grpc>=1.30",
+    # The Snowball English stemmer PostgreSQL's `english_stem` dictionary runs, so that
+    # the embedded backend can build the same candidate pool as the server one. Pure
+    # Python and dependency-free: see kira.memory.lexemes.
+    "snowballstemmer>=3.1.1",
 ]
 
 [project.optional-dependencies]
