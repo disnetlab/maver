@@ -20,11 +20,12 @@ baseline that re-read the namespace from scratch would be a different and weaker
 than the one being compared against.
 """
 
+import json
 import logging
 from typing import Any
 
 from kira.contracts.artifacts import SingleDiagnosis, SingleResult
-from kira.llm.types import ToolSpec
+from kira.llm.types import Message, ToolSpec
 from kira.prompts.loader import compose_role_prompt, read_runtime, render
 from kira.roles.base import RoleContext, RoleOutcome, RoleSpec, StateDelta
 from kira.roles.loop import run_until_submit
@@ -50,6 +51,36 @@ def _hide(tools: list[ToolSpec], name: str) -> list[ToolSpec]:
 async def _announce(ctx: RoleContext, stage: str, delta: StateDelta) -> None:
     if ctx.milestone is not None:
         await ctx.milestone(stage, delta)
+
+
+def _submitted_diagnosis(messages: list[Message]) -> tuple[SingleDiagnosis, list[Message]] | None:
+    """Read the first phase's answer back out of the transcript it was submitted in.
+
+    A continuation re-enters the phase it paused in, so the diagnosis is not produced
+    again in this run, and the state slot it would occupy is filled only when the role
+    returns — which a run that paused has not done. The transcript is therefore the only
+    record of it the role is handed, and it is a complete one.
+
+    Args:
+        messages: The transcript the run was paused in.
+
+    Returns:
+        The diagnosis and the prefix of the transcript that produced it, or None when
+        the transcript carries no accepted diagnosis.
+    """
+    for index in range(len(messages) - 1, -1, -1):
+        for tool_call in messages[index].get("tool_calls") or []:
+            function = tool_call.get("function") or {}
+            if function.get("name") != "submit_diagnosis":
+                continue
+            try:
+                arguments = json.loads(function.get("arguments") or "{}")
+                return SingleDiagnosis.model_validate(arguments), messages[: index + 1]
+            except Exception:
+                # A rejected submission is still in the transcript. Keep scanning back:
+                # only the accepted one ends a phase, and it is the last of its kind.
+                continue
+    return None
 
 
 async def _run(ctx: RoleContext) -> RoleOutcome:
@@ -78,46 +109,61 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         "serial_tool_calls": ctx.spec.serial_tool_calls,
     }
 
-    opening = render(
-        read_runtime("single", "diagnosis_task.txt"),
-        {
-            "INCIDENT_CONTEXT": render(
-                read_runtime("single", "incident_context.txt"),
-                {"ALERT_JSON": alert_json(ctx.state.get("alert") or {})},
-            )
-        },
-    )
-    diagnosis_run = await run_until_submit(
-        role="single.diagnosis",
-        tools=_hide(ctx.toolset.definitions, "submit_mitigation"),
-        submit_tool="submit_diagnosis",
-        messages=[{"role": "user", "content": opening}],
-        submit_validator=SingleDiagnosis.model_validate,
-        **shared,
-    )
-    if diagnosis_run.submission is None:
-        return RoleOutcome(
-            artifact=None,
-            transcript=diagnosis_run.transcript,
-            error=(
-                f"single-agent diagnosis failed: {diagnosis_run.reason or diagnosis_run.status}"
-            ),
+    # A continuation re-enters the phase that paused. Rebuilding phase one would re-ask
+    # a question already answered, discard the result of the write the operator has just
+    # approved, and let the agent reissue a mutation the cluster has taken.
+    resumed = _submitted_diagnosis(list(ctx.resume)) if ctx.resume is not None else None
+    if ctx.resume_stage == "single.mitigation" and resumed is not None:
+        diagnosis, diagnosis_transcript = resumed
+    else:
+        opening = render(
+            read_runtime("single", "diagnosis_task.txt"),
+            {
+                "INCIDENT_CONTEXT": render(
+                    read_runtime("single", "incident_context.txt"),
+                    {"ALERT_JSON": alert_json(ctx.state.get("alert") or {})},
+                )
+            },
         )
+        diagnosis_run = await run_until_submit(
+            role="single.diagnosis",
+            tools=_hide(ctx.toolset.definitions, "submit_mitigation"),
+            submit_tool="submit_diagnosis",
+            messages=list(ctx.resume)
+            if ctx.resume is not None
+            else [{"role": "user", "content": opening}],
+            submit_validator=SingleDiagnosis.model_validate,
+            **shared,
+        )
+        if diagnosis_run.submission is None:
+            return RoleOutcome(
+                artifact=None,
+                transcript=diagnosis_run.transcript,
+                error=(
+                    f"single-agent diagnosis failed: {diagnosis_run.reason or diagnosis_run.status}"
+                ),
+            )
 
-    diagnosis = SingleDiagnosis.model_validate(diagnosis_run.submission)
-    await _announce(ctx, "rca", {"root_cause": diagnosis})
+        diagnosis = SingleDiagnosis.model_validate(diagnosis_run.submission)
+        diagnosis_transcript = diagnosis_run.transcript
+        await _announce(ctx, "rca", {"root_cause": diagnosis})
 
     # Continue the same transcript so the agent keeps its diagnosis context. Its last
     # turn is the submit call, which nothing answered, and a server rejects a request
     # whose tool call has no reply — so the dangling call is closed before the replay.
+    mitigation_opening: list[Message] = (
+        list(ctx.resume)
+        if ctx.resume_stage == "single.mitigation" and ctx.resume is not None
+        else [
+            *close_dangling_tool_calls(diagnosis_transcript),
+            {"role": "user", "content": read_runtime("single", "mitigation_task.txt")},
+        ]
+    )
     mitigation_run = await run_until_submit(
         role="single.mitigation",
         tools=_hide(ctx.toolset.definitions, "submit_diagnosis"),
         submit_tool="submit_mitigation",
-        messages=[
-            *close_dangling_tool_calls(diagnosis_run.transcript),
-            {"role": "user", "content": read_runtime("single", "mitigation_task.txt")},
-        ],
+        messages=mitigation_opening,
         submit_validator=SingleResult.model_validate,
         **shared,
     )
@@ -141,7 +187,7 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
     summaries = [
         *ctx.state.get("trace_summaries", []),
         build_trace_summary(
-            "single.diagnosis", transcript=diagnosis_run.transcript, output=diagnosis
+            "single.diagnosis", transcript=diagnosis_transcript, output=diagnosis
         ).model_dump(mode="json"),
         build_trace_summary(
             "single.mitigation",

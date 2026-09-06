@@ -128,6 +128,14 @@ class RoleContext:
     already a conversation, and starting over would discard everything the role had
     established before it asked for permission.
     """
+    resume_stage: str = ""
+    """The stage label the pause was recorded under, when `resume` is set.
+
+    A role that answers more than one graded question labels each phase `role.phase`,
+    and a continuation has to re-enter the phase that paused. The role alone knows what
+    its labels mean, so the label travels with the transcript rather than being resolved
+    for it.
+    """
     packet: LearningPacket | None = None
     """The offline pass's input, assembled from stored records rather than live state.
 

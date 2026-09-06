@@ -491,17 +491,28 @@ async def test_a_checkpoint_edited_after_approval_is_refused(
 
 
 class SingleModeModel:
-    """Diagnoses, then tries to write during the mitigation phase."""
+    """Diagnoses, then tries to write during the mitigation phase.
+
+    It decides from the transcript it is sent rather than from how many times it has
+    been called, so a continuation and a restart are distinguishable: a run re-entered
+    at turn zero has not seen the write's result and is answered with the write again.
+    """
 
     def __init__(self) -> None:
         self.callers: list[str] = []
+        self.requests: list[ModelRequest] = []
 
     async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
         self.callers.append(caller)
+        self.requests.append(request)
+        applied = any(
+            m.get("role") == "tool" and m.get("name") == "exec_kubectl_cmd_safely"
+            for m in request.messages
+        )
         if caller == "single.diagnosis":
             name: str = "submit_diagnosis"
             arguments: dict[str, Any] = {"solution": "svc/user targets a port nothing listens on"}
-        elif len([c for c in self.callers if c == "single.mitigation"]) == 1:
+        elif not applied:
             name, arguments = "exec_kubectl_cmd_safely", PATCH
         else:
             name, arguments = "submit_mitigation", {"succeeded": True, "summary": "patched"}
@@ -559,15 +570,32 @@ async def test_a_single_agent_run_parks_and_resumes(tmp_path: pathlib.Path) -> N
         await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
 
     parked = storage.sessions.get_session(session.session_id)
-    assert parked is not None and parked.awaiting_request_id
+    assert parked is not None and parked.awaiting_request_id and parked.checkpoint
     assert parked.current_stage == "single.mitigation"
     request_id = parked.awaiting_request_id
+    checkpointed = list(parked.checkpoint["messages"])
     storage.approvals.decide(request_id, status="approved", decided_by="an operator", reason="ok")
 
     COMMANDS.clear()
+    sent = len(deploy.completion.requests)
     status = await resume_after_decision(request_id, deploy)
 
     assert status != "resuming"
+    # The phase that paused, and only that phase. Re-entering at the diagnosis task
+    # re-asks a question already answered and throws away the result of the write the
+    # operator has just approved.
+    assert deploy.completion.callers[sent:] == ["single.mitigation"]
+    resumed = list(deploy.completion.requests[sent].messages)
+    assert resumed[: len(checkpointed)] == checkpointed
+    assert resumed[len(checkpointed) :] == [
+        {
+            "role": "tool",
+            "tool_call_id": parked.checkpoint["tool_call_id"],
+            "name": "exec_kubectl_cmd_safely",
+            "content": "service/user patched",
+        }
+    ]
+    # The replay, and no second attempt at the mutation the cluster has already taken.
     assert COMMANDS == [["patch", "svc", "user", "-p", "{}"]]
     finished = storage.sessions.get_session(session.session_id)
     assert finished is not None and finished.run_status != "resuming"

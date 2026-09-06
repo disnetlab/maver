@@ -447,6 +447,7 @@ def _context_builder(
     resources: IncidentResources,
     on_stage: StageHook | None,
     resume_for: dict[str, list[dict[str, Any]]] | None = None,
+    resume_stage: str = "",
     assignment: str = "",
     retrieval: bool | None = None,
     run_label: str = "",
@@ -454,8 +455,9 @@ def _context_builder(
     """Assemble a role's context from the incident's own resources.
 
     ``resume_for`` carries the transcript a paused role should open on, keyed by that
-    role. It is consumed on the first entry: a role re-entered later in the same run is
-    starting a fresh cycle, not continuing the one that was interrupted.
+    role, and ``resume_stage`` the label it was paused under. It is consumed on the
+    first entry: a role re-entered later in the same run is starting a fresh cycle, not
+    continuing the one that was interrupted.
     """
     pending_resume = dict(resume_for or {})
     # A run told not to retrieve is given no store at all, so the toolset drops the
@@ -490,6 +492,7 @@ def _context_builder(
             if on_stage is not None:
                 await on_stage(stage, cast(IncidentState, {**state, **delta}))
 
+        resumed = pending_resume.pop(spec.name, None)
         return RoleContext(
             spec=spec,
             state=state,
@@ -520,7 +523,8 @@ def _context_builder(
             milestone=milestone,
             assignment=assignment,
             run_label=run_label,
-            resume=pending_resume.pop(spec.name, None),
+            resume=resumed,
+            resume_stage=resume_stage if resumed is not None else "",
         )
 
     return build
@@ -778,7 +782,9 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
             policy=RoutingPolicy.from_settings(deployment.settings),
             runs=_RunRecorder(deployment.storage),
             journal=journal,
-            build_context=_context_builder(deployment, resources, None, {role: transcript}),
+            build_context=_context_builder(
+                deployment, resources, None, {role: transcript}, resume_stage=checkpoint.stage
+            ),
         )
         # The same composition the first pass ran under. Building the roles a second
         # way here would let a continuation re-enter a diagnosis without the second
