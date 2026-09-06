@@ -406,22 +406,23 @@ async def test_a_guard_that_is_out_of_budget_says_so_before_it_lets_one_through(
     assert [b.action for b in bypassed] == ["bypassed"]
 
 
+@pytest.mark.parametrize("serial", [True, False], ids=["serial", "parallel"])
 @pytest.mark.parametrize("raised_by", ["hook", "tool"])
-async def test_a_parallel_siblings_result_survives_the_pause_beside_it(raised_by: str) -> None:
-    """A pause unwinds the run; it does not unwind the calls running next to it.
+async def test_a_siblings_result_survives_the_pause_beside_it(raised_by: str, serial: bool) -> None:
+    """A pause unwinds the run; it does not unwind the calls that ran next to it.
 
-    ``asyncio.gather`` with the default ``return_exceptions=False`` propagates the pause
-    the moment it is raised and leaves the siblings running, so a write that had already
-    landed on the cluster reached no transcript. The resumed run then opened on a request
-    whose assistant turn carried a call nobody had answered — rejected outright by an
-    OpenAI-compatible server — and, had it got past that, would have reissued a write the
-    cluster had already taken. Unreachable today only because every shipped write stage
-    runs its calls serially, and one setting names another.
+    Neither dispatch path undoes what a sibling already did: ``asyncio.gather`` leaves
+    the others running, and a serial comprehension abandons the results it has already
+    produced. Either way a write that had already landed on the cluster reached no
+    transcript, and the resumed run opened on a request whose assistant turn carried a
+    call nobody had answered — rejected outright by an OpenAI-compatible server — and,
+    had it got past that, would have reissued a write the cluster had already taken.
 
-    Both raisers, because a pause reaching the loop from a tool rather than from a hook
-    is the same defect in a different hat: the blanket ``except Exception`` around
-    dispatch answered it with an ``error:`` string, and the run carried on past the
-    decision it was waiting for.
+    Both dispatch paths, because every shipped write stage is the serial one. Both
+    raisers, because a pause reaching the loop from a tool rather than from a hook is
+    the same defect in a different hat: the blanket ``except Exception`` around dispatch
+    answered it with an ``error:`` string, and the run carried on past the decision it
+    was waiting for.
     """
     written: list[str] = []
     landed = asyncio.Event()
@@ -463,8 +464,9 @@ async def test_a_parallel_siblings_result_survives_the_pause_beside_it(raised_by
     else:
         dispatch["get_logs"] = pausing_tool
 
+    # The sibling is issued first so that serial dispatch reaches it before the pause.
     model = FakeModel(
-        [turn(call("get_logs", {"q": "x"}, id="p1"), call("get_metrics", {"q": "y"}, id="w1"))]
+        [turn(call("get_metrics", {"q": "y"}, id="w1"), call("get_logs", {"q": "x"}, id="p1"))]
     )
     with pytest.raises(ApprovalPending) as raised:
         await run_until_submit(
@@ -476,6 +478,7 @@ async def test_a_parallel_siblings_result_survives_the_pause_beside_it(raised_by
             submit_tool=SUBMIT,
             messages=[{"role": "user", "content": "go"}],
             middleware=stack,
+            serial_tool_calls=serial,
         )
 
     assert written == ["applied"]

@@ -56,6 +56,7 @@ PLAN: dict[str, Any] = {
     "confidence": 0.8,
 }
 PATCH = {"cmd": "kubectl patch svc user -p '{}'"}
+READ = {"cmd": "kubectl get svc user -o json"}
 
 
 COMMANDS: list[list[str]] = []
@@ -271,40 +272,60 @@ def test_a_grant_covers_exactly_the_call_it_was_given_for() -> None:
 
 
 class ResumingModel(FakeModel):
-    """Writes once, then submits whatever the answer turned out to be."""
+    """Reads and writes in one turn, then submits whatever the answer turned out to be.
+
+    The write is issued beside a read because a turn with one call is the one shape that
+    cannot show what a pause leaves behind: the sibling has already run, and the resumed
+    request has to answer its call as well as the one the operator decided.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: list[ModelRequest] = []
 
     async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
-        if caller == "execution" and self.callers.count("execution") >= 1:
-            self.callers.append(caller)
-            arguments: dict[str, Any] = {
-                "succeeded": True,
-                "steps": [
-                    {
-                        "step_index": 0,
-                        "succeeded": True,
-                        "observation": "targetPort was 8081; patched; endpoints non-empty",
-                    }
-                ],
-                "final_state_summary": "svc/user has endpoints",
-                "confidence": 0.8,
-            }
-            return ModelResponse(
-                text=None,
-                tool_calls=(
-                    ToolCall(
-                        id="submit",
-                        name="submit_execution_result",
-                        arguments=arguments,
-                        raw_arguments=json.dumps(arguments),
-                    ),
-                ),
-                finish_reason="stop",
-                reasoning=None,
-                usage=Usage(),
-                duration_ms=1,
-                attempts=1,
+        self.requests.append(request)
+        if caller != "execution":
+            return await super().complete(request, caller=caller)
+        self.callers.append(caller)
+        if self.callers.count("execution") == 1:
+            return self._turn(
+                ("read", "exec_kubectl_cmd_safely", READ),
+                ("write", "exec_kubectl_cmd_safely", PATCH),
             )
-        return await super().complete(request, caller=caller)
+        arguments: dict[str, Any] = {
+            "succeeded": True,
+            "steps": [
+                {
+                    "step_index": 0,
+                    "succeeded": True,
+                    "observation": "targetPort was 8081; patched; endpoints non-empty",
+                }
+            ],
+            "final_state_summary": "svc/user has endpoints",
+            "confidence": 0.8,
+        }
+        return self._turn(("submit", "submit_execution_result", arguments))
+
+    @staticmethod
+    def _turn(*calls: tuple[str, str, dict[str, Any]]) -> ModelResponse:
+        return ModelResponse(
+            text=None,
+            tool_calls=tuple(
+                ToolCall(
+                    id=call_id,
+                    name=name,
+                    arguments=arguments,
+                    raw_arguments=json.dumps(arguments),
+                )
+                for call_id, name, arguments in calls
+            ),
+            finish_reason="stop",
+            reasoning=None,
+            usage=Usage(),
+            duration_ms=1,
+            attempts=1,
+        )
 
 
 async def parked_with(tmp_path: pathlib.Path) -> tuple[Deployment, str, str]:
@@ -320,13 +341,30 @@ async def parked_with(tmp_path: pathlib.Path) -> tuple[Deployment, str, str]:
 
 async def test_an_approval_resumes_the_same_incident(tmp_path: pathlib.Path) -> None:
     """The whole point of a durable pause: the decision continues the run it belongs to
-    rather than starting another one."""
+    rather than starting another one.
+
+    And it continues on a transcript a server will accept. The paused turn carried a
+    read beside the write; an OpenAI-compatible server rejects a request where any
+    tool_call_id lacks a reply, so a continuation that answers only the decided call
+    dies at the resume rather than at anything the operator did.
+    """
     deploy, session_id, request_id = await parked_with(tmp_path)
     deploy.storage.approvals.decide(
         request_id, status="approved", decided_by="an operator", reason="looks right"
     )
+    sent = len(deploy.completion.requests)
 
     status = await resume_after_decision(request_id, deploy)
+
+    resumed = deploy.completion.requests[sent]
+    issued = [
+        call["id"]
+        for message in resumed.messages
+        if message.get("role") == "assistant"
+        for call in (message.get("tool_calls") or [])
+    ]
+    answered = {m.get("tool_call_id") for m in resumed.messages if m.get("role") == "tool"}
+    assert issued and not [call_id for call_id in issued if call_id not in answered]
 
     assert status == "success"
     stored = deploy.storage.sessions.get_session(session_id)

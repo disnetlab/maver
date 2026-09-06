@@ -62,6 +62,7 @@ from kira.orchestration.resume import (
 from kira.orchestration.routing import RoutingPolicy, pending_handback
 from kira.orchestration.state import initial_state
 from kira.roles.base import RoleContext, RoleSpec, StateDelta, stage_role
+from kira.roles.policy import close_dangling_tool_calls
 from kira.roles.registry import get_role, registered_roles
 from kira.secondpass.audit import JournalEmitter
 from kira.secondpass.runner import SecondPass
@@ -757,15 +758,22 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
         for event in resume_events(checkpoint, record, result_chars=len(content)):
             journal.record(event)
 
-        transcript = [
-            *checkpoint.messages,
-            {
-                "role": "tool",
-                "tool_call_id": checkpoint.tool_call_id,
-                "name": checkpoint.tool_name,
-                "content": content,
-            },
-        ]
+        # Everything but the decided call, which the replay above answers. A turn that
+        # paused part-way through its calls leaves the ones it never reached issued and
+        # unanswered, and a server rejects a request carrying a tool_call_id with no
+        # reply, so the continuation would die on the transcript rather than on
+        # anything the operator did.
+        transcript = close_dangling_tool_calls(
+            [
+                *checkpoint.messages,
+                {
+                    "role": "tool",
+                    "tool_call_id": checkpoint.tool_call_id,
+                    "name": checkpoint.tool_name,
+                    "content": content,
+                },
+            ]
+        )
         deps = IncidentDeps(
             policy=RoutingPolicy.from_settings(deployment.settings),
             runs=_RunRecorder(deployment.storage),

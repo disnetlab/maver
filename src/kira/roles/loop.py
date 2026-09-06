@@ -552,25 +552,32 @@ async def run_until_submit(
             return result
 
         async def execute_all(calls: Sequence[ToolCall]) -> list[ToolResult]:
-            if serial_tool_calls:
-                return [await execute(c) for c in calls]
-            settled = await asyncio.gather(*(execute(c) for c in calls), return_exceptions=True)
             pending: ApprovalPending | None = None
             results: list[ToolResult] = []
-            for outcome in settled:
-                if isinstance(outcome, ToolResult):
-                    results.append(outcome)
-                elif isinstance(outcome, ApprovalPending):
-                    pending = pending or outcome
-                else:
-                    raise outcome
+            if serial_tool_calls:
+                for call_ in calls:
+                    try:
+                        results.append(await execute(call_))
+                    except ApprovalPending as paused:
+                        pending = paused
+                        break
+            else:
+                settled = await asyncio.gather(*(execute(c) for c in calls), return_exceptions=True)
+                for outcome in settled:
+                    if isinstance(outcome, ToolResult):
+                        results.append(outcome)
+                    elif isinstance(outcome, ApprovalPending):
+                        pending = pending or outcome
+                    else:
+                        raise outcome
             if pending is None:
                 return results
-            # A sibling of the paused call has already run to completion — gather does
-            # not unwind the others — so whatever it wrote is already written. Letting
-            # the pause propagate on its own left that call unanswered in the transcript
-            # the resume replays from, which is both a malformed request and an
-            # invitation for the role to reissue a write the cluster has taken.
+            # A sibling of the paused call has already run to completion — neither
+            # dispatch path unwinds what it already did — so whatever it wrote is
+            # already written. Letting the pause propagate on its own left that call
+            # unanswered in the transcript the resume replays from, which is both a
+            # malformed request and an invitation for the role to reissue a write the
+            # cluster has taken.
             state.transcript.extend(serialise_tool_results(results))
             pending.messages = list(state.transcript)
             raise pending
