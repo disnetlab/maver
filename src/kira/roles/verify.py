@@ -85,11 +85,9 @@ def _initial_message(ctx: RoleContext, gate: HealthGate) -> str:
     body = render(
         read_runtime("verify", "context_blind.txt"),
         {
-            # The ACE layer is gone, and the benchmark connectivity contract belongs to
-            # an adapter rather than to the core. Empty is what the prototype rendered
-            # for both outside the environment that supplied them.
+            # The ACE layer is gone. Empty is what the prototype rendered for it
+            # outside the environment that supplied it.
             "PROCEDURAL_CONTEXT": "",
-            "AIOPSLAB_VERIFY_CONNECTIVITY_CONTRACT": "",
             "ALERT_JSON": alert_json(ctx.state.get("alert") or {}),
         },
     )

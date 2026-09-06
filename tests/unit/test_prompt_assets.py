@@ -63,6 +63,10 @@ DELIBERATELY_DIVERGED = {
         "prescribed a playbook layer this system does not have: the four playbook_* "
         "tools are not registered and the domain/human triggers are not shipped"
     ),
+    Path("runtime/verify/context_blind.txt"): (
+        "dropped {{AIOPSLAB_VERIFY_CONNECTIVITY_CONTRACT}}, a benchmark-named slot no "
+        "adapter can fill; it rendered empty, so the composed message is unchanged"
+    ),
 }
 
 

@@ -16,6 +16,7 @@ from kira.audit.journal import Journal, ListSink
 from kira.contracts.artifacts import ExecutionResult, Plan, RootCause
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.middleware.base import MiddlewareStack
+from kira.prompts.loader import markers, read_runtime
 from kira.roles import verify
 from kira.roles.base import RoleContext
 from kira.roles.health_gate import HealthGate
@@ -179,3 +180,16 @@ def test_a_gate_that_could_not_look_does_not_block_recovery() -> None:
         verify._build_submit_guard(HealthGate(checked=False, error="timed out"))(RECOVERED, 1, [])
         is None
     )
+
+
+def test_the_blind_context_is_filled_from_the_alert_and_nothing_environment_specific() -> None:
+    """The template carried ``{{AIOPSLAB_VERIFY_CONNECTIVITY_CONTRACT}}``, a slot named
+    for a benchmark that ships nowhere in this repository and that no adapter could have
+    filled: the role hard-coded it empty. It therefore rendered nothing, and the opening
+    turn above still matches the prototype fixture byte for byte with it gone. What is
+    pinned here is that it may not come back: templating is strict in both directions, so
+    the marker set is the whole of the contract between the template and the role."""
+    assert markers(read_runtime("verify", "context_blind.txt")) == {
+        "PROCEDURAL_CONTEXT",
+        "ALERT_JSON",
+    }
