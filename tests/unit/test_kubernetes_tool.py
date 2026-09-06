@@ -6,6 +6,7 @@ from kira.tools.kubernetes import (
     _append_delete_wait_false,
     _bound_blocking_wait,
     _reject,
+    _selectors,
     classify,
     kubectl_authority,
     tokenize,
@@ -204,3 +205,44 @@ def test_a_call_with_no_readable_command_is_a_write(arguments: dict[str, object]
     cannot read is not evidence that nothing will be changed, and classifying it as a
     read sends it past the gate with the audit record saying a write was a read."""
     assert kubectl_authority(arguments) == "write"
+
+
+# --- the facets a policy rule matches on -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("cmd", "resource"),
+    [
+        # A kind whose singular ends in `s`, in both spellings, and its short name.
+        ("kubectl delete ingress web -n shop", "ingress"),
+        ("kubectl delete ingresses web -n shop", "ingress"),
+        ("kubectl delete ing web -n shop", "ingress"),
+        ("kubectl delete storageclass fast", "storageclass"),
+        # A verb-local value flag written before the resource.
+        ("kubectl patch -n shop --type merge -p {} secret db-creds", "secret"),
+        ("kubectl delete -o name secret db-creds -n shop", "secret"),
+        # The two other spellings of the same target.
+        ("kubectl delete secret/db-creds -n shop", "secret"),
+        ("kubectl delete -- secret db-creds -n shop", "secret"),
+        # Nothing identifiable, which a catch-all rule can still name.
+        ("kubectl delete -f manifest.yaml", "?"),
+    ],
+)
+def test_a_resource_facet_names_the_target_not_a_flags_value(cmd: str, resource: str) -> None:
+    """A rule is written against a kind, so every spelling of it has to reach one facet.
+
+    Both halves failed open. The resource was read off the token after the verb, so
+    `--type merge -p {}` put `merge` there; and `rstrip("s")` stripped every trailing
+    `s`, so `ingress` became `ingre` and its plural became a third facet again. Each of
+    these is a command kubectl accepts and runs.
+    """
+    assert f"resource:{resource}" in _selectors({"cmd": cmd})
+
+
+def test_an_in_container_command_still_names_the_pod_it_runs_in() -> None:
+    """`--` separates the container's command once the target has been named."""
+    assert _selectors({"cmd": "kubectl exec -it web-0 -n shop -- sh"}) == (
+        "verb:exec",
+        "namespace:shop",
+        "resource:web-0",
+    )

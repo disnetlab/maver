@@ -238,6 +238,33 @@ async def test_a_rule_can_deny_a_resource_class_inside_an_auto_deployment() -> N
     assert result.content == "denied by HITL gate: denied by rule never-touch-secrets"
 
 
+async def test_a_resource_rule_holds_however_the_command_was_written() -> None:
+    """The worked example, defeated by ordinary flag order and by a plural.
+
+    Every command here is one kubectl accepts and runs against the same secret or the
+    same ingress. The selectors were read off the token after the verb and folded with
+    `rstrip("s")`, so the deployment held one spelling and dispatched the rest — with
+    the audit event recording `rule=None`, so nothing said the rule was meant to apply.
+    """
+    settings = AuthoritySettings(
+        mode="auto",
+        rules=(
+            AuthorityRule(name="never-touch-secrets", selectors=("resource:secret",), mode="deny"),
+            AuthorityRule(name="hold-ingress", selectors=("resource:ingress",), mode="deny"),
+        ),
+    )
+    spellings = [
+        ("kubectl patch -n shop --type merge -p {} secret db-creds", "never-touch-secrets"),
+        ("kubectl delete -o name secret db-creds -n shop", "never-touch-secrets"),
+        ("kubectl delete -- secret db-creds -n shop", "never-touch-secrets"),
+        ("kubectl delete ingress web -n shop", "hold-ingress"),
+        ("kubectl delete ingresses web -n shop", "hold-ingress"),
+    ]
+    for cmd, rule in spellings:
+        result = await gate(settings, ListSink()).wrap_tool_call(call(cmd), handler)
+        assert result.content == f"denied by HITL gate: denied by rule {rule}", cmd
+
+
 async def test_a_rule_can_hold_a_resource_class_for_a_person_inside_an_auto_deployment() -> None:
     """The mode a rule names has to reach a decider that can honour it.
 

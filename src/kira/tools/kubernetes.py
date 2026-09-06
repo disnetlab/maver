@@ -67,6 +67,14 @@ _GLOBAL_BOOL_FLAGS = {
     "--skip-log-headers", "--warnings-as-errors",
 }  # fmt: skip
 
+_VERB_BOOL_FLAGS = {
+    "-R", "-i", "-it", "-t", "-ti", "-w", "--all", "--force",
+    "--ignore-not-found", "--now", "--overwrite", "--prune", "--recursive",
+    "--server-side", "--wait", "--watch",
+}  # fmt: skip
+
+_BOOL_FLAGS = _GLOBAL_BOOL_FLAGS | _VERB_BOOL_FLAGS
+
 _READ_ROLLOUT_SUBCOMMANDS = {"history", "status"}
 
 # Only *bare* operator tokens count. shlex keeps an operator that appears inside quotes
@@ -447,14 +455,52 @@ _ACTION_BY_AUTHORITY = {
 }
 
 _RESOURCE_ALIASES = {
-    "deploy": "deployment",
-    "sts": "statefulset",
-    "ds": "daemonset",
-    "svc": "service",
-    "po": "pod",
+    "cj": "cronjob",
     "cm": "configmap",
+    "deploy": "deployment",
+    "ds": "daemonset",
+    "ep": "endpoints",
+    "ev": "event",
+    "hpa": "horizontalpodautoscaler",
+    "ing": "ingress",
+    "netpol": "networkpolicy",
+    "no": "node",
     "ns": "namespace",
+    "pc": "priorityclass",
+    "pdb": "poddisruptionbudget",
+    "po": "pod",
+    "pv": "persistentvolume",
+    "pvc": "persistentvolumeclaim",
+    "rs": "replicaset",
+    "sa": "serviceaccount",
+    "sc": "storageclass",
+    "sts": "statefulset",
+    "svc": "service",
 }
+"""kubectl's short names, mapped to the kind a rule is written against."""
+
+_KINDS = frozenset({
+    "clusterrole", "clusterrolebinding", "configmap", "cronjob", "daemonset",
+    "deployment", "endpoints", "event", "horizontalpodautoscaler", "ingress",
+    "ingressclass", "job", "namespace", "networkpolicy", "node",
+    "persistentvolume", "persistentvolumeclaim", "pod", "poddisruptionbudget",
+    "priorityclass", "replicaset", "role", "rolebinding", "secret", "service",
+    "serviceaccount", "statefulset", "storageclass",
+})  # fmt: skip
+"""The kinds whose plural may be folded to a singular.
+
+Only these, because ``str.rstrip("s")`` folded every word: ``ingress`` became ``ingre``
+and ``storageclass`` became ``storagecla``, so a rule naming the kind matched nothing,
+while ``ingresses`` became a third facet again for the same resource. A kind nobody here
+lists keeps the spelling the model used, which a rule can still name.
+"""
+
+_UNKNOWN_RESOURCE = "resource:?"
+"""Emitted when a call acts on something the parser cannot name.
+
+A missing facet reads to a rule as a call with nothing to match, so a deployment that
+wants to hold everything it cannot identify has no way to say so. This gives it one.
+"""
 
 
 def _selectors(arguments: Mapping[str, Any]) -> tuple[str, ...]:
@@ -479,32 +525,60 @@ def _selectors(arguments: Mapping[str, Any]) -> tuple[str, ...]:
         found.append(f"namespace:{namespace}")
     if idx is not None:
         rest = _positional(argv[idx + 1 :])
-        if rest:
+        if not rest:
+            found.append(_UNKNOWN_RESOURCE)
+        else:
             head = rest[0].split("/", 1)
-            resource = _RESOURCE_ALIASES.get(head[0].rstrip("s"), head[0].rstrip("s"))
-            found.append(f"resource:{resource}")
+            found.append(f"resource:{_kind(head[0])}")
             name = head[1] if len(head) > 1 else (rest[1] if len(rest) > 1 else "")
             if name:
                 found.append(f"name:{name}")
     return tuple(found)
 
 
+def _kind(word: str) -> str:
+    """Fold a resource word to the kind a rule is written against."""
+    lowered = word.lower()
+    candidates = [lowered]
+    if lowered.endswith("es"):
+        candidates.append(lowered[:-2])
+    if lowered.endswith("s"):
+        candidates.append(lowered[:-1])
+    for candidate in candidates:
+        if candidate in _KINDS:
+            return candidate
+        alias = _RESOURCE_ALIASES.get(candidate)
+        if alias is not None:
+            return alias
+    return lowered
+
+
 def _positional(argv: Sequence[str]) -> list[str]:
     """Drop flags and the values they consume.
 
     Without this a namespace given as ``-n shop`` reads as the resource being acted on,
-    so a rule written against a resource class matches the wrong calls.
+    so a rule written against a resource class matches the wrong calls. Any flag not
+    known to be boolean is assumed to take a value, because kubectl's value flags
+    outnumber its boolean ones and ordinary commands put them before the resource:
+    ``patch --type merge -p {} secret db-creds`` handed ``merge`` to a rule as the
+    resource, and a rule naming secrets did not fire.
     """
     found: list[str] = []
     skip = False
+    literal = False
     for arg in argv:
-        if arg == "--":
-            break  # everything after this is the container's command, not a target
+        if arg == "--" and not literal:
+            # Before the target is named it only ends flag parsing; after it, what
+            # follows is the container's own command rather than something acted on.
+            if found:
+                break
+            literal = True
+            continue
         if skip:
             skip = False
             continue
-        if arg.startswith("-"):
-            skip = "=" not in arg and arg in _GLOBAL_FLAGS_WITH_VALUE
+        if not literal and arg.startswith("-") and arg != "-":
+            skip = "=" not in arg and arg not in _BOOL_FLAGS
             continue
         found.append(arg)
     return found
