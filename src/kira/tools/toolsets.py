@@ -31,8 +31,14 @@ from kira.tools.registry import (
     load_descriptions,
     registered,
 )
+from kira.tools.sandbox import fs_sandbox_available
 
 __all__ = ["ResolvedToolset", "build_toolset"]
+
+
+def _sandboxed() -> bool:
+    """Read through the module so a test can answer for a kernel it is not running on."""
+    return fs_sandbox_available()
 
 
 @dataclass(frozen=True)
@@ -106,6 +112,14 @@ def build_toolset(
                 continue
             if name in RETRIEVAL_TOOLS and ctx.memory is None:
                 dropped[name] = "no experience store in this configuration"
+                continue
+            if spec.safety == "local_exec" and ctx.settings.fs_sandbox and not _sandboxed():
+                # The one place this rule was not applied. The sandbox is fail-closed on
+                # Linux, so on a kernel with no usable Landlock — the documented amd64
+                # image under emulation is one — these two returned `error:` on every
+                # call for a whole incident, which in the results is indistinguishable
+                # from a model that could not use them.
+                dropped[name] = "no filesystem sandbox on this kernel"
                 continue
             if name in HOST_RECOVERY_TOOLS and not ctx.settings.host_recovery_nodes:
                 # The same rule as every drop above, applied to the one tool that was

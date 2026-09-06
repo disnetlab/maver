@@ -55,6 +55,7 @@ from kira.settings.profiles import load_profile
 from kira.settings.root import Settings, load_settings
 from kira.tools.allowlists import ROLE_TOOLSETS
 from kira.tools.registry import load_descriptions, load_entry_point_tools, validate_registry
+from kira.tools.sandbox import fs_sandbox_available
 from kira.tools.transport.base import ToolTransport
 from kira.tools.transport.direct import direct_transport
 
@@ -129,6 +130,10 @@ def build_deployment(settings: Settings) -> Deployment:
         ValueError: When the configured storage backend is not installed.
     """
     validate_deployment(settings)
+    # Asked here so that a host with no usable filesystem sandbox says so in the pod's
+    # log at startup, rather than at the first tool call of the first incident.
+    if settings.tools.fs_sandbox:
+        fs_sandbox_available()
     profile = load_profile(settings.model.profile, settings.model.profile_dir)
     storage = build_storage(settings)
 

@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import logging
 import os
 import platform
 import sys
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 SANDBOX_ERROR_PREFIX = "filesystem sandbox unavailable:"
 
@@ -187,6 +190,58 @@ def enter_session_sandbox(session_dir: str | Path) -> bool:
         _syscall(libc, _LANDLOCK_RESTRICT_SELF, ruleset_fd, 0)
     finally:
         os.close(ruleset_fd)
+    return True
+
+
+_available: bool | None = None
+
+
+def fs_sandbox_available() -> bool:
+    """Whether a sandboxed tool subprocess can actually start on this host.
+
+    Asked once and remembered, so that the two tools it gates are dropped before a run
+    rather than failing on every call of it. :func:`enter_session_sandbox` is fail-closed
+    on Linux by design, and the wrapper turns that refusal into a model-facing tool error
+    — which reads as a fault to work around, so the model tries again, differently, and
+    again. The documented amd64 image runs emulated on an Apple Silicon host and that
+    kernel does not implement the Landlock syscalls; neither does one built without the
+    LSM.
+
+    True where the sandbox does not apply rather than fails: on a non-Linux development
+    host :func:`enter_session_sandbox` returns False and the command runs unsandboxed,
+    which is that platform's documented behaviour and not a broken tool.
+
+    Returns:
+        True when a tool subprocess can start.
+    """
+    global _available
+    if _available is None:
+        _available = _probe()
+        if not _available:
+            _log.warning(
+                "this kernel provides no usable Landlock, so bash_exec and code_exec "
+                "are withheld from every role. Set KIRA_TOOLS__FS_SANDBOX=false to run "
+                "them unsandboxed instead."
+            )
+    return _available
+
+
+def _probe() -> bool:
+    """Create a Landlock ruleset and close it again, without restricting this process."""
+    if platform.system() != "Linux":
+        return True
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        abi = _syscall(libc, _LANDLOCK_CREATE_RULESET, 0, 0, _LANDLOCK_CREATE_RULESET_VERSION)
+        attr = _RulesetAttr(handled_access_fs=_handled_access(abi))
+        ruleset_fd = _syscall(
+            libc, _LANDLOCK_CREATE_RULESET, ctypes.byref(attr), ctypes.sizeof(attr), 0
+        )
+    except Exception:
+        # Conservative on an answer we could not get: a tool withheld with a reason in
+        # the run's record is recoverable, one that errors on every call is not.
+        return False
+    os.close(ruleset_fd)
     return True
 
 

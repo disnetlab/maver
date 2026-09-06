@@ -7,6 +7,7 @@ import pytest
 
 from kira.audit.journal import Journal
 from kira.settings.groups import ToolSettings
+from kira.tools import sandbox, toolsets
 from kira.tools.allowlists import ROLE_TOOLSETS
 from kira.tools.context import ToolContext
 from kira.tools.toolsets import build_toolset
@@ -207,3 +208,45 @@ def test_node_recovery_is_withheld_when_there_is_no_node_to_reach(tmp_path: Path
     offered = build_toolset("execution", reachable)
     assert "ssh_exec" in {tool.name for tool in offered.definitions}
     assert "ssh_exec" not in offered.dropped
+
+
+def test_the_sandbox_tools_go_when_the_kernel_has_no_sandbox_to_put_them_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one place the drop-before-the-run rule was not applied.
+
+    The sandbox is fail-closed on Linux, so on a kernel with no usable Landlock — the
+    documented amd64 image under emulation is one, and so is any distribution built
+    without the LSM — bash_exec and code_exec returned `error:` on every call for a whole
+    incident. In the results that is indistinguishable from a model that could not use
+    them, and the escape hatch appeared in no message the operator saw.
+    """
+    monkeypatch.setattr(toolsets, "_sandboxed", lambda: False)
+    withheld = build_toolset("rca", context(tmp_path))
+
+    assert {"bash_exec", "code_exec"}.isdisjoint({tool.name for tool in withheld.definitions})
+    assert withheld.dropped["bash_exec"] == "no filesystem sandbox on this kernel"
+    assert withheld.dropped["code_exec"] == "no filesystem sandbox on this kernel"
+
+    # Unsandboxed by configuration is a deployment's choice, not a broken kernel.
+    unsandboxed = replace(context(tmp_path), settings=ToolSettings(fs_sandbox=False))
+    assert "bash_exec" in {tool.name for tool in build_toolset("rca", unsandboxed).definitions}
+
+
+def test_the_sandbox_launcher_refuses_with_the_code_and_prefix_the_tool_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """126 and the prefix are the contract between the launcher and the tool that reads
+    it: `_run` turns exactly that pair into a tool error naming the sandbox rather than
+    into the command's own failed exit code, which is what tells the two apart."""
+
+    def no_landlock(session_dir: object) -> bool:
+        raise RuntimeError("Linux kernel does not provide usable Landlock")
+
+    monkeypatch.setattr(sandbox, "enter_session_sandbox", no_landlock)
+
+    assert sandbox._main(["sandbox.py", str(tmp_path), "--", "/bin/sh", "-c", "true"]) == 126
+    assert capsys.readouterr().out.startswith(sandbox.SANDBOX_ERROR_PREFIX)
+
+    assert sandbox._main(["sandbox.py", str(tmp_path)]) == 126
+    assert capsys.readouterr().out.startswith(sandbox.SANDBOX_ERROR_PREFIX)
