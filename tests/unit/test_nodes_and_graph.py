@@ -7,6 +7,7 @@ from kira.audit.journal import Journal, ListSink
 from kira.contracts.artifacts import RootCause, VerifyResult
 from kira.contracts.events import StageEvent
 from kira.contracts.state import IncidentState
+from kira.orchestration.engine import STEP_LIMIT
 from kira.orchestration.nodes import IncidentDeps, make_node
 from kira.orchestration.routing import RoutingPolicy
 from kira.roles.base import RoleOutcome, RoleSpec
@@ -150,14 +151,17 @@ def test_the_permitted_surface_is_four_operations() -> None:
     assert sorted(name for name in FORBIDDEN if name in used) == []
 
 
-def test_the_longest_legal_path_fits_the_executor_default() -> None:
-    """Fourteen steps under a budget of two with one re-check per cycle, against a
-    default of twenty-five. Asserted here rather than trusted, because the default is
-    the framework's to change."""
+def test_the_longest_legal_path_fits_the_step_limit() -> None:
+    """Fourteen steps under a budget of two with one re-check per cycle.
+
+    Read off the bound the engines apply rather than restated as a literal, because the
+    earlier literal was a copy of a framework default that had moved to 10007 — so the
+    assertion could not notice the change it exists to notice.
+    """
     cycle = ["planning", "execution", "verify", "verify"]
     longest = ["rca", *cycle, *cycle, "rca", *cycle]
     assert len(longest) == 14
-    assert len(longest) < 25
+    assert len(longest) < STEP_LIMIT
 
 
 # --- what the wrapper does so roles do not ----------------------------------------

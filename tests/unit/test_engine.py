@@ -7,6 +7,7 @@ import pytest
 from kira.contracts.artifacts import ExecutionResult, Plan, PlanStep, RootCause, VerifyResult
 from kira.contracts.state import IncidentState
 from kira.orchestration.engine import (
+    STEP_LIMIT,
     Engine,
     LangGraphEngine,
     SequentialEngine,
@@ -139,12 +140,20 @@ async def test_the_unstreamed_path_returns_the_same_state() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_cycling_configuration_is_stopped() -> None:
-    """A verification that can always look again would never end. The bound is matched
-    to the executor's own default so a routing bug is caught in either engine."""
+@pytest.mark.parametrize("engine", ["sequential", "langgraph"])
+async def test_a_cycling_configuration_is_stopped(engine: str) -> None:
+    """A verification that can always look again would never end.
+
+    Both engines, because the bound is ours rather than either executor's. The graph
+    engine passed none, so it inherited the framework's 10007 and a routing bug ran ten
+    thousand role runs — each a model call, and in the remediating role a cluster
+    mutation — where the sequential engine stopped at twenty-five.
+    """
     nodes = pipeline_nodes()
+    runs: list[str] = []
 
     async def never_sure(state: IncidentState) -> dict[str, Any]:
+        runs.append("verify")
         return {
             "verify_result": VerifyResult(
                 recovered=False,
@@ -157,8 +166,15 @@ async def test_a_cycling_configuration_is_stopped() -> None:
 
     nodes["verify"] = never_sure
     generous = RoutingPolicy(verify_enabled=True, remediation_retries=2, inconclusive_retries=99)
+    running: Engine = (
+        SequentialEngine(nodes, generous)
+        if engine == "sequential"
+        else LangGraphEngine(build_graph(nodes, generous))
+    )
+
     with pytest.raises(StepLimitExceeded):
-        await SequentialEngine(nodes, generous).run(seeded())
+        await running.run(seeded())
+    assert len(runs) < STEP_LIMIT
 
 
 # --- mode dispatch -----------------------------------------------------------------

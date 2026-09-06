@@ -41,11 +41,19 @@ StageHook = Callable[[str, IncidentState], Awaitable[None]]
 STEP_LIMIT = 25
 """How many role runs one incident may take before it is treated as a runaway.
 
-Matched to the graph executor's own default so that a configuration able to cycle
-forever is stopped in both engines rather than only in one. The longest legitimate path
-through the edge table is well inside it; a run that reaches this bound has a routing
-bug, not an unusually hard incident.
+Ours, and applied to both engines rather than inherited from either. The graph
+executor's own default is 10007, which is not a bound on anything a routing bug can do:
+each of those runs is a model call and, in the remediating role, a cluster mutation. So
+the sequential engine counts to this and the graph engine is handed it as its recursion
+limit, and a configuration able to cycle forever is stopped at the same count in both.
+
+The longest legitimate path through the edge table is well inside it; a run that reaches
+this bound has a routing bug, not an unusually hard incident.
 """
+
+_RUN_CONFIG = {"recursion_limit": STEP_LIMIT}
+"""What the graph engine hands its invocation. An argument to the call, not a
+checkpointer or an interrupt: see the containment rule in ``graph.py``."""
 
 _ROUTERS: Mapping[str, Callable[[IncidentState, RoutingPolicy], Route]] = {
     "rca": after_rca,
@@ -108,22 +116,31 @@ class LangGraphEngine:
                 at an arbitrary node is what a checkpointer is for, and keeping
                 persistence and resume in our own code is the reason there is not one.
                 A continuation runs on the sequential engine, over the same predicates.
+            StepLimitExceeded: The incident took more role runs than the limit allows.
         """
         if start != ENTRY:
             raise NotImplementedError(
                 "the graph executor cannot start part-way; resume on the sequential engine"
             )
-        if on_stage is None:
-            return cast(IncidentState, await self.graph.ainvoke(state))
+        # The executor's overflow subclasses the builtin RecursionError, which is how it
+        # is translated here without importing the framework this file is kept free of.
+        try:
+            if on_stage is None:
+                return cast(IncidentState, await self.graph.ainvoke(state, config=_RUN_CONFIG))
 
-        # Our nodes return a delta, so each update's value is merged onto the accumulated
-        # IncidentState; the hook is notified after each node completes.
-        accumulated: dict[str, Any] = dict(state)
-        async for update in self.graph.astream(state, stream_mode="updates"):
-            for node_name, node_delta in update.items():
-                accumulated = {**accumulated, **node_delta}
-                await on_stage(node_name, cast(IncidentState, accumulated))
-        return cast(IncidentState, accumulated)
+            # Our nodes return a delta, so each update's value is merged onto the
+            # accumulated IncidentState; the hook is notified after each node completes.
+            accumulated: dict[str, Any] = dict(state)
+            async for update in self.graph.astream(
+                state, config=_RUN_CONFIG, stream_mode="updates"
+            ):
+                for node_name, node_delta in update.items():
+                    accumulated = {**accumulated, **node_delta}
+                    await on_stage(node_name, cast(IncidentState, accumulated))
+            return cast(IncidentState, accumulated)
+        except RecursionError as exc:
+            _log.error("incident %s exceeded %d role runs", state.get("session_id", ""), STEP_LIMIT)
+            raise StepLimitExceeded(f"incident exceeded {STEP_LIMIT} role runs") from exc
 
 
 @dataclass(frozen=True, slots=True)
