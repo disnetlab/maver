@@ -16,12 +16,13 @@ Each test gets a schema of its own, dropped afterwards, so the suite can run rep
 against one server without inheriting the last run's rows.
 """
 
+import logging
 import os
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
+from contextlib import closing, contextmanager
 from typing import Any
 
 import pytest
@@ -35,6 +36,7 @@ from memory_contract import (
 )
 
 from kira.contracts.lifecycle import LifecycleState
+from kira.memory.backends.schema import STORE_SCHEMA_VERSION
 from kira.memory.backends.sqlite import SqliteStore
 from kira.memory.ports import TextSearch
 
@@ -55,12 +57,21 @@ pytestmark = [
 ]
 
 
+@contextmanager
+def _temporary_schema() -> Iterator[str]:
+    """A schema of this test's own, dropped whatever happens to it."""
+    name = f"kira_test_{uuid.uuid4().hex}"
+    try:
+        yield name
+    finally:
+        with psycopg.connect(DSN, autocommit=True) as conn:
+            conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(name)))
+
+
 @pytest.fixture
 def schema() -> Iterator[str]:
-    name = f"kira_test_{uuid.uuid4().hex}"
-    yield name
-    with psycopg.connect(DSN, autocommit=True) as conn:
-        conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(name)))
+    with _temporary_schema() as name:
+        yield name
 
 
 @pytest.fixture
@@ -78,6 +89,18 @@ class TestPostgresBackend(MemoryStoreContract):
     @pytest.fixture
     def records(self, postgres_store: PostgresStore) -> TextSearch:
         return postgres_store.records
+
+    @pytest.fixture
+    def reopen(self, schema: str) -> Callable[[], PostgresStore]:
+        return lambda: PostgresStore(DSN, schema=schema)
+
+    @pytest.fixture
+    def stamp_version(self, schema: str) -> Callable[[int], None]:
+        def stamp(version: int) -> None:
+            with closing(_raw_connection(schema)) as conn:
+                conn.execute("UPDATE schema_version SET version = %s", (version,))
+
+        return stamp
 
 
 def test_the_byte_the_store_strips_is_one_this_database_refuses(
@@ -256,6 +279,7 @@ def test_a_database_written_before_the_normaliser_is_reindexed_on_open(schema: s
         )
 
     with closing(PostgresStore(DSN, schema=schema)) as store:
+        assert store.schema_version == STORE_SCHEMA_VERSION
         records = store.records
         assert [m.session_id for m in records.candidates("pod crash")] == ["old"]
         assert [m.session_id for m in records.candidates("raising limits", scope="lesson")] == [
@@ -275,6 +299,59 @@ def test_a_database_written_before_the_normaliser_is_reindexed_on_open(schema: s
         assert store.records.count() == 2
         assert [m.session_id for m in store.records.candidates("pod crash")] == ["old"]
         assert [m.session_id for m in store.records.candidates("resolve failure")] == ["new"]
+
+    assert _stamped_versions(schema) == [STORE_SCHEMA_VERSION], "one row, and it is current"
+    with _temporary_schema() as fresh, closing(PostgresStore(DSN, schema=fresh)):
+        assert _record_layout(schema) == _record_layout(fresh), (
+            "a migrated table is the current layout, not a shape of its own"
+        )
+
+
+def test_an_unstamped_database_in_the_current_shape_is_stamped_and_left_alone(
+    schema: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Not every database without a version is an old one.
+
+    One written by the build that migrated the vectors but did not yet stamp anything is
+    already current, and reading its shape has to say so. Rebuilding it would be correct
+    and would still be a table rewrite taken for nothing.
+    """
+    with closing(PostgresStore(DSN, schema=schema)) as store:
+        store.records.upsert_summary(a_record("s1", evidence="the checkout pods were crashing"))
+    with closing(_raw_connection(schema)) as conn:
+        conn.execute("DROP TABLE schema_version")
+
+    with (
+        caplog.at_level(logging.INFO, logger="kira.memory.backends.schema"),
+        closing(PostgresStore(DSN, schema=schema)) as reopened,
+    ):
+        assert reopened.schema_version == STORE_SCHEMA_VERSION
+        assert [m.session_id for m in reopened.records.candidates("pod crash")] == ["s1"]
+    assert not [record for record in caplog.records if "migrating" in record.getMessage()]
+    assert _stamped_versions(schema) == [STORE_SCHEMA_VERSION]
+
+
+def _stamped_versions(schema: str) -> list[int]:
+    with closing(_raw_connection(schema)) as conn:
+        return [row[0] for row in conn.execute("SELECT version FROM schema_version").fetchall()]
+
+
+def _record_layout(schema: str) -> list[tuple[str, str]]:
+    """Every live column of the record table, with the expression a generated one uses.
+
+    Read off the catalogue rather than compared as DDL, because a column dropped and
+    added back — which is the only way a generated column's expression can be changed —
+    leaves a table that is the same shape and a different DDL script.
+    """
+    with closing(_raw_connection(schema)) as conn:
+        rows = conn.execute(
+            "SELECT a.attname AS name, coalesce(pg_get_expr(d.adbin, d.adrelid), '') AS expression "
+            "FROM pg_attribute a LEFT JOIN pg_attrdef d "
+            "  ON d.adrelid = a.attrelid AND d.adnum = a.attnum "
+            "WHERE a.attrelid = to_regclass('records') AND a.attnum > 0 AND NOT a.attisdropped "
+            "ORDER BY a.attname"
+        ).fetchall()
+    return [(row[0], row[1]) for row in rows]
 
 
 # Forty records and fifteen queries in the shapes real incident text takes: hyphenated

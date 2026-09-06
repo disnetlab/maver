@@ -1,28 +1,41 @@
 """The contract every memory backend has to satisfy, whatever it stores its data in.
 
 A backend is done when it passes this unmodified. Subclass :class:`MemoryStoreContract`
-in a ``test_*.py`` module and supply the two fixtures:
+in a ``test_*.py`` module and supply four fixtures:
 
     class TestMyBackend(MemoryStoreContract):
         @pytest.fixture
         def store(self): ...       # SessionStore + ApprovalStore + RunStore
         @pytest.fixture
         def records(self, store): ...   # TextSearch, over the same database
+        @pytest.fixture
+        def reopen(self): ...      # opens one durable database, again each time
+        @pytest.fixture
+        def stamp_version(self): ...    # writes a layout version into that database
 
-Two objects because the operational ports and the corpus are separate things that a
+Two store objects because the operational ports and the corpus are separate things that a
 deployment can have one of without the other. They must share a database: several tests
 here read a session's live lifecycle state while holding the record written beside it.
+
+The last two are for the layout version alone. ``reopen`` has to survive being closed,
+which the ``store`` fixture need not — the embedded backend runs the rest of this suite
+against an in-memory database — and ``stamp_version`` writes what only a later build
+would write, which no port exposes.
 
 What is deliberately not asserted: the order of a candidate pool. The port says it
 carries no meaning, and a test that pinned one would make every backend agree on a
 ranking that only the retriever is allowed to have.
 """
 
+import logging
+from collections.abc import Callable
+from contextlib import closing
 from typing import Any, Protocol
 
 import pytest
 
 from kira.contracts.lifecycle import LifecycleState, RunStatus
+from kira.memory.backends.schema import STORE_SCHEMA_VERSION, StoreSchemaTooNew
 from kira.memory.lifecycle import IllegalTransition
 from kira.memory.ports import (
     AgentRunEventDraft,
@@ -118,6 +131,50 @@ class MemoryStoreContract:
         assert isinstance(store, ApprovalStore)
         assert isinstance(store, RunStore)
         assert isinstance(records, TextSearch)
+
+    # The store layout ------------------------------------------------------------
+
+    def test_a_new_database_is_at_the_current_layout_version(
+        self, reopen: Callable[[], Any]
+    ) -> None:
+        with closing(reopen()) as store:
+            assert store.schema_version == STORE_SCHEMA_VERSION
+
+    def test_reopening_a_store_migrates_nothing(
+        self, reopen: Callable[[], Any], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The version is read rather than the shape, so a store at it is left alone.
+
+        Watched through the log because that is what a migration costs: a store that
+        rebuilt its index on every open would answer every query correctly and take the
+        rebuild each time.
+        """
+        with closing(reopen()) as store:
+            session = store.create_session({"name": "PodCrashLooping"})
+
+        with (
+            caplog.at_level(logging.INFO, logger="kira.memory.backends.schema"),
+            closing(reopen()) as reopened,
+        ):
+            assert reopened.schema_version == STORE_SCHEMA_VERSION
+            assert reopened.get_session(session.session_id) is not None
+        assert not [record for record in caplog.records if "migrating" in record.getMessage()]
+
+    def test_a_store_written_by_a_later_build_is_refused(
+        self, reopen: Callable[[], Any], stamp_version: Callable[[int], None]
+    ) -> None:
+        """Fails at open, naming both versions, rather than writing past a layout it
+        cannot know the meaning of.
+        """
+        with closing(reopen()):
+            pass
+        stamp_version(STORE_SCHEMA_VERSION + 1)
+
+        with pytest.raises(StoreSchemaTooNew) as refused:
+            reopen()
+        message = str(refused.value)
+        assert str(STORE_SCHEMA_VERSION + 1) in message
+        assert str(STORE_SCHEMA_VERSION) in message
 
     # SessionStore ---------------------------------------------------------------
 
