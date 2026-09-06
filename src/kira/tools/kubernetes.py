@@ -402,7 +402,6 @@ def _stage_refusal(stage: str) -> str:
     name=_TOOL,
     safety="cluster_write",
     requires={"kubernetes"},
-    authority=kubectl_authority,
     parameters=_PARAMETERS,
 )
 async def exec_kubectl_cmd_safely(ctx: ToolContext, cmd: str, save_as: str | None = None) -> str:

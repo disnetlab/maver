@@ -117,7 +117,6 @@ ROLLBACK = ToolSpec(
     parameters={"type": "object", "properties": {}},
     safety="cluster_write",
     dispatch=_rollback,
-    authority=lambda arguments: "write",
     requires=frozenset({"kubernetes.rollback"}),
     descriptions={"episode_rollback": {"default": "Undo the last write. Takes no arguments."}},
 )

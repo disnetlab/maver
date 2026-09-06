@@ -117,12 +117,18 @@ def test_a_mistyped_capability_is_rejected() -> None:
         )
 
 
-def test_a_write_capable_tool_must_classify_its_own_calls() -> None:
-    """The approval gate decides per call, so a writer with no classifier cannot be gated."""
+def test_a_write_capable_tool_must_register_the_policy_the_gate_reads() -> None:
+    """The check has to test the registration the gate actually consults.
+
+    It tested a field on the spec that nothing read, so a write tool declared exactly as
+    the docstrings prescribed passed at import and was refused at incident time by every
+    stage — including the one its author had allowed — because the gate looks the tool
+    up in the policy registry and treats a miss as a write nobody may issue.
+    """
     spec = ToolSpec(
         name="apply", parameters={"type": "object"}, safety="cluster_write", dispatch=lambda: None
     )
-    with pytest.raises(ToolRegistryError, match="must classify its authority"):
+    with pytest.raises(ToolRegistryError, match="must register a policy"):
         validate_registry(
             descriptions={"apply": {"default": "apply a manifest"}},
             allowlists={"execution": ("apply",)},

@@ -18,14 +18,12 @@ prompts that name it, is post-parity work.
 
 import asyncio
 import re
-from collections.abc import Mapping
-from typing import Any
 
 from kira.tools.context import ToolContext, redact
 from kira.tools.errors import EXEC_OUTPUT_LIMIT, tool_error
 from kira.tools.execution import runs_kubectl
 from kira.tools.policy import always_writes
-from kira.tools.registry import Authority, tool
+from kira.tools.registry import tool
 
 __all__ = ["ssh_exec"]
 
@@ -35,25 +33,9 @@ _TIMEOUT_SECONDS = 45
 _MAX_COMMAND_CHARS = 4096
 
 
-def host_authority(arguments: Mapping[str, Any]) -> Authority:
-    """Classify a host command.
-
-    Always a write. Nothing running on a node is inspectable enough to call read, and
-    this tool exists to change host state.
-
-    Args:
-        arguments: The model's arguments.
-
-    Returns:
-        Always ``write``.
-    """
-    return "write"
-
-
 @tool(
     name="ssh_exec",
     safety="cluster_write",
-    authority=host_authority,
     parameters={
         "type": "object",
         "properties": {
@@ -127,6 +109,8 @@ async def ssh_exec(ctx: ToolContext, node: str, command: str) -> str:
     return ctx.workspace.save_tool_output(rendered, "host_recovery", EXEC_OUTPUT_LIMIT)
 
 
+# Every call is a write: nothing running on a node is inspectable enough to call a read,
+# and this tool exists to change host state.
 always_writes(
     "ssh_exec",
     stages=frozenset({"execution"}),

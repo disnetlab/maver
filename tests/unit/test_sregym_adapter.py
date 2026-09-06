@@ -523,6 +523,28 @@ def test_the_rollback_pair_is_offered_only_where_it_was_measured(tmp_path: pathl
     assert "rollback_command" not in [tool.name for tool in diagnosing]
 
 
+def test_the_rollback_carries_the_policy_the_approval_gate_reads() -> None:
+    """An adapter's tools never enter the core registry, so the import-time rule that
+    every write tool is classified cannot see them. The rollback is a cluster write —
+    one issued against the wrong state is as damaging as the change it reverses — and a
+    tool the gate cannot find is refused in every stage, this one's own included."""
+    from kira.adapters.sregym.tools import adapter_tools  # noqa: PLC0415
+    from kira.settings.groups import ToolSettings  # noqa: PLC0415
+    from kira.tools.policy import ActionClass, policy_for  # noqa: PLC0415
+
+    names = [tool.spec.name for tool in adapter_tools()]
+    assert names == ["rollback_command", "get_previous_rollbackable_cmd"]
+
+    rollback = policy_for("rollback_command")
+    assert rollback is not None
+    assert rollback.classify({}, ToolSettings()) is ActionClass.WRITE
+    assert "execution" in rollback.write_stages
+
+    listing = policy_for("get_previous_rollbackable_cmd")
+    assert listing is not None
+    assert listing.classify({}, ToolSettings()) is ActionClass.READ
+
+
 async def test_a_deployment_that_never_saw_the_harness_reads_its_defaults() -> None:
     """The conductor's own address is where the two names that used to fight over the
     bind port now land."""

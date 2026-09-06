@@ -20,13 +20,13 @@ from importlib.resources import files
 from typing import Any, Literal
 
 from kira.tools.context import ToolContext
+from kira.tools.policy import policy_for
 from kira.tools.schema import RATIONALE_ARG, strip_rationale, with_rationale
 from kira.tools.transport.base import CAPABILITIES
 
 __all__ = [
     "RETRIEVAL_PROVENANCE",
     "Authority",
-    "AuthorityFn",
     "BoundTool",
     "ToolOutput",
     "ToolRegistryError",
@@ -57,8 +57,6 @@ tool serves both ``get pods`` and ``delete deployment``. ``exec`` is its own cla
 than a kind of write: diagnostic roles use ``kubectl exec`` for read-only inspection, and
 folding it into ``write`` would change behaviour every published measurement rests on.
 """
-
-AuthorityFn = Callable[[Mapping[str, Any]], Authority]
 
 RETRIEVAL_PROVENANCE = "retrieval"
 """The key a retrieval tool's provenance travels under on ``ToolResult.metadata``.
@@ -110,8 +108,6 @@ class ToolSpec:
     safety: ToolSafety
     dispatch: Any = None
     """The implementation. None only for ``safety="submit"``."""
-    authority: AuthorityFn | None = None
-    """Required when ``safety="cluster_write"``."""
     requires: frozenset[str] = field(default_factory=frozenset)
     """Transport capabilities without which this tool is not offered at all.
 
@@ -130,7 +126,6 @@ def tool(
     name: str,
     safety: ToolSafety,
     parameters: Mapping[str, Any],
-    authority: AuthorityFn | None = None,
     requires: Iterable[str] = (),
     descriptions: Mapping[str, Any] | None = None,
 ) -> Callable[[Any], Any]:
@@ -143,7 +138,6 @@ def tool(
         name: The name the model calls.
         safety: What the tool can do.
         parameters: Its JSON Schema.
-        authority: Classifies one call. Required for ``cluster_write``.
         requires: Transport capabilities the tool needs.
         descriptions: Only for tools shipped outside this package.
 
@@ -162,7 +156,6 @@ def tool(
             parameters=parameters,
             safety=safety,
             dispatch=fn,
-            authority=authority,
             requires=frozenset(requires),
             descriptions=descriptions,
         )
@@ -364,8 +357,17 @@ def validate_registry(
             raise ToolRegistryError(
                 f"tool {name!r} requires unknown transport capabilities {unknown_caps}"
             )
-        if spec.safety == "cluster_write" and spec.authority is None:
-            raise ToolRegistryError(f"tool {name!r} can write and must classify its authority")
+        # The gate reads the policy registry, not the spec, so this is the registration
+        # that has to exist. A writer with no policy is treated as a write by every
+        # stage and permitted to none — refused at incident time, in the stage that was
+        # supposed to be allowed, having passed every check at import.
+        if spec.safety == "cluster_write":
+            policy = policy_for(name)
+            if policy is None or not policy.write_stages:
+                raise ToolRegistryError(
+                    f"tool {name!r} can write and must register a policy "
+                    "naming the stages that may issue one"
+                )
         if spec.safety == "submit" and spec.dispatch is not None:
             raise ToolRegistryError(f"submit tool {name!r} must not have an implementation")
         if spec.safety != "submit" and RATIONALE_ARG in (spec.parameters.get("properties") or {}):
