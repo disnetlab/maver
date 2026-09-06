@@ -126,6 +126,16 @@ def make_node(spec: RoleSpec, deps: IncidentDeps) -> NodeFn:
             # cannot disagree and a role that then fails still consumes its retry.
             delta.update(apply_handback(state, handback, deps.policy))
             state = _merged(state, delta)
+            # And recorded here, because this is the only place that knows a back-edge
+            # was taken. Without it a replan cycle and a linear run leave the same log,
+            # and which one an incident was has to be re-derived from artifact flags.
+            deps.journal.record(
+                StageEvent(
+                    stage=spec.name,
+                    event="handed_back",
+                    detail=f"{handback.kind}: {handback.reason}",
+                )
+            )
         else:
             handback = None
 

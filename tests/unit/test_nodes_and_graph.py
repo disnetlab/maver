@@ -218,6 +218,48 @@ async def test_a_hand_back_is_charged_before_the_role_runs() -> None:
     assert delta["reassessment_count"] == 1
 
 
+async def test_a_back_edge_is_recorded_where_it_is_taken() -> None:
+    """A replan cycle and a linear run otherwise leave the same log.
+
+    The routing decision is the one thing a reader cannot re-derive from the artifacts
+    afterwards, because the verdict that caused it is cleared as it is acted on.
+    """
+    sink, recorder = ListSink(), Recorder()
+    node = make_node(
+        spec_for(
+            "rca",
+            outcome=RoleOutcome(artifact=root_cause(), transcript=[]),
+            state_slot="root_cause",
+        ),
+        deps(recorder, sink),
+    )
+
+    await node({"session_id": "s1"})
+    assert [s.event for s in _stages(sink)] == ["entered", "exited"]
+
+    sink.events.clear()
+    await node(
+        {
+            "session_id": "s1",
+            "root_cause": root_cause(),
+            "verify_result": verify_result(
+                recovered=False,
+                verdict="not_recovered",
+                summary="still failing",
+                needs_reassessment=True,
+                reassessment_reason="the named component was not the origin",
+            ),
+        }
+    )
+    handed = _stages(sink)[0]
+    assert handed.event == "handed_back"
+    assert handed.detail == "reassessment: the named component was not the origin"
+
+
+def _stages(sink: ListSink) -> list[StageEvent]:
+    return [e.payload for e in sink.events if isinstance(e.payload, StageEvent)]
+
+
 async def test_verification_is_charged_for_a_second_look_not_a_first() -> None:
     """The prototype incremented on every pass, so after a replan the allowance was
     already spent and the next cycle could not look twice despite never having done so."""
