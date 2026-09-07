@@ -635,7 +635,7 @@ class AccessLog:
 
 class _BridgeHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        """Answer the liveness probe the agent's transport preflights."""
+        """Answer a liveness probe, so a dead bridge is told apart from a refused action."""
         if self.path != "/healthz":
             self.send_error(404)
             return
@@ -744,6 +744,7 @@ def serve_bridge(
     host: str = "127.0.0.1",
     port: int = 1819,
     access_log: Path | str | None = None,
+    poll_interval: float = 0.5,
 ) -> Iterator[BridgeHTTPServer]:
     """Serve the bridge for the lifetime of one problem.
 
@@ -753,6 +754,9 @@ def serve_bridge(
         host: Address to bind.
         port: Port to bind. Zero takes an ephemeral one, which tests use.
         access_log: File to append one line per action to. Its directory must exist.
+        poll_interval: How often the serving thread checks for shutdown, in seconds.
+            The default is the standard library's; shutdown waits up to one interval,
+            so tests that open a bridge per case lower it.
 
     Yields:
         The running server.
@@ -766,7 +770,12 @@ def serve_bridge(
     server = BridgeHTTPServer(
         (host, port), backend, token, AccessLog(access_log) if access_log else None
     )
-    thread = threading.Thread(target=server.serve_forever, name="aiopslab-bridge", daemon=True)
+    thread = threading.Thread(
+        target=server.serve_forever,
+        kwargs={"poll_interval": poll_interval},
+        name="aiopslab-bridge",
+        daemon=True,
+    )
     thread.start()
     try:
         yield server

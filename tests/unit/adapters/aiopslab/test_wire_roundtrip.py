@@ -206,7 +206,10 @@ class _PrometheusHandler(BaseHTTPRequestHandler):
 @pytest.fixture
 def prometheus() -> Iterator[str]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _PrometheusHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # Shutdown waits up to one poll interval; every test opens its own stub.
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+    )
     thread.start()
     try:
         yield f"http://127.0.0.1:{server.server_address[1]}"
@@ -255,7 +258,7 @@ def wire(prometheus: str, kubectl_stub: Path) -> Wire:
         stage: str = "rca",
     ) -> Iterator[AiopsLabTransport]:
         backend = BridgeBackend(NAMESPACE, allow_writes=allow_writes, prometheus_url=prometheus)
-        with serve_bridge(backend, TOKEN, port=0) as server:
+        with serve_bridge(backend, TOKEN, port=0, poll_interval=0.02) as server:
             transport = AiopsLabTransport(
                 f"http://127.0.0.1:{server.server_address[1]}",
                 token,
