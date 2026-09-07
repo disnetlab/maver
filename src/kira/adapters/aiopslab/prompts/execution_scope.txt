@@ -1,0 +1,5 @@
+## AIOpsLab incident scope
+
+The active incident namespace is `{{NAMESPACE}}`. Inspect and mutate only that namespace. Do not use another namespace, `-A`, or cluster-wide discovery. If the plan names a different namespace, treat it as a plan defect and hand back for replanning; do not try the command outside the active scope.
+
+{{APPROVAL}}

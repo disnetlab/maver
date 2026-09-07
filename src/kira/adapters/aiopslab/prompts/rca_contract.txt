@@ -1,0 +1,66 @@
+## AIOpsLab task contract
+
+This incident is an AIOpsLab `{{TASK_TYPE}}` task. The task type is protocol
+metadata, not a fault hint. Investigate blindly from live state and telemetry.
+
+- For `detection`, decide whether the completed workload belongs to an **active
+  fault episode**, not merely whether every pod happens to be Ready at the final
+  instant. A persistent injected configuration, an abnormal feature flag, a
+  failed request/trace, an ongoing SLI degradation, or a recent abnormal
+  container/pod termination attributable to the workload is sufficient for
+  `Yes`; Kubernetes may have self-healed an ephemeral kill before diagnosis.
+  The alert's neutral `observation_window_start` is captured immediately before
+  AIOpsLab invokes its injection/workload phase. Treat pod terminations,
+  FailedScheduling, image pulls, missing-PVC events, and other transient events
+  timestamped before that boundary as deployment startup history, not anomaly
+  evidence. A Ready pod's restart count alone is insufficient when its last
+  termination preceded the boundary. Evidence at or after the boundary belongs
+  to the evaluated episode. Distinguish it further by checking resource ages,
+  current configuration, traces, and workload health. If the
+  namespace contains `flagd-config`, inspect its `demo.flagd.json`: any flag whose
+  `defaultVariant` is not its normal `off` value is live application-fault
+  evidence even when all Astronomy Shop pods are Ready. Submit `No` only after
+  checking persistent configuration and recent episode evidence and finding no
+  anomaly; then use `halt=true`, `fault_type="none"`,
+  `affected_resource="none"`, and a summary beginning
+  `AIOpsLab detection: has_anomaly=No.` For an anomaly, begin the summary
+  `AIOpsLab detection: has_anomaly=Yes.`
+  Detection is a coarse Yes/No task, not full localization: stop once you can
+  decide it. In particular, if alerts are empty, workloads/endpoints are Ready,
+  the exercised trace path has no errors, and there is neither live persistent
+  drift nor post-boundary failure evidence, submit `No` immediately. A resolved
+  pre-boundary FailedScheduling event, an old restart, a workload that simply was
+  not exercised by this request, and ConfigMaps that merely store bundled
+  fault/recovery scripts are not anomalies. Do not spend further turns trying to
+  invent a fault after those checks agree.
+- For `localization`, put the exact stable faulty component name at the end of
+  `affected_resource` (for example `deployment/user-service`). Do not submit a
+  generated pod suffix when the owning service/workload is identifiable.
+- For `analysis`, choose the benchmark taxonomy from the task description and
+  include this exact machine-readable sentence in `summary`:
+  `AIOpsLab classification: system_level=<value>; fault_type=<value>.`
+  Classify Kubernetes/container-orchestrator state as `Virtualization`, not
+  `Application`. An operator mutation such as scaling replicas, killing/deleting
+  a pod/container, or an equivalent lifecycle operation is an `Operation Error`;
+  reserve `Misconfiguration` for a wrong static configuration value rather than
+  an operational lifecycle action. Database users, credentials, and privileges
+  are `Application` / `Authentication Issue` even when the database is hosted in
+  Kubernetes. An unsatisfied required scheduling/dependency relationship is a
+  `Dependency Problem`.
+- For `mitigation`, produce the normal RootCause artefact; Planning and Execution
+  will run after RCA.
+
+The AIOpsLab problem identifier and hidden expected answer are intentionally not
+provided.
+
+Use `get_services` and `get_traces` for application request evidence when Jaeger
+is deployed. For Astronomy Shop, inspect both traces and `flagd-config`; feature
+flags can inject failures, latency, load, or cache behavior without changing pod
+readiness. For saturation hypotheses, query container CPU/memory metrics rather
+than only HTTP counters.
+
+The scoped AIOpsLab bridge rejects generic `kubectl exec` because it cannot
+verify the command inside a container. Use `get`, `describe`, and `logs` for
+diagnosis. Execution has a separate `restore_mongodb_access` action for the four
+fixed recovery scripts supported by AIOpsLab; do not try to invoke those scripts
+through generic kubectl.

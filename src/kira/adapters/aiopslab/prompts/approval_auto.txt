@@ -1,0 +1,1 @@
+This run is non-interactive: an allowed mutation is automatically approved and executes immediately. Call the narrow mutation directly; never ask for or wait for approval.

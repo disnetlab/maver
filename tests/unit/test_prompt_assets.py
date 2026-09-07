@@ -22,6 +22,15 @@ pytestmark = pytest.mark.parity
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHIPPED = REPO_ROOT / "src" / "kira" / "prompts"
 
+# An environment adapter ships its own prompts inside its own package, read through the
+# same loader. They are migrated text like every other asset, so they are walked here
+# rather than compared somewhere the frozen-copy check cannot see: an adapter asset with
+# no recorded prototype source would otherwise be the one prompt nothing holds to the
+# migration rule.
+ADAPTER_TREES = {
+    Path("adapters", "aiopslab"): REPO_ROOT / "src" / "kira" / "adapters" / "aiopslab" / "prompts"
+}
+
 PROTOTYPE = prototype_root() / "agent" / "prompts"
 
 # Composition markers were renamed on the way in, and only in the role system prompts.
@@ -48,6 +57,16 @@ CARRIED_FROM_PROTOTYPE_CODE = {
     Path("runtime/verify/health_gate_healthy.txt"),
     Path("runtime/verify/health_gate_unhealthy.txt"),
     Path("runtime/verify/submit_while_unhealthy.txt"),
+    # The AIOpsLab adapter's four: the connectivity-contract block was a string literal
+    # in `agent/agents/verify.py`, the incident-scope block and its two approval
+    # sentences in `agent/agents/execution.py`, and the detection guard's rejection in
+    # `agent/agents/rca.py`. Same rule as the health gate's blocks: model-facing text
+    # belongs in a .txt file on the way in, and there is nothing to diff against.
+    Path("adapters/aiopslab/verify_contract.txt"),
+    Path("adapters/aiopslab/execution_scope.txt"),
+    Path("adapters/aiopslab/approval_auto.txt"),
+    Path("adapters/aiopslab/approval_gated.txt"),
+    Path("adapters/aiopslab/detection_guard_rejection.txt"),
 }
 
 # Assets that deliberately no longer match, and why. Byte fidelity is the migration
@@ -95,6 +114,8 @@ def _prototype_source(relative: Path) -> Path:
             return PROTOTYPE / "runtime" / "roles" / filename
         case ("runtime", role, filename):
             return PROTOTYPE / "runtime" / "roles" / role / filename
+        case ("adapters", "aiopslab", filename):
+            return PROTOTYPE / "runtime" / "aiopslab" / filename
         case ("secondpass", filename):
             # The blinded selector was borrowed from the counterfactual fork arm, which
             # Kira drops. Its two prompts are live second-pass code, so they move here
@@ -107,11 +128,21 @@ def _prototype_source(relative: Path) -> Path:
 
 
 def _shipped_assets() -> list[Path]:
+    trees = {Path("."): SHIPPED, **ADAPTER_TREES}
     return sorted(
-        path.relative_to(SHIPPED)
-        for path in SHIPPED.rglob("*")
+        prefix / path.relative_to(root)
+        for prefix, root in trees.items()
+        for path in root.rglob("*")
         if path.is_file() and path.suffix in {".txt", ".yaml"}
     )
+
+
+def _shipped_file(relative: Path) -> Path:
+    """Resolve a walked asset back to the tree it was found in."""
+    for prefix, root in ADAPTER_TREES.items():
+        if relative.is_relative_to(prefix):
+            return root / relative.relative_to(prefix)
+    return SHIPPED / relative
 
 
 @pytest.mark.parametrize("relative", _shipped_assets(), ids=str)
@@ -126,4 +157,4 @@ def test_every_shipped_asset_is_byte_identical_to_the_prototype(relative: Path) 
         for old, new in ROLE_MARKER_RENAMES.items():
             text = text.replace(old, new)
         expected = text.encode("utf-8")
-    assert (SHIPPED / relative).read_bytes() == expected
+    assert _shipped_file(relative).read_bytes() == expected

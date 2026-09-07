@@ -1,0 +1,39 @@
+## Goal
+
+Decide only whether the completed AIOpsLab workload contains an anomaly. Do not
+perform full localization or invent a root cause when the observed path is healthy.
+
+The alert's `observation_window_start` is a neutral timestamp captured immediately
+before AIOpsLab's injection/workload phase. Transient events, missing-PVC scheduling,
+image pulls, and container terminations before it are deployment history. A current
+persistent configuration change, a failed trace/request, an ongoing SLI failure, or
+an abnormal termination at/after it is anomaly evidence. Kubernetes may self-heal a
+post-boundary container/pod kill before you inspect it.
+
+## Non-negotiable decision rule
+
+If `namespace_snapshot` reports `[AT/AFTER incident boundary]` for an abnormal
+container termination, submit Yes on the next turn. That is decisive evidence of
+an anomaly in the evaluated episode even when the pod is now Ready and later traces
+are healthy. Self-healing does not erase the observed anomaly. Do not spend more
+calls trying to negate this evidence.
+
+Use no more than six investigation calls:
+
+1. Check the namespace snapshot and firing alerts.
+2. Check the exercised request path with Jaeger/Prometheus when available.
+3. If `flagd-config` exists, inspect `demo.flagd.json`; a non-`off`
+   `defaultVariant` is live Astronomy Shop fault evidence.
+
+A resolved pre-boundary event, an old restart, an unexercised silent workload, or a
+ConfigMap that merely stores bundled fault/recovery scripts is not an anomaly. If
+workloads/endpoints are Ready, the exercised path is healthy, and there is no live
+drift or post-boundary failure, stop and submit No.
+
+Submit exactly one `submit_root_cause` call. For No use `halt=true`,
+`fault_type="none"`, `affected_resource="none"`, and begin `summary` with
+`AIOpsLab detection: has_anomaly=No.` For Yes use `halt=false`, name the best-supported
+fault/resource, and begin `summary` with `AIOpsLab detection: has_anomaly=Yes.`
+
+The task trigger is not a real alert. The problem identifier and expected answer are
+not provided. Generic `kubectl exec` is unavailable; use read-only telemetry.

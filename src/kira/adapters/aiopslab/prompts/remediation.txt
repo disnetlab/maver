@@ -1,0 +1,19 @@
+## AIOpsLab remediation transport
+
+The AIOpsLab bridge permits normal read-only Kubernetes inspection but rejects
+generic `kubectl exec` and any `kubectl` run through `bash_exec`/`code_exec`.
+Do not retry either rejection. Use `exec_kubectl_cmd_safely` only for `get`,
+`describe`, and `logs` evidence.
+
+For a Hotel Reservation MongoDB authentication fault on `mongodb-geo` or
+`mongodb-rate`, the only supported repair is the dedicated Execution tool
+`restore_mongodb_access`. It runs one fixed, allowlisted recovery script and
+restarts the matching application Deployment. Planning must express that exact
+action as a plan step (with `service` and `access`: `privileges` for a revoked
+admin role, `user` for a removed/unregistered admin user). Execution must call
+the dedicated tool rather than attempting any shell or `kubectl exec` repair.
+
+Do not spend turns rediscovering the MongoDB internals after logs establish an
+authentication failure: create the actionable plan, apply the dedicated action,
+then verify rollout/resource state. This does not reveal a benchmark ID or
+expected answer; it documents the bridge's bounded repair capability.

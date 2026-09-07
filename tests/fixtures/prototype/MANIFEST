@@ -28,11 +28,15 @@ the alternative is a copy that says "commit 30070ee" and silently is not.
 What is here
 ------------
 
-The 69 prompt assets test_prompt_assets.py maps a shipped asset back to, the tool
+The 72 prompt assets test_prompt_assets.py maps a shipped asset back to, the tool
 registry test_toolsets.py parses AGENT_TOOLSETS out of, and the projection renderer
 test_projections.py re-derives its golden file by running. Nothing else of the
 prototype: tests/unit/test_frozen_prototype.py fails on a file the checks read that is
 missing here, and on a file here that no check reads.
+
+Three of those assets are the AIOpsLab adapter's, which ships its prompts inside its own
+package rather than under src/kira/prompts. They are frozen at the layout they have in
+the prototype, agent/prompts/runtime/aiopslab/, like every other file here.
 
 The prototype sources of the assets in test_prompt_assets.DELIBERATELY_DIVERGED are
 absent on purpose. That check skips before reading them, so freezing them would vendor

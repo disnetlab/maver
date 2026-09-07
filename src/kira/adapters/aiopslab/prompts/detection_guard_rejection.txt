@@ -1,0 +1,1 @@
+submit_root_cause is inconsistent with the live episode evidence: {{DECISIVE}}. An abnormal termination AT/AFTER the incident boundary is an anomaly even if Kubernetes self-healed and later requests are healthy. Resubmit Yes now using this resource/evidence; do not run more investigation tools.

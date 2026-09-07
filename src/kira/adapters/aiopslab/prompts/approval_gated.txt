@@ -1,0 +1,1 @@
+Call an allowed mutation directly. Authorization is handled by the runtime; do not ask for or manually wait on approval.

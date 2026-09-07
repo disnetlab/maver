@@ -1,0 +1,5 @@
+## Benchmark-supplied application connectivity contract
+This is static deployment metadata, not incident evidence or a causal hypothesis. Use this exact Service as the first `probe_service` target; it says nothing about whether recovery succeeded.
+```json
+{{CONTRACT_JSON}}
+```
