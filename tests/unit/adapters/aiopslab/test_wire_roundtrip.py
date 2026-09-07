@@ -404,8 +404,11 @@ async def test_a_credential_or_scope_flag_is_refused_by_name(
 async def test_a_metric_query_comes_back_as_the_literal_the_delivery_layer_carries(
     wire: Wire,
 ) -> None:
+    """The window is in the protocol and not on this wire: the bridge runs an instant
+    query and takes no range, exactly as the harness's own metrics server does, so a
+    caller passing one must not turn the query into an action the bridge refuses."""
     with wire() as transport:
-        answer = await transport.query_metrics('up{job="geo"}')
+        answer = await transport.query_metrics('up{job="geo"}', window_minutes=60)
 
     assert ast.literal_eval(answer) == METRIC_DATA
 
