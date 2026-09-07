@@ -10,6 +10,8 @@ from collections.abc import Generator, Iterator
 
 import pytest
 
+from kira.adapters import registry as adapter_registry_module
+from kira.adapters.registry import load_entry_point_adapters
 from kira.settings.root import known_env_names, reset_settings
 
 
@@ -25,6 +27,31 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     reset_settings()
     yield
     reset_settings()
+
+
+@pytest.fixture
+def adapter_registry() -> Iterator[None]:
+    """Give a test the adapter registry to itself, and put back what was there.
+
+    The registry is process-wide and entry points register on import, so a test that
+    empties it cannot restore it by importing the packages again: they are already in
+    ``sys.modules`` and their registration does not run twice. Restoring the snapshot is
+    what makes such a test independent of the order it runs in, and of how many adapters
+    happen to be installed.
+    """
+    # Discovered first, so the snapshot holds every installed adapter. Registration
+    # runs on import and an import does not run twice, so an adapter that had not been
+    # imported when the snapshot was taken could not be restored into it.
+    load_entry_point_adapters()
+    registered = dict(adapter_registry_module._REGISTRY)
+    unavailable = dict(adapter_registry_module._UNAVAILABLE)
+    try:
+        yield
+    finally:
+        adapter_registry_module._REGISTRY.clear()
+        adapter_registry_module._REGISTRY.update(registered)
+        adapter_registry_module._UNAVAILABLE.clear()
+        adapter_registry_module._UNAVAILABLE.update(unavailable)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

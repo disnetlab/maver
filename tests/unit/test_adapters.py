@@ -8,11 +8,11 @@ the import boundary is the property the whole rebuild claims.
 
 import ast
 import asyncio
-import importlib
 import json
 import pathlib
 import subprocess
 import sys
+import tomllib
 from typing import Any
 
 import httpx
@@ -387,22 +387,20 @@ async def test_the_storage_only_key_is_written_and_never_rendered(
     assert "k8s_target_port-misconfig" not in json.dumps(visible_alert(stored))
 
 
-def test_an_adapter_that_could_not_load_is_reported_rather_than_missing() -> None:
+def test_an_adapter_that_could_not_load_is_reported_rather_than_missing(
+    adapter_registry: None,
+) -> None:
     """Selecting an unavailable adapter is fatal and says why: a deployment that asked
     for an environment and silently did not get one grades nothing."""
     clear_adapters()
-    try:
 
-        @adapter("stub")
-        def _factory(settings: Settings) -> EnvironmentAdapter:
-            return StubAdapter()  # type: ignore[return-value]
+    @adapter("stub")
+    def _factory(settings: Settings) -> EnvironmentAdapter:
+        return StubAdapter()  # type: ignore[return-value]
 
-        assert available_adapters() == {"stub": "ready"}
-        with pytest.raises(ValueError, match="unknown environment adapter 'nope'"):
-            get_adapter("nope")
-    finally:
-        clear_adapters()
-        importlib.reload(importlib.import_module("kira.adapters.sregym"))
+    assert available_adapters() == {"stub": "ready"}
+    with pytest.raises(ValueError, match="unknown environment adapter 'nope'"):
+        get_adapter("nope")
 
 
 CONTRACT_MODULES = {"kira.adapters", "kira.adapters.base", "kira.adapters.registry"}
@@ -422,6 +420,29 @@ def test_no_core_module_imports_a_concrete_adapter() -> None:
                 if name.startswith("kira.adapters") and name not in CONTRACT_MODULES:
                     offenders.append(f"{path}: {name}")
     assert offenders == []
+
+
+def test_every_in_tree_adapter_package_is_banned_from_core_imports() -> None:
+    """The lint rule and the walk above have to name the same set.
+
+    The walk catches a core module that imports an adapter; the ban list is what catches
+    it in the editor, before it is written. A new adapter package added without its line
+    is a rule that silently covers one environment and not the other, so the list is
+    derived from what is on disk rather than maintained by memory.
+    """
+    packages = {
+        path.name
+        for path in pathlib.Path("src/kira/adapters").iterdir()
+        if (path / "__init__.py").exists()
+    }
+    banned = set(
+        tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))["tool"]["ruff"][
+            "lint"
+        ]["flake8-tidy-imports"]["banned-api"]
+    )
+
+    assert packages
+    assert {f"kira.adapters.{name}" for name in packages} <= banned
 
 
 def test_importing_the_core_does_not_import_an_adapter() -> None:
@@ -701,7 +722,7 @@ def process_settings(tmp_path: pathlib.Path, *names: str) -> Settings:
 
 
 async def test_an_adapter_with_no_episode_route_serves_the_generic_intake(
-    tmp_path: pathlib.Path,
+    tmp_path: pathlib.Path, adapter_registry: None
 ) -> None:
     """The second shape an adapter can be, end to end through the ordinary route.
 
@@ -712,38 +733,33 @@ async def test_an_adapter_with_no_episode_route_serves_the_generic_intake(
     reach a role: its transport carries the tool calls, its tool is offered to the role
     it named, and its overlay reaches the system prompt.
     """
-    clear_adapters()
-    try:
 
-        @adapter("process")
-        def _factory(settings: Settings) -> EnvironmentAdapter:
-            return ProcessAdapter()  # type: ignore[return-value]
+    @adapter("process")
+    def _factory(settings: Settings) -> EnvironmentAdapter:
+        return ProcessAdapter()  # type: ignore[return-value]
 
-        deploy = build_deployment(process_settings(tmp_path, "process"))
-        model = SubmittingModel()
-        object.__setattr__(deploy, "completion", model)
-        assert deploy.adapter is not None and deploy.adapter.name == "process"
+    deploy = build_deployment(process_settings(tmp_path, "process"))
+    model = SubmittingModel()
+    object.__setattr__(deploy, "completion", model)
+    assert deploy.adapter is not None and deploy.adapter.name == "process"
 
-        app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
-        transport = deploy.transport_for("s")
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://kira"
-        ) as http:
-            accepted = await http.post(
-                "/api/v1/incidents", json={"alert": {"alertname": "X", "namespace": "shop"}}
-            )
-            assert accepted.status_code == 202
-            while pending := {t for t in app.state.service.runs.tasks() if not t.done()}:
-                await asyncio.gather(*pending, return_exceptions=True)
+    app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
+    transport = deploy.transport_for("s")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://kira"
+    ) as http:
+        accepted = await http.post(
+            "/api/v1/incidents", json={"alert": {"alertname": "X", "namespace": "shop"}}
+        )
+        assert accepted.status_code == 202
+        while pending := {t for t in app.state.service.runs.tasks() if not t.done()}:
+            await asyncio.gather(*pending, return_exceptions=True)
 
-        assert isinstance(transport, ProcessTransport)
-        assert transport.served, "the incident ran on the environment's transport"
-        opening = next(request for caller, request in model.seen if caller == "rca")
-        assert "probe_service" in {tool.name for tool in opening.tools}
-        assert f"\n\n{PROBE_SUFFIX}\n\n" in str(opening.system)
-    finally:
-        clear_adapters()
-        importlib.reload(importlib.import_module("kira.adapters.sregym"))
+    assert isinstance(transport, ProcessTransport)
+    assert transport.served, "the incident ran on the environment's transport"
+    opening = next(request for caller, request in model.seen if caller == "rca")
+    assert "probe_service" in {tool.name for tool in opening.tools}
+    assert f"\n\n{PROBE_SUFFIX}\n\n" in str(opening.system)
 
 
 def test_an_adapter_that_drives_its_own_episodes_is_not_process_bound(

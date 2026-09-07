@@ -12,10 +12,8 @@ So: the approved call goes over the episode's transport, the episode still reach
 ending, and a continuation that can have neither says so rather than pretending.
 """
 
-import importlib
 import json
 import pathlib
-import sys
 from collections.abc import Iterator
 from typing import Any
 
@@ -326,24 +324,21 @@ async def test_a_resumed_episode_is_submitted_graded_and_released(
 
 
 @pytest.fixture
-def registered_adapter() -> Iterator[list[EpisodeAdapter]]:
-    """Register the stub in the adapter registry, and leave the registry as it was."""
+def registered_adapter(adapter_registry: None) -> Iterator[list[EpisodeAdapter]]:
+    """Serve the shipped adapter's name from a stub, under a restored registry.
+
+    A name cannot be registered twice, so the shipped one is emptied out first; the
+    shared fixture puts the whole registry back, which reloading one package could not.
+    """
     built: list[EpisodeAdapter] = []
+    clear_adapters()
 
     @adapter(ADAPTER_NAME)
     def _factory(settings: Settings) -> Any:
         built.append(EpisodeAdapter())
         return built[-1]
 
-    try:
-        yield built
-    finally:
-        # A name cannot be registered twice, so a throwaway one is undone by emptying the
-        # registry and re-running whatever had already registered into it.
-        shipped = sys.modules.get("kira.adapters.sregym")
-        clear_adapters()
-        if shipped is not None:
-            importlib.reload(shipped)
+    yield built
 
 
 async def test_an_episode_this_process_no_longer_holds_is_ended_not_resumed(
