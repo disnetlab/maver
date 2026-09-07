@@ -113,17 +113,27 @@ src/kira/
 configs/         model profiles, experiment arms, adapter settings
 deploy/          the container image, and Kubernetes manifests with two overlays
 examples/        one alert payload and the shortest script that drives an incident
-scripts/         the two things an evaluation host runs outside this package
+scripts/         what an evaluation host runs outside this package
 tests/           unit, contract and integration suites
 ```
 
-The two scripts are worth naming because nothing in the package imports them.
+The scripts are worth naming because nothing in the package imports them.
 `sregym-driver.py` is the path the benchmark's own agent configuration invokes; it loads
 the driver from its file rather than by package name, because it runs in the harness's
 interpreter where this project is not installed. `sregym-mcp-port-forward.sh` holds open
 the port-forward that adapter's transport speaks through. Both are load-bearing and both
 fail on a remote host part-way through a run, so the contract between the entry point and
-the driver it loads is pinned by a test.
+the driver it loads is pinned by a test. `aiopslab-driver.py` is the same arrangement for
+the other adapter, and `scripts/aiopslab/` holds the two things its host runs by hand.
+
+Two environment adapters ship, and the difference between them is instructive. Under
+SREGym the harness starts the agent and hands it a problem. Under AIOpsLab the direction
+reverses: a driver runs inside the benchmark's own interpreter, holds the cluster-admin
+kubeconfig that the agent container is deliberately not given, and lets the agent reach
+the cluster only through a token-scoped loopback bridge that re-screens every action.
+`docs/adapters/aiopslab.md` covers deploying the agent, running one problem, and running
+a resumable sweep. That adapter has not yet been run against a live AIOpsLab host from
+this repository; no result is claimed for it.
 
 `STYLE_GUIDE.md` carries the conventions a linter cannot express: the layer boundaries,
 the tool-allowlist rule, the write-gate invariant, the artifact-schema freeze, and the

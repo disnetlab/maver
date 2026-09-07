@@ -154,3 +154,35 @@ versions the submission schemas and the event contract.
   record says to a model does not change. They exist for one read,
   `TextSearch.session_ids_with_label`, so that an evaluation adapter can ask which
   records came from one of its own episodes without the core knowing what the key means.
+
+## Adapters
+
+An environment adapter decides what a benchmark result means, so the parts of one that
+change a reported number are recorded here rather than left to the commit log.
+
+- **The AIOpsLab analysis answer says who decided it.** Two hand-written rules in the
+  taxonomy mapper override the model's own classification — an operator mutation to a
+  Kubernetes workload is forced to Virtualization/Operation Error, and a database
+  credential fault to Application/Authentication Issue — and below them a keyword ladder
+  assigns both fields when the model wrote no classification at all. The rules are kept,
+  because AIOpsLab's four levels and six fault types are its vocabulary and the agent's
+  `RootCause` does not have them, but every episode now writes `source` (`model`,
+  `normalized` or `fallback`) and the rule's name into `kira-submission.json` beside the
+  graded answer. An analysis accuracy quoted without that split reports the rules'
+  accuracy as the agent's. The prototype had the rules and not the accounting.
+
+- **The AIOpsLab bridge keeps an access log.** The prototype's handler discarded it, so
+  the process holding the cluster-admin kubeconfig kept no record of what it was asked to
+  do and the agent's own audit log was the only account of any cluster action. One JSON
+  line per action now lands in the problem's results directory, carrying the session id
+  the agent's transport sends, so the two sides can be reconciled on something better
+  than a wall clock.
+
+- **The AIOpsLab sweep's retry and resume rules are unchanged and now testable.** A
+  result AIOpsLab graded is final: it is never run again, on a resume or after the runner
+  exits nonzero cleaning up behind it, because retrying a graded failure replaces one
+  cell with a second sample of the model. Only a non-grade is retried. The three
+  `python -c` one-liners the bash sweep embedded — registry enumeration, task-type
+  inference, grading — are functions with tests rather than strings inside single quotes,
+  and `status.tsv` gains four columns (task type, attempts, agent incident id, duration)
+  over the archived seven, which keep their names and meanings.

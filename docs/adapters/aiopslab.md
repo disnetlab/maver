@@ -1,0 +1,257 @@
+# The AIOpsLab adapter
+
+Kira runs its own pipeline against [AIOpsLab](https://github.com/microsoft/AIOpsLab)
+without putting AIOpsLab's admin kubeconfig inside the agent container.
+
+**This adapter has not yet been run against a live AIOpsLab host from this repository.**
+Everything below is exercised by unit tests on a laptop, and the end-to-end acceptance
+(`refactor/12-AIOPSLAB.md` §C, one problem of each task type on the Lab-1 host) is
+pending. What has been run end to end is the research prototype it was carried from; a
+number produced there is not a number produced by this code.
+
+## Two processes, opposite directions
+
+AIOpsLab is the inverse of a harness that spawns the agent. The **driver** imports
+AIOpsLab's orchestrator and drives it in the harness's own Python environment, and the
+orchestrator pulls exactly one action back out of it — an action the driver produces by
+posting a blinded incident to the **agent** over HTTP and waiting for the whole pipeline
+to finish.
+
+| | Driver (`src/kira/adapters/aiopslab/host/`) | Agent (the container) |
+|---|---|---|
+| Runs in | AIOpsLab's Poetry environment, loaded by path | its own image |
+| Holds | the cluster-admin kubeconfig, the problem id, the bridge | a bearer token and nothing else |
+| Imports | the standard library only, plus `aiopslab` | Kira |
+| Reaches the cluster by | `kubectl`, directly | one `POST /v1/action` to the bridge |
+
+The driver half's standard-library-only rule is enforced by an AST test. It is not
+tidiness: an import of `kira` there crashes on a benchmark host part-way through a sweep,
+where nothing in this repository is installed.
+
+## Ownership boundary
+
+AIOpsLab keeps owning application deployment, workload generation, fault injection,
+grading, recovery and cleanup. The adapter submits a blinded incident and maps the
+agent's structured result back onto AIOpsLab's task contract:
+
+| AIOpsLab task | Agent stages | Submitted value |
+|---|---|---|
+| detection | diagnosis only | `"Yes"` or `"No"` |
+| localization | diagnosis only | exact component-name list |
+| analysis | diagnosis only | `system_level` / `fault_type` taxonomy |
+| mitigation | diagnosis → planning → execution → optional verification | `submit()` after the pipeline |
+
+Read-only tasks stop after diagnosis, so the agent cannot remediate a problem before
+AIOpsLab grades the diagnosis. The bridge derives its own write authority from the task
+type before the episode starts, so a detection episode is refused a write whatever the
+request claims about itself.
+
+The bridge serves exactly five things: active-namespace `kubectl`, Prometheus instant
+queries and firing alerts, namespace-scoped Jaeger, an execution-only MongoDB access
+repair whose service and script are both allowlisted, and a verification-only
+`probe_service` that port-forwards one named Service and makes one HTTP request through
+it. Namespace-less reads are scoped to the active namespace, writes must name it, and
+generic `kubectl exec` is rejected because an in-container command cannot be proven
+read-only.
+
+## Start the agent
+
+```bash
+make image                                            # builds kira:local
+KIRA_MODEL_ENDPOINT=http://vllm.internal:8000/v1 \
+  sudo -E scripts/aiopslab/deploy-agent.sh
+```
+
+The AIOpsLab adapter needs no packaging extra: its transport speaks HTTP to the bridge
+with the client library the core already depends on. `make image-eval` is SREGym's.
+
+The script generates `/var/lib/aiopslab/agent-config/bridge-token` (32 random bytes, mode
+0600) if it is absent, writes the environment file beside it, and starts the container on
+the host network with no kubeconfig, a read-only root filesystem, and the token mounted
+read-only at `/run/secrets/aiopslab-bridge-token`. It waits for `/healthz` and then
+`/readyz`, and reports which of the two failed.
+
+| Variable | Default | What it selects |
+|---|---|---|
+| `KIRA_MODEL_ENDPOINT` | *required* | the private model endpoint |
+| `AIOPSLAB_ARM` | `ma-v` | an arm file in `configs/arms/`, baked into the image |
+| `AIOPSLAB_MODEL_PROFILE` | `qwen3.6-35b-a3b` | a profile in `configs/models/` |
+| `AIOPSLAB_AGENT_IMAGE` | `kira:local` | the image `make image` tags |
+| `AIOPSLAB_AGENT_DATA_DIR` | `/var/lib/aiopslab/agent-workspace` | the workspace volume |
+| `AIOPSLAB_AGENT_CONFIG_DIR` | `/var/lib/aiopslab/agent-config` | the token and environment file |
+
+`ma-v` is the default because it is the prototype's final AIOpsLab arm: the pipeline with
+the verification role on, its retry budget at two, verification blind to the diagnosis, no
+health gate, one inconclusive retry, and memory off. A different arm is a different
+experiment; deploy it into a fresh `AIOPSLAB_AGENT_DATA_DIR` so the two do not share a
+workspace.
+
+What the script writes into the environment file, which is also what a hand-written
+`docker run` needs:
+
+| Name | Value | Why |
+|---|---|---|
+| `KIRA_INTAKE__ADAPTERS` | `aiopslab` | binds the adapter for the run |
+| `KIRA_ADAPTERS__AIOPSLAB__ENABLED` | `true` | makes the bridge credential mandatory rather than optional |
+| `KIRA_ADAPTERS__AIOPSLAB__BRIDGE_URL` | `http://127.0.0.1:1819` | where the driver serves the bridge |
+| `KIRA_ADAPTERS__AIOPSLAB__BRIDGE_TOKEN_FILE` | `/run/secrets/aiopslab-bridge-token` | a file, so the token is not in `docker inspect` |
+| `KIRA_ADAPTERS__AIOPSLAB__BRIDGE_TIMEOUT_S` | `180` | one bridge action's bound; the shipped default is 120 |
+| `KIRA_AUTHORITY__MODE` | `auto` | nobody is waiting to approve a write during a sweep |
+| `KIRA_SERVER__ENVIRONMENT` | `local` | `production` plus `auto` is refused at startup, and a benchmark host is not production |
+| `KIRA_SERVER__HOST` | `127.0.0.1` | with `--network host` there is no published-port boundary, and the API has no authentication |
+
+`KIRA_ADAPTERS__AIOPSLAB__BRIDGE_TOKEN` sets the token inline instead of by file. The
+prototype's own names — `AIOPSLAB_BRIDGE_URL`, `AIOPSLAB_BRIDGE_TOKEN`,
+`AIOPSLAB_BRIDGE_TOKEN_FILE`, `AIOPSLAB_BRIDGE_TIMEOUT_SECONDS` — still work as legacy
+aliases, and each one that decides a value says so in the log and in the run's
+configuration snapshot.
+
+## Run one problem
+
+From the pinned AIOpsLab checkout, in its Poetry environment. `PYTHONPATH` is
+deliberately not set: the entry point loads the driver from its files rather than
+importing it by package name, so this project does not have to be installed there.
+
+```bash
+cd /var/lib/aiopslab/src/AIOpsLab
+poetry run python /path/to/kira/scripts/aiopslab-driver.py run \
+  --problem noop_detection_hotel_reservation-1 \
+  --bridge-token-file /var/lib/aiopslab/agent-config/bridge-token \
+  --results-dir /var/lib/aiopslab/results/kira/noop_detection_hotel_reservation-1
+```
+
+It prints the AIOpsLab session, the agent's incident id, the submitted action and the
+harness's outcome, and exits 1 on any refusal the sweep should record.
+
+Before paying for a deployment, check the host:
+
+```bash
+poetry run python /path/to/kira/scripts/aiopslab-driver.py doctor \
+  --bridge-token-file /var/lib/aiopslab/agent-config/bridge-token
+```
+
+`doctor` reports on all four preconditions separately — the agent answers, `aiopslab` is
+importable in this interpreter, `kubectl` is on PATH, the token resolves — because each
+has failed on a host at some point looking like something else.
+
+## Run a sweep
+
+```bash
+poetry run python /path/to/kira/scripts/aiopslab-driver.py sweep \
+  --sweep-dir /var/lib/aiopslab/results/sweeps/qwen36-ma-v-20260907 \
+  --bridge-token-file /var/lib/aiopslab/agent-config/bridge-token
+```
+
+With no `--problems` file it reads AIOpsLab's registry, runs every Kubernetes-backed
+problem once, and records the Docker-backed ones as excluded. `--task-types mitigation`
+narrows it to one subset; `--problems <file>` takes an explicit list, one id per line,
+`#` starting a comment.
+
+**Reusing the same `--sweep-dir` resumes**: a problem AIOpsLab has already graded is
+skipped, so an interrupted sweep continues rather than repeating. `--rerun` overrides
+that, and it is a new experiment rather than a repair.
+
+Two rules are carried from the archived sweeps unchanged, because a resumed sweep has to
+behave like them:
+
+- **A result AIOpsLab graded is final.** It is never run again — not on a resume, and not
+  when the runner exits nonzero cleaning up after the grade was persisted. Retrying a
+  graded failure would replace one cell with a second sample of the model, which is a
+  better score manufactured out of variance.
+- **Only a non-grade is retried**, at most `--max-attempts` times (default 2), with
+  `--retry-delay` seconds between attempts. That is a deployment failure, a host timeout,
+  or a crash.
+
+Each problem is bounded by `--problem-timeout` (default 7,800 s, covering its deployment
+and grading) and the agent's own incident by `--agent-timeout` (default 7,200 s). A
+problem stopped by the host bound records exit code 124.
+
+Detached, with a watcher on the side:
+
+```bash
+tmux new-session -d -s aiopslab-sweep "cd /var/lib/aiopslab/src/AIOpsLab && \
+  poetry run python /path/to/kira/scripts/aiopslab-driver.py sweep \
+  --sweep-dir /var/lib/aiopslab/results/sweeps/qwen36-ma-v-20260907 \
+  --bridge-token-file /var/lib/aiopslab/agent-config/bridge-token 2>&1 | \
+  tee -a /var/lib/aiopslab/results/sweeps/qwen36-ma-v-20260907/console.log"
+
+scripts/aiopslab/watch-sweep.sh /var/lib/aiopslab/results/sweeps/qwen36-ma-v-20260907
+```
+
+The watcher only watches. It prints the grade tally, the last rows of `status.tsv` and
+the tail of `sweep.log`, and exits when the sweep records `completed_utc`. It does not
+kill a slow problem — `--problem-timeout` is that boundary — and it does not restart a
+dead sweep, because restarting one is the resume command above.
+
+One sweep at a time per host, enforced by a lock on `<sweep-root>/.sweep.lock`. AIOpsLab
+mutates cluster-wide state, so two concurrent sweeps produce two spoiled arms rather than
+two arms.
+
+## Where the records land
+
+```
+<sweep-dir>/
+  metadata.env                    what this sweep set out to do; completed_utc when done
+  problem-list.txt                the problems selected, with their task types
+  excluded-docker-problems.txt    the Docker-backed problems, named rather than dropped
+  status.tsv                      one row per problem
+  sweep.log                       the sweep's own log
+  results/<problem>/
+    <AIOpsLab's own result JSON>  the graded outcome; the sweep reads it and nothing else
+    kira-submission.json          what was asked of the agent, and what was submitted
+    bridge.log                    one JSON line per cluster action, from the host side
+```
+
+`status.tsv` carries the archived sweep's seven columns and four more:
+
+| Column | |
+|---|---|
+| `index` | position in the selected list |
+| `problem` | AIOpsLab problem id |
+| `task_type` | the graded task (new) |
+| `attempts` | how many runs it took (new) |
+| `exit_code` | 0, 1, or 124 for the host bound |
+| `grade` | `pass`, `fail`, `unknown`, or `error` when the harness wrote nothing |
+| `agent_incident_id` | the incident that produced the answer (new) |
+| `started_utc`, `ended_utc` | wall clock |
+| `duration_seconds` | (new) |
+| `result_file` | the AIOpsLab result file the grade was read from |
+
+`bridge.log` is the credential-holding process's own account of every action: timestamp,
+the session id the agent's transport sent, the bridge's port, the operation, the
+namespace, the decision (`served`, `failed`, `refused`, `unauthorized`), the HTTP status
+and the duration. Not the arguments or the output, which are large and are already in the
+agent's audit log; the point is a record independent of the process being audited. The
+prototype discarded this entirely.
+
+`kira-submission.json` holds the alert as posted, the terminal incident record, the
+encoded answer, and — for the analysis task — the answer's provenance: `source` is
+`model`, `normalized` or `fallback`, and `rule` names the hand-written rule when one
+overrode the model's classification. **An analysis accuracy reported without that split
+is the rules' accuracy reported as the agent's.** The same caution applies more strongly
+to the detection consistency guard and, weakly, to the localization suffix stripping.
+
+## Scope and research notes
+
+- The problem id is retained only by AIOpsLab, for setup and grading. It never enters the
+  alert or any prompt. The one thing that does cross is the moment fault injection began,
+  so the agent can separate deployment noise from the observation window.
+- AIOpsLab sees one outer adapter action (`submit(...)`); internal multi-agent steps and
+  tool calls are audited in this agent's session store. Consequently, AIOpsLab's `steps`
+  and token counters are not directly comparable to its native single-LLM clients. Use
+  the agent-run ledger for process-cost comparisons.
+- Docker-backed Flower problems are intentionally rejected. They fall outside this
+  Kubernetes agent's tool/RBAC/HITL model; silently granting Docker socket or host shell
+  access would be an unsafe and thesis-confounding extension.
+- AIOpsLab deploys no Loki, so the log tools are withdrawn from every role before the run
+  and the reason is recorded. Logs stay reachable through scoped `kubectl logs`, which is
+  what the role prompts already say.
+- MongoDB access recovery is a narrow allowlisted action, not arbitrary exec, and it still
+  passes the approval gate. `probe_service` is available to verification only, and cannot
+  run an in-container command or mutate anything.
+- What verification is told to probe comes from the adapter's own configuration
+  (`connectivity_contracts`, keyed by namespace), not from the incident: a reliable
+  user-facing Service is deployment metadata, and verification stays blind to the causal
+  answer.
+- The embedded store is fine for a smoke run. Use the PostgreSQL backend for a campaign
+  whose retrieval state has to outlive a container.
