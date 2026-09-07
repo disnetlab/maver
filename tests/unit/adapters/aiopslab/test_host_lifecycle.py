@@ -295,8 +295,12 @@ def fake_aiopslab(monkeypatch: pytest.MonkeyPatch, class_name: str) -> dict[str,
     return seen
 
 
-def driver_args(server: FakeAgent) -> argparse.Namespace:
-    """Parse a real command line, so the defaults the host runs with are the ones here."""
+def driver_args(server: FakeAgent, results_dir: Any) -> argparse.Namespace:
+    """Parse a real command line, so the defaults the host runs with are the ones here.
+
+    The results directory is the one exception: the default is a host path, and the run
+    writes its two records there.
+    """
     return main_module._parser().parse_args(
         [
             "run",
@@ -310,6 +314,8 @@ def driver_args(server: FakeAgent) -> argparse.Namespace:
             "0",
             "--poll-seconds",
             "0.01",
+            "--results-dir",
+            str(results_dir),
         ]
     )
 
@@ -319,7 +325,11 @@ def driver_args(server: FakeAgent) -> argparse.Namespace:
     [("DetectionTask", False, "diagnose"), ("MitigationTask", True, "full")],
 )
 async def test_a_read_only_task_serves_a_bridge_that_cannot_write(
-    monkeypatch: pytest.MonkeyPatch, class_name: str, expect_writes: bool, expect_stage: str
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+    class_name: str,
+    expect_writes: bool,
+    expect_stage: str,
 ) -> None:
     """The bridge's write authority comes from the graded task, not from the request.
 
@@ -337,7 +347,7 @@ async def test_a_read_only_task_serves_a_bridge_that_cannot_write(
     monkeypatch.setattr(lifecycle_module, "BridgeBackend", record)
 
     with fake_agent([{"run_status": "completed", "status": "tentative_success", **ANOMALY}]) as srv:
-        result = await lifecycle_module.run(driver_args(srv))
+        result = await lifecycle_module.run(driver_args(srv, tmp_path))
         posted = srv.posted[0]
 
     assert backends[0]["allow_writes"] is expect_writes
@@ -353,6 +363,7 @@ async def test_a_read_only_task_serves_a_bridge_that_cannot_write(
 
 async def test_the_analysis_provenance_is_recorded_next_to_the_answer(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
 ) -> None:
     """Reporting an analysis score without it reports the adapter's rules as the agent's."""
     fake_aiopslab(monkeypatch, "AnalysisTask")
@@ -366,7 +377,7 @@ async def test_the_analysis_provenance_is_recorded_next_to_the_answer(
     }
 
     with fake_agent([record]) as server:
-        result = await lifecycle_module.run(driver_args(server))
+        result = await lifecycle_module.run(driver_args(server, tmp_path))
 
     assert result["analysis_answer"] == {
         "system_level": "Virtualization",

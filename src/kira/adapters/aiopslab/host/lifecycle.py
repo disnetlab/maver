@@ -9,6 +9,13 @@ the run to finish, so the whole multi-agent pipeline sits inside a single
 Everything the agent is told about the problem travels in the alert, and the problem id
 is not in it. The one thing that does cross is a timestamp: the moment fault injection
 began, recorded by wrapping a lifecycle method AIOpsLab already calls.
+
+One problem leaves two records of its own beside AIOpsLab's result file: ``bridge.log``,
+which is the credential-holding process's account of every cluster action, and
+``kira-submission.json``, which is what was asked of the agent and what was submitted for
+it. The second exists because the encoded answer is not always the agent's own: the
+analysis mapper's hand-written rules override the model's classification, and an accuracy
+figure that cannot separate the two reports the rules' accuracy as the agent's.
 """
 
 import argparse
@@ -31,6 +38,8 @@ from .mapping import (
 )
 
 __all__ = [
+    "BRIDGE_LOG_NAME",
+    "SUBMISSION_RECORD_NAME",
     "AIOpsLabAgentAdapter",
     "instrument_observation_window",
     "kubernetes_namespace",
@@ -43,6 +52,22 @@ log = logging.getLogger("aiopslab-driver")
 
 _TASKS = ("detection", "localization", "analysis", "mitigation")
 _MINIMUM_TOKEN_LENGTH = 16
+
+BRIDGE_LOG_NAME = "bridge.log"
+"""The host side's own account of every cluster action, in the problem's results dir."""
+
+SUBMISSION_RECORD_NAME = "kira-submission.json"
+"""What was asked and what was answered, in the problem's results dir.
+
+Named here rather than where it is written because the sweep has to skip it when it looks
+for the newest result file: it is written after AIOpsLab's, and grading it would read
+`unknown` for a problem the harness has already graded.
+"""
+
+
+def _now() -> str:
+    """UTC to the second, spelled the way the alert and both records spell it."""
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def instrument_observation_window(registry: Any, marker: dict[str, str]) -> None:
@@ -64,9 +89,7 @@ def instrument_observation_window(registry: Any, marker: dict[str, str]) -> None
         original_inject = problem.inject_fault
 
         def instrumented_inject() -> Any:
-            marker["started_at"] = (
-                datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
-            )
+            marker["started_at"] = _now()
             return original_inject()
 
         problem.inject_fault = instrumented_inject
@@ -231,6 +254,7 @@ class AIOpsLabAgentAdapter:
         self.instructions = ""
         self.actions: dict[str, str] = {}
         self.incident_id: str | None = None
+        self.alert: dict[str, Any] | None = None
         self.incident_record: dict[str, Any] | None = None
         self.analysis_answer: dict[str, str | None] | None = None
         self.action: str | None = None
@@ -267,7 +291,7 @@ class AIOpsLabAgentAdapter:
         """
         if self.action is not None:
             return self.action
-        alert = build_alert(
+        self.alert = build_alert(
             self.task_type,
             self.namespace,
             self.problem_description,
@@ -277,7 +301,7 @@ class AIOpsLabAgentAdapter:
         accepted = await asyncio.to_thread(
             _post_json,
             f"{self.agent_url}/api/v1/incidents",
-            {"alert": alert, "target_stage": target_stage},
+            {"alert": self.alert, "target_stage": target_stage},
             timeout=30,
         )
         self.incident_id = str(accepted["session_id"])
@@ -311,6 +335,47 @@ class AIOpsLabAgentAdapter:
             await asyncio.sleep(self.poll_seconds)
 
 
+def write_submission_record(
+    results_dir: Path,
+    *,
+    problem: str,
+    task: str,
+    namespace: str,
+    adapter: "AIOpsLabAgentAdapter",
+    started_utc: str,
+) -> Path:
+    """Record what was asked of the agent and what was submitted for it.
+
+    Args:
+        results_dir: The problem's results directory.
+        problem: The AIOpsLab problem id, which stays on this side of the wire.
+        task: The graded task type.
+        namespace: The namespace the problem deployed into.
+        adapter: The facade that ran the episode.
+        started_utc: When the problem began.
+
+    Returns:
+        The path written.
+    """
+    record = {
+        "problem": problem,
+        "task_type": task,
+        "namespace": namespace,
+        "agent_incident_id": adapter.incident_id,
+        "alert": adapter.alert,
+        "incident_record": adapter.incident_record,
+        "submitted_action": adapter.action,
+        # Present for the analysis task alone, and carrying `source` and `rule`: the
+        # answer AIOpsLab grades is not always the one the model wrote.
+        "analysis_answer": adapter.analysis_answer,
+        "started_utc": started_utc,
+        "ended_utc": _now(),
+    }
+    path = results_dir / SUBMISSION_RECORD_NAME
+    path.write_text(json.dumps(record, indent=2, default=str), encoding="utf-8")
+    return path
+
+
 async def run(args: argparse.Namespace) -> dict[str, Any]:
     """Run one AIOpsLab problem to its graded result.
 
@@ -333,7 +398,10 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     # Imported only here so unit tests and the agent image do not need AIOpsLab.
     from aiopslab.orchestrator import Orchestrator  # type: ignore[import-not-found] # noqa: PLC0415
 
-    orchestrator = Orchestrator(results_dir=Path(args.results_dir))
+    results_dir = Path(args.results_dir)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    started_utc = _now()
+    orchestrator = Orchestrator(results_dir=results_dir)
     placeholder = object()
     orchestrator.register_agent(placeholder, name="kira")
     observation_window: dict[str, str] = {}
@@ -359,9 +427,23 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         allow_writes=task == "mitigation",
         prometheus_url=args.prometheus_url,
     )
-    with serve_bridge(backend, token, host=args.bridge_host, port=args.bridge_port):
+    with serve_bridge(
+        backend,
+        token,
+        host=args.bridge_host,
+        port=args.bridge_port,
+        access_log=results_dir / BRIDGE_LOG_NAME,
+    ):
         outcome = await orchestrator.start_problem(max_steps=1)
 
+    write_submission_record(
+        results_dir,
+        problem=args.problem,
+        task=task,
+        namespace=namespace,
+        adapter=adapter,
+        started_utc=started_utc,
+    )
     return {
         "aiopslab_session": orchestrator.session.to_dict(),
         "agent_incident_id": adapter.incident_id,

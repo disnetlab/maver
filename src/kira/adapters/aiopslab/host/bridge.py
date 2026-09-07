@@ -12,6 +12,11 @@ episode starts, so a read-only graded task cannot write whatever the request cla
 stage to be. The prototype gated the two extra actions on a client-supplied ``stage``
 alone, which re-reads a claim rather than deriving a fact; that check stays as a second,
 weaker one.
+
+So is the access log. The prototype's handler discarded it, so the process holding the
+kubeconfig kept no record of what it was asked to do and the agent's own audit log was
+the only account of every cluster action. :class:`AccessLog` writes one line per action
+from this side of the wire.
 """
 
 import hmac
@@ -24,7 +29,9 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, cast
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlsplit
@@ -32,7 +39,15 @@ from urllib.request import Request, urlopen
 
 from .mapping import _bounded_int
 
-__all__ = ["BridgeBackend", "BridgeHTTPServer", "serve_bridge"]
+__all__ = ["AccessLog", "BridgeBackend", "BridgeHTTPServer", "serve_bridge"]
+
+_SESSION_HEADER = "X-Kira-Session"
+"""What the agent's transport sends so its audit events join these lines.
+
+Spelled out rather than imported: the agent half that sends it is not importable here.
+Without the header the two logs share only a wall clock, and a timestamp join mis-mapped
+five sessions of six in one measured case.
+"""
 
 _BLOCKED_KUBECTL_FLAGS = {
     "-A",
@@ -588,6 +603,36 @@ class BridgeBackend:
             process.wait(timeout=5)
 
 
+class AccessLog:
+    """One JSON line per action, written by the process that holds the credential.
+
+    Appended to under a lock because the server is threaded, and reopened per line so a
+    sweep that is killed part-way through a problem still has every line before it.
+    """
+
+    def __init__(self, path: Path | str):
+        """Bind the log to a file.
+
+        Args:
+            path: File to append to. Its directory must already exist.
+        """
+        self._path = Path(path)
+        self._lock = threading.Lock()
+        # Created empty rather than on first use, so an episode in which the agent took
+        # no cluster action is distinguishable from one whose log was never wired up.
+        self._path.touch()
+
+    def record(self, **fields: Any) -> None:
+        """Append one line.
+
+        Args:
+            **fields: The line's contents, written as one compact JSON object.
+        """
+        line = json.dumps(fields, separators=(",", ":"), default=str)
+        with self._lock, self._path.open("a", encoding="utf-8") as handle:
+            handle.write(f"{line}\n")
+
+
 class _BridgeHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         """Answer the liveness probe the agent's transport preflights."""
@@ -601,26 +646,56 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         if self.path != "/v1/action":
             self.send_error(404)
             return
+        started = time.monotonic()
         supplied = self.headers.get("Authorization", "")
         expected = f"Bearer {self._server().token}"
         if not hmac.compare_digest(supplied, expected):
             self._json(401, {"ok": False, "result": "unauthorized"})
+            self._record(started, {}, 401, "unauthorized")
             return
+        payload: dict[str, Any] = {}
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if length <= 0 or length > 1_000_000:
                 raise ValueError("invalid request size")
-            payload = json.loads(self.rfile.read(length))
-            if not isinstance(payload, dict):
+            decoded = json.loads(self.rfile.read(length))
+            if not isinstance(decoded, dict):
                 raise ValueError("request body must be an object")
+            payload = decoded
             result = self._server().backend.dispatch(payload)
-            self._json(200, {"ok": not result.startswith("error:"), "result": result})
+            served = not result.startswith("error:")
+            self._json(200, {"ok": served, "result": result})
+            self._record(started, payload, 200, "served" if served else "failed")
         except Exception as exc:  # protocol errors are structured
             self._json(400, {"ok": False, "result": str(exc)})
+            self._record(started, payload, 400, "refused")
 
     def log_message(self, _format: str, *_args: Any) -> None:
         """Keep the harness's console for the episode, not for every tool call."""
         return
+
+    def _record(self, started: float, payload: dict[str, Any], status: int, decision: str) -> None:
+        """Write this side's account of one action, if the episode asked for one.
+
+        Deliberately not the arguments or the output: those are large, and the agent's
+        audit log already holds them. What only this side can say is what the process
+        holding the credential was asked to do, and what it decided.
+        """
+        access_log = self._server().access_log
+        if access_log is None:
+            return
+        server = str(payload.get("server") or "")
+        tool = str(payload.get("tool") or "")
+        access_log.record(
+            timestamp=datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            session=self.headers.get(_SESSION_HEADER, ""),
+            port=int(self._server().server_address[1]),
+            op=f"{server}.{tool}" if server or tool else "",
+            namespace=str(payload.get("namespace") or ""),
+            decision=decision,
+            status=status,
+            duration_ms=round((time.monotonic() - started) * 1000, 1),
+        )
 
     def _server(self) -> "BridgeHTTPServer":
         return cast("BridgeHTTPServer", self.server)
@@ -639,17 +714,26 @@ class BridgeHTTPServer(ThreadingHTTPServer):
 
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], backend: BridgeBackend, token: str):
+    def __init__(
+        self,
+        address: tuple[str, int],
+        backend: BridgeBackend,
+        token: str,
+        access_log: AccessLog | None = None,
+    ):
         """Bind the server.
 
         Args:
             address: Host and port to bind. Loopback in every deployment.
             backend: The dispatcher for the active problem.
             token: The bearer token every action must present.
+            access_log: Where to record each action. None keeps the prototype's
+                behaviour of recording nothing, which is what the unit tests want.
         """
         super().__init__(address, _BridgeHandler)
         self.backend = backend
         self.token = token
+        self.access_log = access_log
 
 
 @contextmanager
@@ -659,6 +743,7 @@ def serve_bridge(
     *,
     host: str = "127.0.0.1",
     port: int = 1819,
+    access_log: Path | str | None = None,
 ) -> Iterator[BridgeHTTPServer]:
     """Serve the bridge for the lifetime of one problem.
 
@@ -667,6 +752,7 @@ def serve_bridge(
         token: The bearer token every action must present.
         host: Address to bind.
         port: Port to bind. Zero takes an ephemeral one, which tests use.
+        access_log: File to append one line per action to. Its directory must exist.
 
     Yields:
         The running server.
@@ -677,7 +763,9 @@ def serve_bridge(
     """
     if not token:
         raise ValueError("bridge bearer token must not be empty")
-    server = BridgeHTTPServer((host, port), backend, token)
+    server = BridgeHTTPServer(
+        (host, port), backend, token, AccessLog(access_log) if access_log else None
+    )
     thread = threading.Thread(target=server.serve_forever, name="aiopslab-bridge", daemon=True)
     thread.start()
     try:
