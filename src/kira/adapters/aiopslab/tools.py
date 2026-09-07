@@ -22,7 +22,7 @@ enough to let a diagnostic role mutate a database.
 """
 
 import re
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol, cast
 
 from kira.adapters.aiopslab.config import ADAPTER_NAME, AiopsLabConfig
@@ -153,7 +153,7 @@ async def _probe_service(ctx: ToolContext, service: str, path: str, port: int | 
     )
 
 
-def _restore_mongodb_access(config: AiopsLabConfig) -> Any:
+def _restore_mongodb_access(config: AiopsLabConfig) -> Callable[..., Awaitable[str]]:
     """Build the recovery dispatch against the pairs this deployment configured.
 
     Args:

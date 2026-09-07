@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from kira.adapters.aiopslab.config import AiopsLabConfig
-from kira.adapters.base import RoleOverlay
+from kira.adapters.base import RoleOverlay, SubmitGuard
 from kira.audit.journal import Journal
 from kira.contracts.state import IncidentState
 from kira.prompts.loader import read_asset, render
@@ -222,7 +222,7 @@ def _claims_no(args: Mapping[str, Any]) -> bool:
 
 def _detection_consistency_guard(
     alert: Mapping[str, Any], state: IncidentState, transport: ToolTransport | None
-) -> Any:
+) -> SubmitGuard:
     """Reject a No submission that contradicts post-boundary live evidence.
 
     This is a benchmark-semantics consistency check, not an answer oracle: it compares
@@ -239,6 +239,7 @@ def _detection_consistency_guard(
         The guard, bound to this incident.
     """
     workdir = Path(state.get("incident_dir") or tempfile.gettempdir())
+    session_id = str(state.get("session_id") or "")
 
     async def guard(args: dict[str, Any], _calls: int, _messages: list[Any]) -> str | None:
         # A "Yes" is never second-guessed, and the snapshot is not even read for one:
@@ -247,7 +248,7 @@ def _detection_consistency_guard(
         # and a minute of wall clock spent to change nothing.
         if not _claims_no(args):
             return None
-        live = await _live_snapshot(alert, workdir, transport)
+        live = await _live_snapshot(alert, workdir, session_id, transport)
         decisive = next(
             (line.strip() for line in live.splitlines() if _BOUNDARY_MARKER in line), None
         )
@@ -259,7 +260,7 @@ def _detection_consistency_guard(
 
 
 async def _live_snapshot(
-    alert: Mapping[str, Any], workdir: Path, transport: ToolTransport | None
+    alert: Mapping[str, Any], workdir: Path, session_id: str, transport: ToolTransport | None
 ) -> str:
     """Read the incident namespace as the diagnosing role's own snapshot renders it.
 
@@ -271,6 +272,7 @@ async def _live_snapshot(
     Args:
         alert: The incident's alert payload.
         workdir: The directory this incident already owns.
+        session_id: The incident this read belongs to.
         transport: The bridge to read through, or None.
 
     Returns:
@@ -289,8 +291,8 @@ async def _live_snapshot(
         # creates nothing of its own to clean up.
         workspace=SessionWorkspace(workdir),
         role="rca",
-        session_id="",
-        journal=Journal(session_id="", stage="rca"),
+        session_id=session_id,
+        journal=Journal(session_id=session_id, stage="rca"),
         # The boundary line the guard reads exists only when the scope carries the
         # incident's observation window and names the namespace being snapshotted.
         scope=IncidentScope.from_alert(alert),
