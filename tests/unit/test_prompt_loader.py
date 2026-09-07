@@ -1,5 +1,6 @@
 """Prompt asset loading and strict composition."""
 
+import importlib
 import pathlib
 from hashlib import sha256
 from pathlib import Path
@@ -91,8 +92,35 @@ class TestAssets:
         """The prototype refused this and the three readers layered above still do; the
         one they funnel through lost it. It is reachable through the roles entry point,
         where a third party's RoleSpec.prompt would be read into a system prompt."""
-        with pytest.raises(PromptError, match="escapes the package"):
+        with pytest.raises(PromptError, match=r"escapes kira\.prompts"):
             read_asset("../../../pyproject.toml")
+
+    def test_an_asset_ships_in_another_package_and_is_read_the_same_way(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An environment adapter ships its prompts inside its own package.
+
+        It reads them through this function rather than a second one, so what it gets
+        is what the core gets: the same strip on load, the same containment check, and
+        the same two-way strict render — a renamed marker fails loudly instead of
+        shipping a literal `{{TASK_TYPE}}` to the model.
+        """
+        package = tmp_path / "kira_asset_anchor_probe"
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "contract.txt").write_text("Answer the {{TASK_TYPE}} task.\n", encoding="utf-8")
+        monkeypatch.syspath_prepend(str(tmp_path))
+        importlib.invalidate_caches()
+
+        anchor = "kira_asset_anchor_probe"
+        template = read_asset("contract.txt", package=anchor)
+
+        assert template == "Answer the {{TASK_TYPE}} task."
+        assert render(template, {"TASK_TYPE": "detection"}) == "Answer the detection task."
+        with pytest.raises(PromptError, match="no value supplied"):
+            render(template, {})
+        with pytest.raises(PromptError, match="escapes kira_asset_anchor_probe"):
+            read_asset("../pyproject.toml", package=anchor)
 
     def test_an_override_is_read_from_outside_the_package(self, tmp_path: Path) -> None:
         target = tmp_path / "rca.txt"

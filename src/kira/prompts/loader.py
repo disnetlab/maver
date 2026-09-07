@@ -21,6 +21,7 @@ from importlib.resources import files
 from pathlib import Path
 
 __all__ = [
+    "PROMPT_PACKAGE",
     "PromptError",
     "compose_role_prompt",
     "overridden_roles",
@@ -59,12 +60,20 @@ class PromptError(RuntimeError):
     """A prompt asset is missing, or a template and its values disagree."""
 
 
+PROMPT_PACKAGE = "kira.prompts"
+"""Where a prompt asset is read from unless the caller names another package."""
+
+
 @cache
-def read_asset(relative_path: str) -> str:
-    """Read a prompt asset shipped inside the package.
+def read_asset(relative_path: str, *, package: str = PROMPT_PACKAGE) -> str:
+    """Read a prompt asset shipped inside a package.
 
     Args:
-        relative_path: Path under ``kira/prompts``, using forward slashes.
+        relative_path: Path under the package, using forward slashes.
+        package: The package the path is anchored at. An environment adapter ships its
+            own prompts inside its own package and reads them through this function
+            rather than a second one, so the containment check above and the strict
+            rendering below apply to them exactly as they do to the core's.
 
     Returns:
         The asset's text.
@@ -72,14 +81,14 @@ def read_asset(relative_path: str) -> str:
     Raises:
         PromptError: When the path leaves the package, or the asset does not exist.
     """
-    resource = files("kira.prompts")
+    resource = files(package)
     for part in relative_path.split("/"):
         # Containment lives here rather than in the three readers layered above,
         # because this is the one they all funnel through and the one a third-party
         # RoleSpec.prompt reaches: an escaping name is read straight into a system
         # prompt.
         if not part or part == ".." or part.startswith("."):
-            raise PromptError(f"prompt path escapes the package: {relative_path!r}")
+            raise PromptError(f"prompt path escapes {package}: {relative_path!r}")
         resource = resource / part
     try:
         # Stripped on load, matching the prototype's own loader. Every asset ships with
