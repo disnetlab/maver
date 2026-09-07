@@ -165,6 +165,9 @@ def main():
         print(json.dumps(FIXTURES["pods"]))
     elif args[:2] == ["get", "events"]:
         print(FIXTURES["oversized"])
+    elif "pod/does-not-exist" in args:
+        print('Error from server (NotFound): pods "does-not-exist" not found', file=sys.stderr)
+        sys.exit(1)
     elif args[:1] == ["exec"]:
         print("Privilege restored successfully")
     elif args[:2] == ["rollout", "restart"]:
@@ -563,6 +566,24 @@ async def test_both_extra_actions_are_refused_on_a_read_only_task(wire: Wire) ->
     assert recovery == (
         "error: MongoDB recovery is not permitted: this AIOpsLab task is graded read-only"
     )
+
+
+async def test_a_command_that_ran_and_failed_reaches_the_loop_as_a_failed_call(
+    wire: Wire,
+) -> None:
+    """The two halves picked the same failure vocabulary independently, and the loop
+    reads it: the bridge writes its own ``error:`` for a command that exited non-zero,
+    and the transport stamps a refused action with one of its own. That doubles the
+    prefix, which is what the prototype did and what the prompts were written against,
+    so it is pinned rather than tidied — and the recogniser reads it as one failure
+    either way, so a refused bridge action counts against the repeat breaker exactly
+    like every other error.
+    """
+    with wire() as transport:
+        answer = await transport.kubectl(["describe", "pod/does-not-exist", "-n", NAMESPACE])
+
+    assert answer == ('error: error: Error from server (NotFound): pods "does-not-exist" not found')
+    assert call_failed(answer)
 
 
 async def test_an_action_the_bridge_does_not_serve_is_named_rather_than_dropped(
