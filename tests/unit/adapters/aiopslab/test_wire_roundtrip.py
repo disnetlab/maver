@@ -2,8 +2,9 @@
 
 The bridge and the transport were written from one written description without either
 author seeing the other's code, and every other test of them stubs the half it is not
-testing. A stub agrees with the mistake its author made, and neither suite could see
-a disagreement about what the other half puts on the wire.
+testing. A stub agrees with the mistake its author made: the transport's own suite
+answers ``get_alerts`` with a bare JSON list, which is not what the host code in this
+repository sends, and no test either side could see that.
 
 So nothing here is stubbed at the wire. The real ``serve_bridge`` runs on an ephemeral
 loopback port and the real ``AiopsLabTransport`` talks to it. What is replaced is only
@@ -34,6 +35,7 @@ import pytest
 from kira.adapters.aiopslab.host.bridge import BridgeBackend, serve_bridge
 from kira.adapters.aiopslab.transport import AiopsLabTransport
 from kira.tools.errors import call_failed
+from kira.tools.metrics import _parse_alerts, partition_incident_alerts
 from kira.tools.snapshot import _load_items
 from kira.tools.traces import _filter_traces_to_candidates, _parse_structured
 
@@ -403,6 +405,23 @@ async def test_a_metric_query_comes_back_as_the_literal_the_delivery_layer_carri
         answer = await transport.query_metrics('up{job="geo"}')
 
     assert ast.literal_eval(answer) == METRIC_DATA
+
+
+async def test_firing_alerts_come_back_in_the_shape_the_partitioning_reads(wire: Wire) -> None:
+    """The partitioning parses with ``ast.literal_eval`` alone and, when it cannot,
+    returns the payload untouched — so an unreadable shape reaches the model unscoped
+    and unlabelled, with nothing anywhere to say that it happened.
+
+    The bridge sends Prometheus's ``data`` object and the alerts are one key inside it,
+    which is not what either half's own suite stubs: the transport's answers this action
+    with a bare list, and the bridge's replaces the fetch entirely."""
+    with wire() as transport:
+        answer = await transport.query_alerts()
+
+    assert _parse_alerts(answer) == ALERTS
+    partitioned = partition_incident_alerts(NAMESPACE, answer)
+    assert partitioned.startswith(f"INCIDENT-SCOPED firing alerts for namespace {NAMESPACE!r}:")
+    assert "OUT-OF-SCOPE firing alerts from other namespaces" in partitioned
 
 
 async def test_the_service_catalogue_is_the_list_of_names_the_scoping_intersects(

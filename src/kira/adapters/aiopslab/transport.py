@@ -224,10 +224,14 @@ class AiopsLabTransport:
     async def query_alerts(self) -> str:
         """Read the alerts the monitoring stack is currently firing.
 
+        The bridge answers with Prometheus's own ``data`` object, in which the alerts
+        are one key. Everything above reads the bare list the other two transports
+        return, so the envelope comes off here.
+
         Returns:
             The firing alerts, or a string beginning with ``error:``.
         """
-        return await self.action("prometheus", "get_alerts", {}, structured=True)
+        return await self.action("prometheus", "get_alerts", {}, structured=True, select="alerts")
 
     async def log_labels(self) -> str:
         """Report that this environment indexes no logs.
@@ -286,6 +290,7 @@ class AiopsLabTransport:
         arguments: Mapping[str, Any] | None = None,
         *,
         structured: bool = False,
+        select: str | None = None,
         stage: str | None = None,
     ) -> str:
         """POST one bridge action and render its answer.
@@ -305,6 +310,10 @@ class AiopsLabTransport:
             arguments: The action's arguments.
             structured: Whether the answer is a telemetry payload a consumer above
                 parses, and so should be re-rendered as a Python literal.
+            select: The one key to lift out of a structured answer's envelope, when the
+                backend wraps the payload the consumers above are written against. Part
+                of the encoding rather than of the query, so it is applied here, before
+                the bound: cutting the envelope first leaves nothing that parses.
             stage: The calling role, when the caller knows it better than this
                 transport does.
 
@@ -329,7 +338,7 @@ class AiopsLabTransport:
             body = _body(response)
             if not isinstance(body, dict):
                 return tool_error("AIOpsLab bridge returned a non-object response")
-            result = _bounded(str(body.get("result", "")), structured=structured)
+            result = _bounded(str(body.get("result", "")), structured=structured, select=select)
             if not body.get("ok", False):
                 return tool_error(result or "AIOpsLab bridge action failed")
             return result or "(empty AIOpsLab bridge response)"
@@ -372,24 +381,25 @@ def _body(response: httpx.Response) -> Any:
     return body
 
 
-def _bounded(result: str, *, structured: bool) -> str:
+def _bounded(result: str, *, structured: bool, select: str | None = None) -> str:
     """Render one answer as the model reads it: encoded, then bounded.
 
     Args:
         result: The bridge's text.
         structured: Whether it is a telemetry payload a consumer above parses.
+        select: The key to lift out of the payload's envelope, when it has one.
 
     Returns:
         The text, re-encoded when it is a structured payload and cut at the shared
         bound.
     """
-    text = _as_literal(result) if structured else result
+    text = _as_literal(result, select) if structured else result
     if len(text) <= _RESPONSE_LIMIT:
         return text
     return text[:_RESPONSE_LIMIT] + _TRUNCATION_MARKER
 
 
-def _as_literal(result: str) -> str:
+def _as_literal(result: str, select: str | None = None) -> str:
     """Re-render a JSON payload as the Python literal the consumers above parse.
 
     Idempotent: a payload the bridge already wrote as a ``repr`` is not JSON, so it is
@@ -397,11 +407,17 @@ def _as_literal(result: str) -> str:
 
     Args:
         result: The bridge's text.
+        select: The key to lift out of the payload when it is an object wrapping the
+            value the consumers read. Absent from the payload, it is not applied, so a
+            backend that answers with the bare value is rendered as it stands.
 
     Returns:
         The payload as a Python literal, or the text unchanged.
     """
     try:
-        return repr(json.loads(result))
+        payload = json.loads(result)
     except (TypeError, ValueError, RecursionError):
         return result
+    if select is not None and isinstance(payload, dict) and select in payload:
+        payload = payload[select]
+    return repr(payload)
