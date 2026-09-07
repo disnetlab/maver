@@ -245,8 +245,13 @@ async def _attempt(args: argparse.Namespace, problem: str, results_dir: Path) ->
             return _HOST_TIMEOUT_EXIT, ""
         log.error("%s: the agent did not finish within its own timeout", problem)
         return 1, ""
-    except (RuntimeError, ValueError) as exc:
-        log.error("%s: %s", problem, exc)
+    except Exception:
+        # Every exception, because the sweep's job is to finish and to say what
+        # happened. A problem that raises something nobody anticipated — the harness's
+        # own teardown, a driver bug — is one error row and a retry, not an eight-hour
+        # sweep lost with every grade it had not yet written. Logged with its traceback,
+        # since this is the only place that failure is visible.
+        log.exception("%s failed", problem)
         return 1, ""
     return 0, str(result.get("agent_incident_id") or "")
 

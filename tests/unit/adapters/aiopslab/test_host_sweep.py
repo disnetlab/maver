@@ -104,7 +104,8 @@ class FakeHarness:
 
     An outcome of `pass` or `fail` writes the result file the harness would write;
     `crash` writes nothing and raises; `pass+crash` does both, which is the case the
-    retry rule exists for. The last outcome repeats once the script runs out.
+    retry rule exists for; `boom` raises something the driver does not expect. The last
+    outcome repeats once the script runs out.
     """
 
     def __init__(self, outcomes: dict[str, list[str]] | None = None) -> None:
@@ -165,6 +166,8 @@ def install_fake_aiopslab(monkeypatch: pytest.MonkeyPatch, harness: FakeHarness)
                 path.write_text(json.dumps({"results": results}), encoding="utf-8")
             if outcome.endswith("crash"):
                 raise RuntimeError("AIOpsLab teardown failed")
+            if outcome == "boom":
+                raise KeyError("something nobody anticipated")
             return {"action": action}
 
     package = types.ModuleType("aiopslab")
@@ -515,3 +518,27 @@ async def test_a_second_sweep_on_the_same_host_is_refused(
             )
     finally:
         holder.close()
+
+
+async def test_one_problem_raising_does_not_end_the_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An eight-hour sweep must not be lost to one problem nobody anticipated."""
+    caplog.set_level("INFO")
+    harness = FakeHarness({"a-mitigation-1": ["boom"]})
+    install_fake_aiopslab(monkeypatch, harness)
+    sweep_dir = tmp_path / "sweep"
+    listed = problems_file(tmp_path, "a-mitigation-1", "b-mitigation-1")
+
+    with fake_agent() as server:
+        code = await sweep_module.run_sweep(
+            sweep_args(server, sweep_dir, problems=str(listed), max_attempts="1")
+        )
+
+    rows = {row["problem"]: row for row in status_rows(sweep_dir)}
+
+    assert code == 0
+    assert rows["a-mitigation-1"]["grade"] == "error"
+    assert rows["a-mitigation-1"]["exit_code"] == "1"
+    assert rows["b-mitigation-1"]["grade"] == "pass"
+    assert "something nobody anticipated" in caplog.text
