@@ -32,8 +32,8 @@ from kira.llm.types import Message
 from kira.prompts.loader import compose_role_prompt, read_runtime, render
 from kira.roles.base import RoleContext, RoleOutcome, RoleSpec
 from kira.roles.loop import run_until_submit
-from kira.roles.policy import LoopLimits, role_system_prompt
-from kira.roles.prompting import retrieval_enabled
+from kira.roles.policy import LoopLimits, overlay_guard, role_system_prompt
+from kira.roles.prompting import overlay_context, overlay_system, retrieval_enabled
 from kira.roles.registry import role
 
 __all__ = ["LEARNING", "Trigger", "load_trigger"]
@@ -94,7 +94,7 @@ def _system_prompt(ctx: RoleContext, *, verify_live: bool) -> str:
     ]
     if verify_live:
         parts.append(read_runtime("learning", "live_recovery_verification.txt"))
-    return role_system_prompt("\n\n---\n\n".join(parts))
+    return role_system_prompt(overlay_system("\n\n---\n\n".join(parts), ctx.overlay))
 
 
 async def _run(ctx: RoleContext) -> RoleOutcome:
@@ -111,7 +111,7 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
     )
     if external:
         content += "\n\n" + read_runtime("learning", "external_feedback_guidance.txt")
-    initial: list[Message] = [{"role": "user", "content": content}]
+    initial: list[Message] = [{"role": "user", "content": overlay_context(content, ctx.overlay)}]
 
     trigger = load_trigger(POST_INCIDENT, ctx.settings.memory.learning_config_dir)
     result = await run_until_submit(
@@ -124,13 +124,16 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         dispatch=ctx.toolset.dispatch,
         submit_tool=ctx.spec.submit_tool,
         messages=initial,
-        limits=LoopLimits.from_settings(ctx.settings.runtime, max_turns=trigger.max_turns),
+        limits=LoopLimits.from_settings(
+            ctx.settings.runtime, max_turns=trigger.max_turns, overlay=ctx.overlay
+        ),
         session_id=ctx.session_id,
         journal=ctx.journal,
         middleware=ctx.middleware,
         tool_choice_mode=ctx.profile.quirks.tool_choice,
         keep_reasoning=ctx.profile.quirks.keep_reasoning,
         submit_validator=ctx.spec.submit_model.model_validate,
+        submit_guard=overlay_guard(None, ctx.overlay),
         serial_tool_calls=ctx.spec.serial_tool_calls,
     )
 

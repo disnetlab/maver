@@ -15,6 +15,7 @@ Two departures from the prototype, both deliberate:
 """
 
 import hashlib
+import inspect
 import json
 import math
 from collections.abc import Mapping, Sequence
@@ -22,6 +23,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from kira.adapters.base import RoleOverlay, SubmitGuard
 from kira.llm.types import Message, ToolCall
 from kira.prompts.loader import read_asset, render
 from kira.settings.groups import RuntimeSettings
@@ -41,6 +43,7 @@ __all__ = [
     "mixed_submit_message",
     "no_tool_nudge_message",
     "opening",
+    "overlay_guard",
     "repair_submission",
     "repeat_breaker_message",
     "role_system_prompt",
@@ -94,16 +97,23 @@ class LoopLimits:
     finalizer_assistant_chars: int = 6000
 
     @classmethod
-    def from_settings(cls, runtime: RuntimeSettings, *, max_turns: int) -> "LoopLimits":
-        """Build the limits from configuration.
+    def from_settings(
+        cls, runtime: RuntimeSettings, *, max_turns: int, overlay: RoleOverlay | None = None
+    ) -> "LoopLimits":
+        """Build the limits from configuration, and from what the environment allows.
 
         Args:
             runtime: The resolved runtime settings group.
             max_turns: The role's normal turn budget.
+            overlay: The bound environment's overlay, or None. Its budget is applied
+                with ``min``, so an environment can shorten a role's run and can never
+                lengthen one past what the deployment configured.
 
         Returns:
             The limits for one run.
         """
+        if overlay is not None and overlay.max_turns is not None:
+            max_turns = min(max_turns, overlay.max_turns)
         return cls(
             max_turns=max_turns,
             no_tool_nudges=runtime.no_tool_nudges,
@@ -549,6 +559,46 @@ def close_dangling_tool_calls(messages: list[Message]) -> list[Message]:
                 answered.add(call_id)
                 closed.append({"role": "tool", "tool_call_id": call_id, "content": note})
     return closed
+
+
+def overlay_guard(own: SubmitGuard | None, overlay: RoleOverlay | None) -> SubmitGuard | None:
+    """Put the environment's submit guard in front of the role's own.
+
+    The environment answers first because its refusal is about whether the answer suits
+    the question it asked, which the role's own guard cannot know. The first refusal is
+    the one returned, so a submission the environment accepts is still held to the
+    role's own policy.
+
+    None when neither exists, and the role's own when only that does. Both matter: the
+    loop reads the absence of a guard as a fact about the run, so a role that never had
+    one must not acquire an empty one.
+
+    Args:
+        own: The guard the role built for itself, if it has one.
+        overlay: The bound environment's overlay, or None.
+
+    Returns:
+        The guard to consult, or None when there is nothing to consult.
+    """
+    supplied = overlay.submit_guard if overlay is not None else None
+    if supplied is None:
+        return own
+    if own is None:
+        return supplied
+
+    async def composed(args: dict[str, Any], tool_calls_made: int, messages: list[Message]) -> Any:
+        # Awaited here rather than handed on. A guard that reads the live cluster is a
+        # coroutine, and a coroutine is truthy, so returning one unawaited would read as
+        # a refusal on every call and would never consult the role's own guard at all.
+        verdict = await _resolve(supplied(args, tool_calls_made, messages))
+        return verdict if verdict else await _resolve(own(args, tool_calls_made, messages))
+
+    return composed
+
+
+async def _resolve(verdict: Any) -> Any:
+    """Take a guard's answer, whether it looked at the cluster to reach it or not."""
+    return await verdict if inspect.isawaitable(verdict) else verdict
 
 
 def opening(ctx: "RoleContext", built: list[Message]) -> list[Message]:

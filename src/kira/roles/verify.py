@@ -32,8 +32,8 @@ from kira.prompts.loader import compose_role_prompt, read_runtime, render
 from kira.roles.base import RoleContext, RoleOutcome, RoleSpec
 from kira.roles.health_gate import HealthGate, sweep_namespace_health
 from kira.roles.loop import SubmitGuard, run_until_submit
-from kira.roles.policy import LoopLimits, opening, role_system_prompt
-from kira.roles.prompting import alert_json, retrieval_enabled
+from kira.roles.policy import LoopLimits, opening, overlay_guard, role_system_prompt
+from kira.roles.prompting import alert_json, overlay_context, overlay_system, retrieval_enabled
 from kira.roles.registry import role
 
 __all__ = ["VERIFY"]
@@ -103,16 +103,21 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         if namespace:
             gate = await sweep_namespace_health(ctx.tool_context, namespace)
 
-    initial: list[Message] = [{"role": "user", "content": _initial_message(ctx, gate)}]
+    initial: list[Message] = [
+        {"role": "user", "content": overlay_context(_initial_message(ctx, gate), ctx.overlay)}
+    ]
 
     result = await run_until_submit(
         model=ctx.completion,
         role=ctx.spec.name,
         system=role_system_prompt(
-            compose_role_prompt(
-                ctx.spec.prompt,
-                retrieval_enabled=retrieval_enabled(ctx),
-                override_dir=ctx.settings.prompts.override_dir,
+            overlay_system(
+                compose_role_prompt(
+                    ctx.spec.prompt,
+                    retrieval_enabled=retrieval_enabled(ctx),
+                    override_dir=ctx.settings.prompts.override_dir,
+                ),
+                ctx.overlay,
             )
         ),
         tools=ctx.toolset.definitions,
@@ -120,7 +125,9 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         submit_tool=ctx.spec.submit_tool,
         messages=opening(ctx, initial),
         limits=LoopLimits.from_settings(
-            ctx.settings.runtime, max_turns=ctx.settings.pipeline.max_turns
+            ctx.settings.runtime,
+            max_turns=ctx.settings.pipeline.max_turns,
+            overlay=ctx.overlay,
         ),
         session_id=ctx.session_id,
         journal=ctx.journal,
@@ -128,7 +135,7 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         tool_choice_mode=ctx.profile.quirks.tool_choice,
         keep_reasoning=ctx.profile.quirks.keep_reasoning,
         submit_validator=ctx.spec.submit_model.model_validate,
-        submit_guard=_build_submit_guard(gate),
+        submit_guard=overlay_guard(_build_submit_guard(gate), ctx.overlay),
         serial_tool_calls=ctx.spec.serial_tool_calls,
     )
 

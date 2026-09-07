@@ -17,6 +17,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from kira.adapters.base import RoleOverlay
 from kira.audit.journal import Journal
 from kira.contracts.artifacts import LearningPacket
 from kira.contracts.routing import HandBack
@@ -109,6 +110,12 @@ class RoleContext:
     session_id: str
     memory: Retriever | None = None
     """None when this configuration has no experience store."""
+    overlay: RoleOverlay | None = None
+    """How the bound environment narrows this run, or None when nothing narrows it.
+
+    A role applies it where it composes its prompt, its opening message, its limits and
+    its guard, and never asks what supplied it. None is the ordinary case and every
+    application of it is byte-identical to not having the field at all."""
     assignment: str = ""
     """A brief the gated second pass hands this run, rendered into the role's own
     template. Empty on every ordinary run: only that mechanism has anything to assign,

@@ -59,6 +59,7 @@ def build_toolset(
     descriptions: Mapping[str, object] | None = None,
     capabilities: Sequence[str] | None = None,
     extras: Sequence[AdapterTool] = (),
+    drop: frozenset[str] = frozenset(),
 ) -> ResolvedToolset:
     """Resolve a role's tools against this run's environment and configuration.
 
@@ -70,6 +71,10 @@ def build_toolset(
         extras: Tools an environment adapter supplies, each carrying the roles allowed
             to see it. Unioned after the allowlist rather than named in it, because the
             core's allowlists must not carry the name of an environment's tool.
+        drop: Tools the environment withholds from this role, from its overlay. Dropped
+            before the run with the rest, so the model is never offered a tool the
+            environment will refuse: a tool that errors looks like a fault to work
+            around, and the model will try it again.
 
     Returns:
         The model-facing definitions, the dispatch map, and what was dropped.
@@ -99,6 +104,9 @@ def build_toolset(
         # A submit tool is never dropped. The loop terminates only by calling it, so a
         # run without one cannot end — it burns its whole budget and reports a timeout.
         if spec.safety != "submit":
+            if name in drop:
+                dropped[name] = "withheld by the environment"
+                continue
             if name in ctx.settings.disabled:
                 # A kill switch, and the reason submissions are exempt from it is the
                 # same reason they are exempt from everything else: a run with no way

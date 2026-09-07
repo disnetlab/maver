@@ -11,10 +11,18 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from kira.adapters.base import RoleOverlay
 from kira.prompts.loader import read_runtime
 from kira.roles.base import RoleContext
 
-__all__ = ["alert_json", "memory_guidance", "retrieval_enabled", "visible_alert"]
+__all__ = [
+    "alert_json",
+    "memory_guidance",
+    "overlay_context",
+    "overlay_system",
+    "retrieval_enabled",
+    "visible_alert",
+]
 
 
 def visible_alert(alert: Mapping[str, Any]) -> dict[str, Any]:
@@ -84,3 +92,41 @@ def memory_guidance(enabled: bool) -> str:
         The line with the trailing newline the template expects, or an empty string.
     """
     return read_runtime("shared", "memory_enabled.txt") + "\n" if enabled else ""
+
+
+def overlay_system(composed: str, overlay: RoleOverlay | None) -> str:
+    """Apply the environment's adjustment to a role's composed system prompt.
+
+    Args:
+        composed: What the role composed for itself.
+        overlay: The bound environment's overlay, or None.
+
+    Returns:
+        The replacement when the overlay names one, otherwise the composed prompt with
+        the suffix after a blank line. Byte-identical to ``composed`` when there is no
+        overlay, which is what keeps an unbound run comparable with the archive.
+    """
+    if overlay is None:
+        return composed
+    if overlay.system_replacement is not None:
+        return overlay.system_replacement
+    return f"{composed}\n\n{overlay.system_suffix}" if overlay.system_suffix else composed
+
+
+def overlay_context(content: str, overlay: RoleOverlay | None) -> str:
+    """Prepend the environment's context blocks to a role's opening message.
+
+    In front of the role's own text rather than after it, because a block that says
+    which Service to probe is only useful before the task it qualifies.
+
+    Args:
+        content: The opening message the role built for itself.
+        overlay: The bound environment's overlay, or None.
+
+    Returns:
+        The blocks and the message, separated by blank lines. Byte-identical to
+        ``content`` when there is no overlay or it carries no blocks.
+    """
+    if overlay is None or not overlay.context_blocks:
+        return content
+    return "\n\n".join([*overlay.context_blocks, content])

@@ -183,6 +183,9 @@ class StubAdapter:
     def extra_tools(self) -> tuple[Any, ...]:
         return ()
 
+    def role_overlay(self, role: str, state: Any) -> Any:
+        return None
+
     def routes(self) -> Any:
         return None
 

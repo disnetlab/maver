@@ -29,8 +29,13 @@ from kira.llm.types import Message, ToolSpec
 from kira.prompts.loader import compose_role_prompt, read_runtime, render
 from kira.roles.base import RoleContext, RoleOutcome, RoleSpec, StateDelta
 from kira.roles.loop import run_until_submit
-from kira.roles.policy import LoopLimits, close_dangling_tool_calls, role_system_prompt
-from kira.roles.prompting import alert_json
+from kira.roles.policy import (
+    LoopLimits,
+    close_dangling_tool_calls,
+    overlay_guard,
+    role_system_prompt,
+)
+from kira.roles.prompting import alert_json, overlay_context, overlay_system
 from kira.roles.registry import role
 from kira.roles.trace_summary import build_trace_summary
 
@@ -80,16 +85,21 @@ def _submitted_diagnosis(messages: list[Message]) -> tuple[SingleDiagnosis, list
 
 async def _run(ctx: RoleContext) -> RoleOutcome:
     system = role_system_prompt(
-        # No retrieval in this arm by construction: the allowlist carries no memory
-        # tools, so the composed prompt must not prescribe them either.
-        compose_role_prompt(
-            ctx.spec.prompt,
-            retrieval_enabled=False,
-            override_dir=ctx.settings.prompts.override_dir,
+        overlay_system(
+            # No retrieval in this arm by construction: the allowlist carries no memory
+            # tools, so the composed prompt must not prescribe them either.
+            compose_role_prompt(
+                ctx.spec.prompt,
+                retrieval_enabled=False,
+                override_dir=ctx.settings.prompts.override_dir,
+            ),
+            ctx.overlay,
         )
     )
     limits = LoopLimits.from_settings(
-        ctx.settings.runtime, max_turns=ctx.settings.pipeline.max_turns
+        ctx.settings.runtime,
+        max_turns=ctx.settings.pipeline.max_turns,
+        overlay=ctx.overlay,
     )
     shared: dict[str, Any] = {
         "model": ctx.completion,
@@ -99,6 +109,7 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         "session_id": ctx.session_id,
         "journal": ctx.journal,
         "middleware": ctx.middleware,
+        "submit_guard": overlay_guard(None, ctx.overlay),
         "tool_choice_mode": ctx.profile.quirks.tool_choice,
         "keep_reasoning": ctx.profile.quirks.keep_reasoning,
         "serial_tool_calls": ctx.spec.serial_tool_calls,
@@ -116,14 +127,17 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         diagnosis, diagnosis_transcript = continuation
         mitigation_opening: list[Message] = list(ctx.resume)
     else:
-        opening = render(
-            read_runtime("single", "diagnosis_task.txt"),
-            {
-                "INCIDENT_CONTEXT": render(
-                    read_runtime("single", "incident_context.txt"),
-                    {"ALERT_JSON": alert_json(ctx.state.get("alert") or {})},
-                )
-            },
+        opening = overlay_context(
+            render(
+                read_runtime("single", "diagnosis_task.txt"),
+                {
+                    "INCIDENT_CONTEXT": render(
+                        read_runtime("single", "incident_context.txt"),
+                        {"ALERT_JSON": alert_json(ctx.state.get("alert") or {})},
+                    )
+                },
+            ),
+            ctx.overlay,
         )
         diagnosis_run = await run_until_submit(
             role="single.diagnosis",

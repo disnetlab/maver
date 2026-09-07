@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from kira.adapters.base import AdapterTool
+from kira.adapters.base import AdapterTool, EnvironmentAdapter
 from kira.audit.journal import EventSink, Journal, NullSink, SequenceRegistry
 from kira.contracts import SCHEMA_VERSION
 from kira.contracts.events import InterventionEvent, StageEvent
@@ -131,6 +131,13 @@ class Deployment:
     environment, so it arrives here rather than being a rule the tools carry."""
     tool_extras: tuple[AdapterTool, ...] = ()
     """Tools an environment adapter supplies, each carrying the roles allowed them."""
+    adapter: EnvironmentAdapter | None = None
+    """The environment bound to every incident in this composition, or None.
+
+    Held so that a role can be narrowed for the environment it is running under. It is
+    the same instance the rest of the composition came from, because an overlay may read
+    what its episode acquired, and it is None whenever nothing is bound — which is what
+    makes an unbound run identical to one taken before this field existed."""
     sink: EventSink = field(default_factory=NullSink)
     sequences: SequenceRegistry = field(default_factory=SequenceRegistry)
     """The event position each session's journals share. Per deployment for the same
@@ -540,6 +547,15 @@ def _context_builder(
             withheld=state.get("withheld_record_ids", ()),
         )
 
+        # Asked once, before the role builds anything, so every application of it is
+        # downstream of one call. An adapter that overlays nothing answers None and the
+        # role is composed exactly as it would be with no environment at all.
+        overlay = (
+            deployment.adapter.role_overlay(spec.name, state)
+            if deployment.adapter is not None
+            else None
+        )
+
         resumed = pending_resume.pop(spec.name, None)
         return RoleContext(
             spec=spec,
@@ -563,12 +579,18 @@ def _context_builder(
                 on_error=record_hook_failures(journal),
             ),
             write_lock=deployment.write_lock,
-            toolset=build_toolset(spec.name, tools, extras=deployment.tool_extras),
+            toolset=build_toolset(
+                spec.name,
+                tools,
+                extras=deployment.tool_extras,
+                drop=overlay.drop_tools if overlay is not None else frozenset(),
+            ),
             tool_context=tools,
             journal=journal,
             run_id=run_id,
             session_id=state.get("session_id", ""),
             memory=tools.memory,
+            overlay=overlay,
             assignment=assignment,
             run_label=run_label,
             resume=resumed,

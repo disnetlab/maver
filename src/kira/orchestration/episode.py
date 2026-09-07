@@ -346,10 +346,14 @@ def _bind(deployment: Deployment, adapter: EnvironmentAdapter) -> Deployment:
     Everything the adapter supplies is bound here, once, so a role receives an
     environment rather than consulting one. A transport of None keeps the deployment's
     configured default, which is what an adapter with nothing to supply wants.
+
+    The adapter itself is bound too, so that a role run under this episode can be
+    narrowed by it. It is this instance rather than a fresh one, because an overlay may
+    depend on what :meth:`~kira.adapters.base.EnvironmentAdapter.acquire` learned.
     """
     transport = adapter.tool_transport()
     evidence = adapter.evidence_policy()
-    changes: dict[str, Any] = {"tool_extras": adapter.extra_tools()}
+    changes: dict[str, Any] = {"tool_extras": adapter.extra_tools(), "adapter": adapter}
     if transport is not None:
 
         def transport_for(session_id: str) -> ToolTransport:
