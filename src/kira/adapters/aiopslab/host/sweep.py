@@ -304,7 +304,8 @@ async def run_sweep(args: argparse.Namespace) -> int:
         await asyncio.to_thread(lifecycle.check_agent_reachable, args.agent_url)
 
         selected, excluded = select_problems(task_types, args.problems)
-        _write_manifest(sweep_dir, selected, excluded, task_types, args)
+        agent = await asyncio.to_thread(lifecycle.agent_identity, args.agent_url)
+        _write_manifest(sweep_dir, selected, excluded, task_types, args, agent)
         log.info(
             "sweep %s: %d problems to run, %d Docker-backed problems excluded",
             sweep_dir.name,
@@ -407,6 +408,7 @@ def _write_manifest(
     excluded: Sequence[str],
     task_types: Sequence[str],
     args: argparse.Namespace,
+    agent: dict[str, str],
 ) -> None:
     """Record what this sweep set out to do, and what it deliberately will not run."""
     (sweep_dir / "problem-list.txt").write_text(
@@ -419,6 +421,10 @@ def _write_manifest(
         "sweep_id": sweep_dir.name,
         "started_utc": lifecycle.utc_now(),
         "agent_url": args.agent_url,
+        # Which build answered, not which one was deployed: a container nobody recreated
+        # answers exactly like the one that was meant to replace it.
+        "agent_version": agent.get("version", ""),
+        "agent_revision": agent.get("revision", ""),
         "requested_task_types": ",".join(task_types),
         "problem_count": len(selected),
         "excluded_docker_problem_count": len(excluded),

@@ -41,6 +41,7 @@ __all__ = [
     "BRIDGE_LOG_NAME",
     "SUBMISSION_RECORD_NAME",
     "AIOpsLabAgentAdapter",
+    "agent_identity",
     "instrument_observation_window",
     "kubernetes_namespace",
     "resolve_bridge_token",
@@ -222,6 +223,29 @@ def check_agent_reachable(agent_url: str, *, timeout: float = 10) -> None:
             response.read(256)
     except (HTTPError, URLError, OSError) as exc:
         raise RuntimeError(f"agent not reachable at {url}: {exc}") from exc
+
+
+def agent_identity(agent_url: str, *, timeout: float = 10) -> dict[str, str]:
+    """Ask the agent which build is about to be graded.
+
+    Recorded by the sweep, because a compose file will not recreate a container it did
+    not build and a stale container answers exactly like the one that was deployed. A
+    result is attributable to a build or it is not.
+
+    Args:
+        agent_url: The agent's base URL.
+        timeout: Seconds to wait.
+
+    Returns:
+        The version and revision it reports, empty when it reports neither or cannot be
+        asked. Not a precondition: the check that the agent answers at all is
+        :func:`check_agent_reachable`.
+    """
+    try:
+        body = _get_json(f"{agent_url.rstrip('/')}/healthz", timeout=timeout)
+    except (HTTPError, URLError, OSError, ValueError):
+        return {}
+    return {key: str(body.get(key) or "") for key in ("version", "revision")}
 
 
 class AIOpsLabAgentAdapter:

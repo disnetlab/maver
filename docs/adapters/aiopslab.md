@@ -191,7 +191,8 @@ two arms.
 
 ```
 <sweep-dir>/
-  metadata.env                    what this sweep set out to do; completed_utc when done
+  metadata.env                    what this sweep set out to do, which build answered,
+                                  and completed_utc once it has
   problem-list.txt                the problems selected, with their task types
   excluded-docker-problems.txt    the Docker-backed problems, named rather than dropped
   status.tsv                      one row per problem

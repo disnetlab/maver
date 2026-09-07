@@ -55,7 +55,7 @@ class _AgentHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/healthz":
-            self._json({"status": "ok"})
+            self._json({"status": "ok", "version": "0.1.0", "revision": "abc123"})
             return
         self._json(TERMINAL_RECORD)
 
@@ -472,6 +472,7 @@ async def test_every_problem_gets_a_row_a_record_and_a_line_in_the_sweep_log(
     assert (problem_dir / "kira-submission.json").exists()
     assert (problem_dir / "bridge.log").exists()
     assert metadata["problem_count"] == "2"
+    assert metadata["agent_revision"] == "abc123"
     assert metadata["completed_utc"].endswith("Z")
     assert "finished misconfig-detection-1" in (sweep_dir / "sweep.log").read_text(encoding="utf-8")
 
