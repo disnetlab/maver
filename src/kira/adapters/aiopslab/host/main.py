@@ -1,4 +1,4 @@
-"""The driver's command line: run one problem, or check the host can run one.
+"""The driver's command line: run one problem, sweep every problem, or check the host.
 
 ``doctor`` exists because every one of its four checks has failed on a host at some
 point, and each failure looked like something else: an agent container that was not
@@ -13,8 +13,9 @@ import json
 import logging
 import os
 import shutil
+from pathlib import Path
 
-from . import lifecycle
+from . import lifecycle, sweep
 
 __all__ = ["main"]
 
@@ -31,17 +32,58 @@ def _parser() -> argparse.ArgumentParser:
         help="read the bearer token from this file instead of the environment",
     )
 
+    # What one problem costs, whether it arrives alone or inside a sweep. Shared so a
+    # sweep cannot drift from the single-problem command it runs.
+    episode = argparse.ArgumentParser(add_help=False)
+    episode.add_argument("--agent-timeout", type=float, default=7200)
+    episode.add_argument("--poll-seconds", type=float, default=2)
+    episode.add_argument("--bridge-host", default="127.0.0.1")
+    episode.add_argument("--bridge-port", type=int, default=1819)
+    episode.add_argument("--prometheus-url", default="http://127.0.0.1:32000")
+
     parser = argparse.ArgumentParser(prog="aiopslab-driver", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
 
-    runner = commands.add_parser("run", parents=[shared], help="run one AIOpsLab problem")
+    runner = commands.add_parser("run", parents=[shared, episode], help="run one AIOpsLab problem")
     runner.add_argument("--problem", required=True, help="AIOpsLab problem ID")
-    runner.add_argument("--agent-timeout", type=float, default=7200)
-    runner.add_argument("--poll-seconds", type=float, default=2)
-    runner.add_argument("--bridge-host", default="127.0.0.1")
-    runner.add_argument("--bridge-port", type=int, default=1819)
-    runner.add_argument("--prometheus-url", default="http://127.0.0.1:32000")
     runner.add_argument("--results-dir", default="/var/lib/aiopslab/results/kira")
+
+    sweeper = commands.add_parser(
+        "sweep", parents=[shared, episode], help="run every selected problem once, resumably"
+    )
+    sweeper.add_argument(
+        "--sweep-dir",
+        required=True,
+        help="this sweep's directory: results, status.tsv and sweep.log are written here, "
+        "and reusing it resumes the sweep",
+    )
+    sweeper.add_argument(
+        "--problems",
+        type=Path,
+        default=None,
+        help="a file of problem IDs, one per line; AIOpsLab's registry is read without it",
+    )
+    sweeper.add_argument(
+        "--task-types",
+        default=",".join(sweep.TASK_TYPES),
+        help="comma-separated graded task types to include",
+    )
+    sweeper.add_argument(
+        "--max-attempts",
+        type=int,
+        default=2,
+        help="attempts per problem; a result AIOpsLab graded is never retried",
+    )
+    sweeper.add_argument(
+        "--problem-timeout",
+        type=float,
+        default=7800,
+        help="seconds one problem may take, its deployment and grading included",
+    )
+    sweeper.add_argument("--retry-delay", type=float, default=15)
+    sweeper.add_argument(
+        "--rerun", action="store_true", help="run problems that already have a graded result"
+    )
 
     commands.add_parser("doctor", parents=[shared], help="check this host can run a problem")
     return parser
@@ -84,7 +126,8 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns:
         Zero on success. One for a failure the sweep should record and may retry,
-        which is every startup refusal and an incident that ran out of time.
+        which is every startup refusal and an incident that ran out of time. A sweep
+        returns zero once it has attempted every problem, whatever each of them did.
     """
     args = _parser().parse_args(argv)
     logging.basicConfig(
@@ -93,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "doctor":
         return _doctor(args)
     try:
+        if args.command == "sweep":
+            return asyncio.run(sweep.run_sweep(args))
         result = asyncio.run(lifecycle.run(args))
     except (RuntimeError, ValueError, TimeoutError) as exc:
         log.error("%s", exc)

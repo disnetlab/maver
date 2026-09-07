@@ -46,6 +46,7 @@ __all__ = [
     "resolve_bridge_token",
     "run",
     "task_type",
+    "utc_now",
 ]
 
 log = logging.getLogger("aiopslab-driver")
@@ -65,8 +66,12 @@ for the newest result file: it is written after AIOpsLab's, and grading it would
 """
 
 
-def _now() -> str:
-    """UTC to the second, spelled the way the alert and both records spell it."""
+def utc_now() -> str:
+    """Return UTC to the second, spelled the way the alert and both records spell it.
+
+    Returns:
+        An ISO-8601 timestamp ending in Z.
+    """
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
@@ -89,7 +94,7 @@ def instrument_observation_window(registry: Any, marker: dict[str, str]) -> None
         original_inject = problem.inject_fault
 
         def instrumented_inject() -> Any:
-            marker["started_at"] = _now()
+            marker["started_at"] = utc_now()
             return original_inject()
 
         problem.inject_fault = instrumented_inject
@@ -369,7 +374,7 @@ def write_submission_record(
         # answer AIOpsLab grades is not always the one the model wrote.
         "analysis_answer": adapter.analysis_answer,
         "started_utc": started_utc,
-        "ended_utc": _now(),
+        "ended_utc": utc_now(),
     }
     path = results_dir / SUBMISSION_RECORD_NAME
     path.write_text(json.dumps(record, indent=2, default=str), encoding="utf-8")
@@ -400,7 +405,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
-    started_utc = _now()
+    started_utc = utc_now()
     orchestrator = Orchestrator(results_dir=results_dir)
     placeholder = object()
     orchestrator.register_agent(placeholder, name="kira")
