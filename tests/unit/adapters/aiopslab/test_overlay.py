@@ -35,6 +35,26 @@ REJECTION = (
 """Carried word for word from `agent/agents/rca.py:118-124`. Pinned here rather than
 read from the asset, because an asset compared against itself pins nothing."""
 
+SCOPE = (
+    "## AIOpsLab incident scope\n\n"
+    f"The active incident namespace is `{NAMESPACE}`. Inspect and mutate "
+    "only that namespace. Do not use another namespace, `-A`, or cluster-wide "
+    "discovery. If the plan names a different namespace, treat it as a plan defect "
+    "and hand back for replanning; do not try the command outside the active scope.\n\n"
+)
+"""Carried word for word from `agent/agents/execution.py:76-84`, up to the approval
+sentence, which the two tests below pin separately."""
+
+AUTOMATIC = (
+    "This run is non-interactive: an allowed mutation is automatically approved and "
+    "executes immediately. Call the narrow mutation directly; never ask for or wait for "
+    "approval."
+)
+DELEGATED = (
+    "Call an allowed mutation directly. Authorization is handled by the runtime; do not "
+    "ask for or manually wait on approval."
+)
+
 NO_SUBMISSION: dict[str, Any] = {
     "fault_type": "none",
     "affected_resource": "none",
@@ -178,6 +198,7 @@ def test_the_diagnosis_is_replaced_for_detection_and_qualified_for_the_rest() ->
         assert "{{" not in qualified.system_suffix
 
 
+@pytest.mark.parity
 def test_the_remediating_roles_are_told_what_the_bridge_will_refuse() -> None:
     """Both halves of the remediation carry the transport contract; only the one that
     writes is also told which namespace it is confined to and who authorises it."""
@@ -186,27 +207,21 @@ def test_the_remediating_roles_are_told_what_the_bridge_will_refuse() -> None:
 
     assert planning.startswith("## AIOpsLab remediation transport")
     assert "## AIOpsLab incident scope" not in planning
-    assert execution.startswith(planning)
-    assert f"The active incident namespace is `{NAMESPACE}`" in execution
+    assert execution == f"{planning}\n\n{SCOPE}{AUTOMATIC}"
 
 
+@pytest.mark.parity
 def test_the_approval_sentence_follows_the_deployments_own_authority() -> None:
     """An unattended run must not be told to wait for a human: it would spend its whole
     budget waiting for nobody."""
     unattended = overlay("execution", "mitigation", mode="auto").system_suffix
     supervised = overlay("execution", "mitigation", mode="prompt").system_suffix
 
-    assert unattended.endswith(
-        "This run is non-interactive: an allowed mutation is automatically approved and "
-        "executes immediately. Call the narrow mutation directly; never ask for or wait "
-        "for approval."
-    )
-    assert supervised.endswith(
-        "Call an allowed mutation directly. Authorization is handled by the runtime; do "
-        "not ask for or manually wait on approval."
-    )
+    assert unattended.endswith(f"{SCOPE}{AUTOMATIC}")
+    assert supervised.endswith(f"{SCOPE}{DELEGATED}")
 
 
+@pytest.mark.parity
 def test_the_connectivity_contract_is_given_only_for_an_application_we_deployed() -> None:
     """B2. Deployment metadata, keyed only by namespace: a Service to probe, and nothing
     about the incident's causal answer. A namespace no application was configured for has
@@ -224,6 +239,7 @@ def test_the_connectivity_contract_is_given_only_for_an_application_we_deployed(
     assert overlay("verify", "mitigation", namespace="some-other-namespace") is None
 
 
+@pytest.mark.parity
 def test_detection_withholds_exactly_three_tools_and_can_only_shorten_the_budget() -> None:
     """B15. Deep endpoint enumeration and local execution were the main sources of
     wandering calls in the detection transcript; localization and analysis keep them."""
@@ -238,6 +254,7 @@ def test_detection_withholds_exactly_three_tools_and_can_only_shorten_the_budget
     assert LoopLimits.from_settings(runtime, max_turns=4, overlay=detection).max_turns == 4
 
 
+@pytest.mark.parity
 async def test_the_guard_refuses_a_no_the_live_episode_contradicts() -> None:
     """B14, first case. An abnormal termination at or after the neutral boundary is an
     anomaly even though Kubernetes self-healed it, so the model is sent back to answer
@@ -254,6 +271,7 @@ async def test_the_guard_refuses_a_no_the_live_episode_contradicts() -> None:
     assert "geo-0" in decisive
 
 
+@pytest.mark.parity
 async def test_the_guard_accepts_a_no_with_nothing_after_the_boundary() -> None:
     """B14, second case. A termination the snapshot dated before the boundary is
     deployment history, and the guard has nothing to say about it."""
@@ -264,6 +282,7 @@ async def test_the_guard_accepts_a_no_with_nothing_after_the_boundary() -> None:
     assert bridge.reads, "the guard has to look before it can accept"
 
 
+@pytest.mark.parity
 async def test_the_guard_never_looks_at_the_cluster_to_confirm_a_yes() -> None:
     """B14, third case. It is a consistency check on a claim the evidence contradicts,
     not an oracle: an answer it would accept either way is not worth a cluster read."""

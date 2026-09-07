@@ -91,6 +91,7 @@ def test_the_gate_knows_the_recovery_writes_and_the_probe_does_not() -> None:
     )
 
 
+@pytest.mark.parity
 def test_the_probe_describes_itself_differently_to_the_role_that_holds_it() -> None:
     """An adapter's tool carries its own descriptions, since the shipped catalogue
     cannot name a tool that does not exist outside one environment."""
@@ -103,6 +104,7 @@ def test_the_probe_describes_itself_differently_to_the_role_that_holds_it() -> N
     assert default.startswith("AIOpsLab-only read-only HTTP probe.")
 
 
+@pytest.mark.parity
 async def test_the_probe_answers_only_to_verification(tmp_path: pathlib.Path) -> None:
     """The near half of the double check. The gate keys on the stage too, and a gate
     that was misconfigured or absent must not be enough to let another role open a
@@ -115,6 +117,7 @@ async def test_the_probe_answers_only_to_verification(tmp_path: pathlib.Path) ->
     assert bridge.actions == []
 
 
+@pytest.mark.parity
 @pytest.mark.parametrize(
     ("arguments", "refusal"),
     [
@@ -187,6 +190,7 @@ async def test_a_bounded_probe_reaches_the_bridge_as_a_verify_action(
     ]
 
 
+@pytest.mark.parity
 async def test_the_recovery_answers_only_to_remediation(tmp_path: pathlib.Path) -> None:
     bridge = FakeBridge()
 
@@ -196,6 +200,7 @@ async def test_the_recovery_answers_only_to_remediation(tmp_path: pathlib.Path) 
     assert bridge.actions == []
 
 
+@pytest.mark.parity
 @pytest.mark.parametrize(
     "arguments",
     [
