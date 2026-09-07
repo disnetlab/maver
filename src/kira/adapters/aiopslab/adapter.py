@@ -17,6 +17,8 @@ from importlib import import_module
 from typing import Any
 
 from kira.adapters.aiopslab.config import ADAPTER_NAME, AiopsLabConfig
+from kira.adapters.aiopslab.overlay import BENCHMARK, role_overlay
+from kira.adapters.aiopslab.tools import adapter_tools
 from kira.adapters.base import (
     AdapterTool,
     EpisodeContext,
@@ -44,13 +46,20 @@ class AiopsLabAdapter:
 
     name = ADAPTER_NAME
 
-    def __init__(self, config: AiopsLabConfig) -> None:
+    def __init__(self, config: AiopsLabConfig, *, authority_mode: str = "prompt") -> None:
         """Build the process-wide adapter.
 
         Args:
             config: This deployment's adapter configuration.
+            authority_mode: How this deployment decides a cluster write. Read once, at
+                composition, because it decides which of two approval sentences the
+                remediating role is given — and a role told to wait for a human on an
+                unattended run spends its budget waiting for nobody.
         """
         self._config = config
+        self._authority_mode = authority_mode
+        self._tools = adapter_tools(config)
+        self._transport: Any = None
 
     @property
     def config(self) -> AiopsLabConfig:
@@ -83,7 +92,15 @@ class AiopsLabAdapter:
             module = import_module("kira.adapters.aiopslab.transport")
         except ImportError as exc:
             raise ValueError(f"the aiopslab bridge transport is not available: {exc}") from exc
-        transport: ToolTransport = module.AiopsLabTransport(self._config)
+        token = self._config.bridge_token
+        transport: ToolTransport = module.AiopsLabTransport(
+            self._config.bridge_url,
+            token.get_secret_value() if token is not None else "",
+            timeout_s=self._config.bridge_timeout_s,
+        )
+        # Held, because this is the same object every incident's tools speak through and
+        # the overlay below has to point it at the incident it is about to serve.
+        self._transport = transport
         return transport
 
     def evidence_policy(self) -> EvidencePolicy | None:
@@ -100,21 +117,48 @@ class AiopsLabAdapter:
         """Supply the tools that exist only against this bridge.
 
         Returns:
-            Nothing yet.
+            The Service probe and the MongoDB recovery action, each carrying the one
+            role allowed to see it.
         """
-        return ()
+        return self._tools
 
     def role_overlay(self, role: str, state: IncidentState) -> RoleOverlay | None:
-        """Narrow a role to the task this episode is graded on.
+        """Point the bridge at this incident, then narrow the role to its graded task.
+
+        The binding happens here because this adapter is bound for the whole process:
+        one transport serves every incident, and the bridge refuses any action whose
+        namespace is not the active problem's. AIOpsLab deploys one problem at a time,
+        so pointing the transport at the incident whose role is about to run is correct
+        for the deployment it supports, and a second concurrent incident fails closed at
+        the bridge rather than reading across into another application's telemetry. The
+        deployment is documented as ``max_concurrent_incidents=1`` for that reason.
 
         Args:
             role: The role about to run.
             state: The incident as it stands, which carries the task type.
 
         Returns:
-            Nothing yet.
+            The overlay for this role and task, or None when the incident is not an
+            AIOpsLab one — in which case nothing here is touched at all.
         """
-        return None
+        alert = state.get("alert") or {}
+        if alert.get("benchmark") != BENCHMARK:
+            return None
+        if self._transport is not None:
+            self._transport.namespace = str(alert.get("namespace") or "")
+            self._transport.stage = role
+            # Assigned here for the same reason: the transport is built at startup, and
+            # the session it will run as is only known once an incident exists. Without
+            # it the agent's audit events and the bridge's access log share nothing but
+            # a wall clock, and a timestamp join mis-mapped five sessions of six once.
+            self._transport.session_id = str(state.get("session_id") or "")
+        return role_overlay(
+            role,
+            state,
+            config=self._config,
+            transport=self._transport,
+            authority_mode=self._authority_mode,
+        )
 
     def routes(self) -> Any | None:
         """Mount no episode route.

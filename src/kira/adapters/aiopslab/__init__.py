@@ -30,7 +30,7 @@ def _factory(settings: Settings) -> EnvironmentAdapter:
     token rather than a boolean, and reading a URL as a truthy flag would turn a
     half-configured deployment into an enabled one.
     """
-    return AiopsLabAdapter(AiopsLabConfig.resolve(settings))
+    return AiopsLabAdapter(AiopsLabConfig.resolve(settings), authority_mode=settings.authority.mode)
 
 
 ADAPTER = _factory
