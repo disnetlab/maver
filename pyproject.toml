@@ -166,6 +166,9 @@ ignore = [
 # The shared transport contract runs against both transports, and one of them is an
 # adapter's.
 "tests/contract/test_transport_mcp.py" = ["TID251"]
+# The AIOpsLab adapter's own tests, for the same two reasons.
+"tests/unit/adapters/aiopslab/*" = ["TID251"]
+"tests/contract/test_transport_aiopslab.py" = ["TID251"]
 "src/kira/prompts/*" = ["D"]
 # Field descriptions in the artifact schemas are shipped to the model as its
 # submission tool's JSON Schema and are carried over verbatim. Their typographic
