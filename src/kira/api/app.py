@@ -17,9 +17,11 @@ import logging
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import APIRouter, FastAPI
 
+from kira.adapters.base import EnvironmentAdapter
 from kira.adapters.registry import (
     get_adapter,
     legacy_selection,
@@ -46,7 +48,7 @@ from kira.orchestration.jobs import (
     schedule_approval_timeout,
     unbind_deployment,
 )
-from kira.orchestration.runner import Deployment
+from kira.orchestration.runner import Deployment, TransportFactory
 from kira.orchestration.scheduler import shutdown_scheduler
 from kira.roles.registry import load_plugin_roles, validate_roles
 from kira.secondpass.strategies import policy_for
@@ -137,8 +139,30 @@ def build_deployment(settings: Settings) -> Deployment:
     profile = load_profile(settings.model.profile, settings.model.profile_dir)
     storage = build_storage(settings)
 
-    def transport_for(session_id: str) -> ToolTransport:
+    def direct_for(session_id: str) -> ToolTransport:
         return direct_transport(settings.transport)
+
+    transport_for: TransportFactory = direct_for
+    environment = _process_bound_adapter(settings)
+    bound: dict[str, Any] = {}
+    if environment is not None:
+        transport = environment.tool_transport()
+        if transport is not None:
+
+            def bound_for(session_id: str) -> ToolTransport:
+                return transport
+
+            transport_for = bound_for
+        evidence = environment.evidence_policy()
+        if evidence is not None:
+            bound["evidence"] = evidence
+        bound["tool_extras"] = environment.extra_tools()
+        bound["adapter"] = environment
+        _log.info(
+            "environment adapter %s is bound for this process: every incident runs "
+            "under its transport, its tools and its role overlays",
+            environment.name,
+        )
 
     # What this process is actually running, in one line an operator reads in the pod's
     # log. A campaign is only reconstructible if that is recorded beside its results.
@@ -160,6 +184,7 @@ def build_deployment(settings: Settings) -> Deployment:
         # authority decision is meant to reach the ordered per-incident log, and a run
         # that built its events and dropped them is a run nobody can audit afterwards.
         sink=StoreSink(storage.runs),
+        **bound,
     )
 
 
@@ -314,6 +339,45 @@ def enabled_adapters(settings: Settings) -> frozenset[str]:
     """
     load_entry_point_adapters()
     return frozenset(settings.intake.adapters) | legacy_selection()
+
+
+def _process_bound_adapter(settings: Settings) -> EnvironmentAdapter | None:
+    """The environment every incident in this process runs under, if there is one.
+
+    An adapter is one of two shapes. It either mounts an episode route, in which case
+    an outside driver posts one episode at a time and the episode driver binds it for
+    the length of that episode; or it mounts none, in which case there is no episode to
+    bind and its incidents arrive through the generic intake like any other. The second
+    shape is bound here instead, once, for the process — which is what gives those
+    incidents its transport, its tools and its role overlays.
+
+    Its lifecycle half runs in whatever holds the environment, which for a benchmark
+    that drives us is its own driver process. This process never calls it, and the
+    methods say so rather than returning something plausible.
+
+    Args:
+        settings: The resolved configuration.
+
+    Returns:
+        The adapter to bind, or None when nothing is enabled or everything enabled
+        drives its own episodes.
+
+    Raises:
+        ValueError: When two such adapters are enabled. Only one can supply the
+            transport, and picking one would make the run's record a guess.
+    """
+    bound = [
+        built
+        for built in (get_adapter(name)(settings) for name in sorted(enabled_adapters(settings)))
+        if built.routes() is None
+    ]
+    if len(bound) > 1:
+        raise ValueError(
+            "two environment adapters mount no episode route and would both be bound "
+            f"for this process: {', '.join(sorted(a.name for a in bound))}. Only one can "
+            "supply the transport its tools speak; enable one."
+        )
+    return bound[0] if bound else None
 
 
 def _adapter_routers(deployment: Deployment) -> list[APIRouter]:

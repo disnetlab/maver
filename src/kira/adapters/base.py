@@ -385,9 +385,16 @@ class EnvironmentAdapter(Protocol):
     def routes(self) -> Any | None:
         """Supply an optional router mounted under the API prefix.
 
-        This is how a path naming an environment stays out of the core.
+        This is how a path naming an environment stays out of the core, and it is also
+        what says which of the two shapes this adapter is. A router means an outside
+        driver posts one episode at a time and the episode driver binds this adapter for
+        the length of each; None means there is no episode to bind, so the deployment
+        binds it once for the whole process instead and its incidents arrive through the
+        generic intake. An adapter of the second shape never has its lifecycle methods
+        called here, and :class:`LifecycleRunsElsewhere` is what they raise if it is
+        tried.
 
         Returns:
-            A ``fastapi.APIRouter``, or None. None is normal.
+            A ``fastapi.APIRouter``, or None.
         """
         ...

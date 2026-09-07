@@ -20,6 +20,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from fastapi import APIRouter
 
 from kira.adapters.base import AdapterTool, EpisodeContext, ExternalFeedback, SubmissionRecord
 from kira.adapters.registry import adapter, clear_adapters
@@ -188,7 +189,9 @@ class EpisodeAdapter:
         return None
 
     def routes(self) -> Any:
-        return None
+        # An adapter that opens episodes is one an outside driver reaches, and the
+        # driver refuses to open one for an adapter with no route at all.
+        return APIRouter()
 
 
 class ParkingModel:

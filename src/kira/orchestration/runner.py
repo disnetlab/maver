@@ -660,7 +660,19 @@ async def run_incident(
                 stage="pipeline",
                 event="entered",
                 detail=json.dumps(
-                    {"schema_version": SCHEMA_VERSION, **deployment.settings.snapshot()},
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        # Which environment supplied this run's transport, tools and
+                        # overlays. The settings say which adapters are enabled; this
+                        # says which one was actually bound, and the two differ for an
+                        # adapter that drives its own episodes.
+                        **(
+                            {"environment": deployment.adapter.name}
+                            if deployment.adapter is not None
+                            else {}
+                        ),
+                        **deployment.settings.snapshot(),
+                    },
                     sort_keys=True,
                 ),
             )

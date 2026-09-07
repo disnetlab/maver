@@ -30,6 +30,7 @@ from kira.adapters.base import (
     EnvironmentAdapter,
     EpisodeContext,
     ExternalFeedback,
+    LifecycleRunsElsewhere,
 )
 from kira.audit.journal import Journal
 from kira.contracts.events import EnvironmentEvent
@@ -82,11 +83,22 @@ async def open_episode(adapter: EnvironmentAdapter, deployment: Deployment) -> E
         The identity of the episode, which is what a caller polls.
 
     Raises:
+        LifecycleRunsElsewhere: When the adapter mounts no episode route. Such an
+            adapter is bound for the whole process and its environment is held by
+            another process, so an episode opened here would acquire nothing and
+            release nothing. Unreachable today, because the only thing that opens an
+            episode is a route; the refusal is for whatever calls this next.
         Exception: Whatever the adapter raised. Nothing has started yet, so a failure
             here is a clean refusal rather than an abandoned environment. That includes a
             withheld set the adapter could not compute: an exclusion that fails open is
             worse than an episode that does not run, because it voids the cell silently.
     """
+    if adapter.routes() is None:
+        raise LifecycleRunsElsewhere(
+            f"the {adapter.name} environment mounts no episode route, so its episodes "
+            "are opened by whatever holds the environment and this process supplies "
+            "the pipeline alone"
+        )
     ctx = await adapter.acquire()
     signal = adapter.build_signal(ctx)
     signal[EXTERNAL_KEY] = ctx.external_key

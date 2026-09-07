@@ -7,6 +7,7 @@ the import boundary is the property the whole rebuild claims.
 """
 
 import ast
+import asyncio
 import importlib
 import json
 import pathlib
@@ -14,15 +15,21 @@ import subprocess
 import sys
 from typing import Any
 
+import httpx
 import pytest
+from fastapi import APIRouter
 
 from kira.adapters.base import (
+    AdapterTool,
     EnvironmentAdapter,
     EpisodeContext,
     ExternalFeedback,
+    LifecycleRunsElsewhere,
+    RoleOverlay,
     SubmissionRecord,
 )
 from kira.adapters.registry import adapter, available_adapters, clear_adapters, get_adapter
+from kira.api.app import build_deployment, create_app
 from kira.audit.journal import ListSink
 from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.memory.factory import build_storage
@@ -31,9 +38,15 @@ from kira.middleware.authority import ApprovalPending
 from kira.orchestration import episode as episode_module
 from kira.orchestration.episode import open_episode, run_episode
 from kira.orchestration.runner import Deployment
-from kira.settings.groups import MemorySettings, ServerSettings, VerifySettings
+from kira.settings.groups import (
+    IntakeSettings,
+    MemorySettings,
+    ServerSettings,
+    VerifySettings,
+)
 from kira.settings.profiles import load_profile
 from kira.settings.root import Settings
+from kira.tools.registry import ToolSpec
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 
@@ -79,9 +92,11 @@ class SubmittingModel:
     def __init__(self, *, halt: bool = False) -> None:
         self._halt = halt
         self.calls = 0
+        self.seen: list[tuple[str, ModelRequest]] = []
 
     async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
         self.calls += 1
+        self.seen.append((caller, request))
         halted = {**ROOT_CAUSE, "halt": True, "halt_reason": "no cluster"}
         diagnosis = halted if self._halt else ROOT_CAUSE
         name, arguments = {
@@ -187,7 +202,9 @@ class StubAdapter:
         return None
 
     def routes(self) -> Any:
-        return None
+        # An adapter that opens episodes is one an outside driver reaches, and the
+        # driver refuses to open one for an adapter with no route at all.
+        return APIRouter()
 
 
 def deployment(
@@ -577,3 +594,179 @@ async def test_the_episode_records_what_it_was_denied(tmp_path: pathlib.Path) ->
     ]
     assert len(acquired) == 1
     assert json.loads(acquired[0].detail)["withheld"] == ["sess-own", "sess-twin"]
+
+
+PROBE_SUFFIX = "## Environment contract\nProbe the entry point before concluding."
+
+
+async def _probe(ctx: Any, service: str) -> str:
+    """The adapter's own tool, which exists in no shipped catalogue."""
+    return await ctx.transport.kubectl(["get", "svc", service])
+
+
+PROBE_TOOL = ToolSpec(
+    name="probe_service",
+    parameters={
+        "type": "object",
+        "properties": {"service": {"type": "string"}},
+        "required": ["service"],
+    },
+    safety="read_only",
+    dispatch=_probe,
+    descriptions={"probe_service": {"default": "Probe one Service. Takes its name."}},
+)
+
+
+class ProcessTransport:
+    """The transport an environment supplies to a process it does not drive episodes on."""
+
+    name = "process"
+    capabilities = frozenset({"kubernetes"})
+    timeout_seconds = 30
+
+    def __init__(self) -> None:
+        self.served: list[list[str]] = []
+
+    async def kubectl(self, argv: list[str]) -> str:
+        self.served.append(list(argv))
+        return "ok"
+
+
+class ProcessAdapter:
+    """An environment whose episodes are driven by another process entirely.
+
+    It supplies the agent half — a transport, a tool and an overlay — and refuses the
+    lifecycle half, because nothing here holds the environment. It mounts no episode
+    route, which is what says so.
+    """
+
+    name = "process"
+
+    def __init__(self) -> None:
+        self.transport = ProcessTransport()
+
+    def tool_transport(self) -> Any:
+        return self.transport
+
+    def evidence_policy(self) -> Any:
+        return None
+
+    def extra_tools(self) -> tuple[AdapterTool, ...]:
+        return (AdapterTool(spec=PROBE_TOOL, roles=frozenset({"rca"})),)
+
+    def role_overlay(self, role: str, state: Any) -> Any:
+        return RoleOverlay(system_suffix=PROBE_SUFFIX) if role == "rca" else None
+
+    def routes(self) -> Any:
+        return None
+
+    def build_signal(self, ctx: EpisodeContext) -> dict[str, Any]:
+        raise LifecycleRunsElsewhere("the driver builds it")
+
+    def bind_session(self, session_id: str) -> None:
+        raise LifecycleRunsElsewhere("the driver binds it")
+
+    def withheld_records(self, ctx: EpisodeContext, records: Any) -> tuple[str, ...]:
+        raise LifecycleRunsElsewhere("the driver decides it")
+
+    def encode(self, kind: str, state: Any, ctx: EpisodeContext) -> Any:
+        raise LifecycleRunsElsewhere("the driver encodes it")
+
+    def holds_environment_for_grading(self) -> bool:
+        raise LifecycleRunsElsewhere("the driver knows")
+
+    async def acquire(self) -> EpisodeContext:
+        raise LifecycleRunsElsewhere("the driver acquires it")
+
+    async def await_ready(self, kind: str) -> bool:
+        raise LifecycleRunsElsewhere("the driver waits")
+
+    async def submit(self, kind: str, payload: Any) -> SubmissionRecord:
+        raise LifecycleRunsElsewhere("the driver submits it")
+
+    async def fetch_feedback(self) -> ExternalFeedback | None:
+        raise LifecycleRunsElsewhere("the driver grades it")
+
+    async def release(self, *, state: Any) -> None:
+        raise LifecycleRunsElsewhere("the driver releases it")
+
+
+def process_settings(tmp_path: pathlib.Path, *names: str) -> Settings:
+    return Settings(
+        server=ServerSettings(workdir=tmp_path),
+        intake=IntakeSettings(adapters=frozenset(names)),
+        memory=MemorySettings(enabled=False, learning_enabled=False),
+        verify=VerifySettings(enabled=False),
+    )
+
+
+async def test_an_adapter_with_no_episode_route_serves_the_generic_intake(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The second shape an adapter can be, end to end through the ordinary route.
+
+    An environment that drives us rather than the other way round never opens an
+    episode here: it posts one incident to the generic intake and pulls the answer back
+    out. So everything it supplies has to be bound for the process instead — the
+    prototype ran its whole container in that mode — and this proves the three that
+    reach a role: its transport carries the tool calls, its tool is offered to the role
+    it named, and its overlay reaches the system prompt.
+    """
+    clear_adapters()
+    try:
+
+        @adapter("process")
+        def _factory(settings: Settings) -> EnvironmentAdapter:
+            return ProcessAdapter()  # type: ignore[return-value]
+
+        deploy = build_deployment(process_settings(tmp_path, "process"))
+        model = SubmittingModel()
+        object.__setattr__(deploy, "completion", model)
+        assert deploy.adapter is not None and deploy.adapter.name == "process"
+
+        app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
+        transport = deploy.transport_for("s")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://kira"
+        ) as http:
+            accepted = await http.post(
+                "/api/v1/incidents", json={"alert": {"alertname": "X", "namespace": "shop"}}
+            )
+            assert accepted.status_code == 202
+            while pending := {t for t in app.state.service.runs.tasks() if not t.done()}:
+                await asyncio.gather(*pending, return_exceptions=True)
+
+        assert isinstance(transport, ProcessTransport)
+        assert transport.served, "the incident ran on the environment's transport"
+        opening = next(request for caller, request in model.seen if caller == "rca")
+        assert "probe_service" in {tool.name for tool in opening.tools}
+        assert f"\n\n{PROBE_SUFFIX}\n\n" in str(opening.system)
+    finally:
+        clear_adapters()
+        importlib.reload(importlib.import_module("kira.adapters.sregym"))
+
+
+def test_an_adapter_that_drives_its_own_episodes_is_not_process_bound(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The other shape, and the one every published number was taken under.
+
+    An adapter that mounts an episode route is bound per episode by the episode driver,
+    with the correlation id that episode acquired. Binding it for the process as well
+    would give every incident a transport that belongs to one episode.
+    """
+    deploy = build_deployment(process_settings(tmp_path, "sregym"))
+
+    assert deploy.adapter is None
+    assert deploy.tool_extras == ()
+
+
+async def test_an_episode_cannot_be_opened_for_an_adapter_that_drives_none(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Unreachable through a route, because there is no route. The refusal is for the
+    next caller: an episode opened here would acquire nothing and release nothing."""
+    deploy = deployment(tmp_path, model=SubmittingModel())
+
+    with pytest.raises(LifecycleRunsElsewhere, match="mounts no episode route"):
+        await open_episode(ProcessAdapter(), deploy)  # type: ignore[arg-type]
