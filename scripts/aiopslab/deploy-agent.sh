@@ -69,6 +69,7 @@ chmod 600 "${TEMP_ENV}"
     "KIRA_ADAPTERS__AIOPSLAB__BRIDGE_URL=${BRIDGE_URL}" \
     'KIRA_ADAPTERS__AIOPSLAB__BRIDGE_TOKEN_FILE=/run/secrets/aiopslab-bridge-token' \
     "KIRA_ADAPTERS__AIOPSLAB__BRIDGE_TIMEOUT_S=${BRIDGE_TIMEOUT_S}" \
+    'KIRA_PIPELINE__AUTO_SNAPSHOT=true' \
     'KIRA_OBSERVABILITY__LOG_LEVEL=INFO' \
     'KIRA_AUTHORITY__MODE=auto' \
     'KIRA_SERVER__ENVIRONMENT=local' \
@@ -81,6 +82,12 @@ install -m 600 -o "${RUNNER_UID}" -g "${RUNNER_GID}" "${TEMP_ENV}" "${ENV_FILE}"
 # bakes in, so the host declares that it is not one. And with `--network host` there is
 # no published-port boundary left: the API has no authentication, so it binds loopback,
 # which is all either process needs.
+#
+# The snapshot is named although it is the default. The prototype's deploy script asked
+# for it to be off under a name the prototype never read, so every archived AIOpsLab run
+# had it on; Kira honours that old name, so an agent.env inherited from the prototype
+# would now switch it off and the runs would stop being comparable. Naming the canonical
+# setting here is what keeps an inherited alias from deciding.
 
 if docker container inspect "${CONTAINER}" >/dev/null 2>&1; then
   docker rm -f "${CONTAINER}" >/dev/null

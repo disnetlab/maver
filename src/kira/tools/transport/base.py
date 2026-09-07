@@ -2,9 +2,9 @@
 
 A tool never talks to a cluster or a telemetry backend directly. It asks a transport,
 and an environment adapter supplies the transport. That is the seam that keeps the core
-free of environment branching: the prototype opened its central call path with
-``if aiopslab_bridge_enabled():``, so adding a second benchmark meant editing the module
-every tool depended on.
+free of environment branching: the prototype opened its central call path with a
+benchmark-named flag, so adding a second benchmark meant editing the module every tool
+depended on.
 
 Capabilities make an environment's gaps explicit. A benchmark that deploys no log
 backend does not cause its log tool to fail at incident time; the tool is dropped from

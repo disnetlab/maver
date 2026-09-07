@@ -106,6 +106,12 @@ prototype's own names — `AIOPSLAB_BRIDGE_URL`, `AIOPSLAB_BRIDGE_TOKEN`,
 aliases, and each one that decides a value says so in the log and in the run's
 configuration snapshot.
 
+Do not carry the prototype's `agent.env` across wholesale. It set
+`RCA_AUTO_SNAPSHOT_ENABLED=false` under a name the prototype never read, so every archived
+AIOpsLab run had the RCA configuration snapshot on; Kira honours that name as an alias,
+which would switch the snapshot off and make a new sweep incomparable with the archive.
+The deploy script names `KIRA_PIPELINE__AUTO_SNAPSHOT=true` for that reason.
+
 ## Run one problem
 
 From the pinned AIOpsLab checkout, in its Poetry environment. `PYTHONPATH` is
