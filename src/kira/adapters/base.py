@@ -16,11 +16,12 @@ This module is contract, not implementation. It is the one module under
 is banned from core imports by the ``TID251`` rule in ``pyproject.toml``.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from kira.contracts.state import IncidentState, TargetStage
+from kira.llm.types import Message
 from kira.memory.ports import TextSearch
 from kira.tools.context import EvidencePolicy
 from kira.tools.registry import ToolSpec
@@ -32,8 +33,30 @@ __all__ = [
     "EnvironmentAdapter",
     "EpisodeContext",
     "ExternalFeedback",
+    "LifecycleRunsElsewhere",
+    "RoleOverlay",
     "SubmissionRecord",
+    "SubmitGuard",
 ]
+
+SubmitGuard = Callable[[dict[str, Any], int, list[Message]], Any]
+"""Stage-specific policy consulted before a submission is validated.
+
+Returns None to accept, or text to hand back. Defined here rather than beside the loop
+that runs it because an adapter supplies one through :class:`RoleOverlay`, and a role
+importing this module's contract is how the two stay one type rather than two spellings
+that drift.
+"""
+
+
+class LifecycleRunsElsewhere(RuntimeError):
+    """A lifecycle method was called in the process that does not own the episode.
+
+    An adapter may be split across two processes: one drives the environment and holds
+    its credential, the other runs the pipeline. The half that runs the pipeline
+    implements the capability methods and none of the lifecycle ones, and raising here
+    names the process that does rather than returning something plausible.
+    """
 
 
 EXTERNAL_KEY = "_external_key"
@@ -133,6 +156,36 @@ class AdapterTool:
 
     spec: ToolSpec
     roles: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class RoleOverlay:
+    """Environment-supplied adjustments to one role's run.
+
+    An adapter may narrow what a role does; it may never widen it. Every field is
+    additive-or-restrictive by construction: ``drop_tools`` removes and only
+    :meth:`EnvironmentAdapter.extra_tools` adds, ``max_turns`` is applied with ``min``,
+    and a guard can refuse a submission but cannot write one, so the model still
+    produces the corrected artifact itself.
+
+    Applied by the runner after the role has built its own configuration, so a role
+    never learns why it was narrowed and no role carries a branch on which environment
+    it is running under. An overlay of None leaves every one of those decisions
+    byte-identical to the unbound run.
+    """
+
+    system_replacement: str | None = None
+    """Replaces the composed role prompt entirely. Wins over ``system_suffix``."""
+    system_suffix: str = ""
+    """Appended after the composed role prompt, separated by a blank line."""
+    context_blocks: tuple[str, ...] = ()
+    """Prepended to the role's opening message, in order, separated by blank lines."""
+    drop_tools: frozenset[str] = frozenset()
+    """Removed from the resolved toolset, and recorded in ``dropped`` with its reason."""
+    max_turns: int | None = None
+    """A shorter turn budget. Applied as ``min``, so it can never lengthen one."""
+    submit_guard: SubmitGuard | None = None
+    """Consulted before the role's own guard. The first refusal is the one returned."""
 
 
 @runtime_checkable
@@ -306,6 +359,26 @@ class EnvironmentAdapter(Protocol):
 
         Returns:
             The tools and the roles allowed to see them.
+        """
+        ...
+
+    def role_overlay(self, role: str, state: IncidentState) -> RoleOverlay | None:
+        """Narrow one role's run for this environment.
+
+        Called once per role run, after the role has resolved its own prompt, toolset,
+        limits and guard, and before any of them is used. This is where an environment
+        whose task is not the one the role was written for adjusts it, so that the
+        adjustment is not a branch inside the role.
+
+        Args:
+            role: The role about to run.
+            state: The incident as it stands, for an adapter that overlays only some of
+                its episodes.
+
+        Returns:
+            The overlay, or None to leave the role exactly as it built itself. None is
+            normal: an environment that asks the same question the role was written for
+            overlays nothing.
         """
         ...
 

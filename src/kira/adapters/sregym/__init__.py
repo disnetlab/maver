@@ -31,6 +31,7 @@ from kira.adapters.base import (
     EnvironmentAdapter,
     EpisodeContext,
     ExternalFeedback,
+    RoleOverlay,
     SubmissionRecord,
 )
 from kira.adapters.registry import adapter
@@ -368,6 +369,21 @@ class SREGymAdapter:
             The rollback pair.
         """
         return adapter_tools()
+
+    def role_overlay(self, role: str, state: IncidentState) -> RoleOverlay | None:
+        """Leave every role exactly as it built itself.
+
+        The benchmark asks the two questions the pipeline was written to answer, so
+        there is nothing to narrow.
+
+        Args:
+            role: The role about to run.
+            state: The incident as it stands.
+
+        Returns:
+            None, always.
+        """
+        return None
 
     def routes(self) -> Any | None:
         """Supply the episode routes the external driver posts to.

@@ -18,7 +18,7 @@ import httpx
 import pytest
 import respx
 
-from kira.adapters.base import EpisodeContext
+from kira.adapters.base import EnvironmentAdapter, EpisodeContext
 from kira.adapters.sregym import SREGymAdapter, SregymConfig
 from kira.adapters.sregym import api as sregym_api
 from kira.adapters.sregym.episode import reduce_feedback
@@ -272,6 +272,25 @@ class TestEvidenceFilter:
         assert [t["traceID"] for t in json.loads(EvidenceFilter().filter_result(body))["data"]] == [
             "a1"
         ]
+
+
+def test_the_shipped_adapter_satisfies_the_whole_contract_and_narrows_no_role() -> None:
+    """A capability the protocol grew is one every adapter has to answer for.
+
+    The overlay hook is how an environment narrows a role, and an adapter that simply
+    did not have it would be found out at the first role run rather than here. This one
+    answers None for every role: the benchmark asks the two questions the pipeline was
+    written to answer, so there is nothing to narrow, and a run under it must be
+    byte-identical to a run under no environment at all.
+    """
+    adapter = SREGymAdapter(SregymConfig())
+
+    assert isinstance(adapter, EnvironmentAdapter)
+    state: Any = {"session_id": "s1", "alert": {}}
+    assert all(
+        adapter.role_overlay(role, state) is None
+        for role in ("rca", "planning", "execution", "verify", "single", "learning")
+    )
 
 
 def test_an_ungraded_episode_is_not_stamped_with_the_oracles_name() -> None:

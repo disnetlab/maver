@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from kira.adapters.base import SubmitGuard
 from kira.audit.journal import Journal
 from kira.contracts.events import InterventionEvent, StageEvent, SubmissionEvent, ToolCallEvent
 from kira.llm.client import carry_reasoning_forward, serialise_assistant
@@ -61,13 +62,10 @@ _log = logging.getLogger(__name__)
 ToolFn = Callable[..., Awaitable[Any]]
 """A dispatchable tool. Called with the model's arguments, minus the rationale."""
 
-SubmitGuard = Callable[[dict[str, Any], int, list[Message]], Any]
-"""Stage-specific policy consulted before a submission is validated.
-
-Returns None to accept, or text to hand back. Text starting with ``note:`` is passed to
-the model as material to weigh rather than framed as an error, because a guard that
-returns content the model should consider is not reporting a fault.
-"""
+# Re-exported from the adapter contract, which owns the type because an environment
+# supplies one through its role overlay. Text starting with ``note:`` is passed to the
+# model as material to weigh rather than framed as an error, because a guard that
+# returns content the model should consider is not reporting a fault.
 
 _GUARD_CONTENT_MARK = "note:"
 
