@@ -37,7 +37,6 @@ from kira.tools.metrics import _parse_alerts, partition_incident_alerts
 from kira.tools.snapshot import _load_items
 from kira.tools.traces import (
     _PASSTHROUGH_LIMIT,
-    _candidate_names_from_inventory,
     _filter_traces_to_candidates,
     _parse_structured,
     _unparseable_scope_error,
@@ -282,14 +281,13 @@ class ToolTransportContract:
     async def test_a_successful_kubectl_returns_its_own_output_unwrapped(
         self, transport: ToolTransport
     ) -> None:
-        """Two consumers parse this text as JSON, and a prefix in front of the payload
-        turns both into "unavailable" without a word about why: the namespace snapshot
-        comes back empty and trace scoping silently stops being enforced."""
+        """The namespace snapshot parses this text as JSON, and a prefix in front of the
+        payload turns it into "unavailable" without a word about why: the snapshot comes
+        back empty, and the trace scope read through the same path stops being enforced."""
         result = await transport.kubectl(["get", "pods", "-n", NAMESPACE, "-o", "json"])
 
         assert result == KUBECTL_JSON
         assert _load_items(result) == json.loads(KUBECTL_JSON)["items"]
-        assert _candidate_names_from_inventory(result) == frozenset({SERVICE})
 
     async def test_firing_alerts_reach_the_partitioning_that_scopes_them(
         self, transport: ToolTransport

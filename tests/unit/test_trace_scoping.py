@@ -55,8 +55,13 @@ def context(tmp_path: Path, transport: Any, namespace: str | None = "shop") -> T
     )
 
 
-def inventory(*names: str) -> str:
-    return json.dumps({"items": [{"metadata": {"name": name}} for name in names]})
+def inventory(*names: str, labels: dict[str, tuple[str, str, str]] | None = None) -> str:
+    """One line per object in the column shape the tools ask kubectl for."""
+    rows = []
+    for name in names:
+        app, kname, kompose = (labels or {}).get(name, ("<none>", "<none>", "<none>"))
+        rows.append(f"{name}   {app}   {kname}   {kompose}")
+    return "\n".join(rows) + "\n"
 
 
 async def test_a_service_outside_the_namespace_is_refused(tmp_path: Path) -> None:
@@ -142,6 +147,45 @@ async def test_the_inventory_is_read_once_per_run(tmp_path: Path) -> None:
     await get_traces(ctx, service="frontend", last_n_minutes=5)
 
     assert backend.kubectl_calls == [
-        "get services,deployments,statefulsets,daemonsets -n shop -o json"
+        "get services,deployments,statefulsets,daemonsets -n shop --no-headers -o "
+        "custom-columns=NAME:.metadata.name,L0:.metadata.labels.app,"
+        "L1:.metadata.labels.app\\.kubernetes\\.io/name,"
+        "L2:.metadata.labels.io\\.kompose\\.service"
     ]
     assert ctx.scope.trace_service_candidates == frozenset({"frontend"})
+
+
+async def test_the_inventory_is_asked_for_as_columns_not_objects(tmp_path: Path) -> None:
+    """The full objects of one application namespace run past the bound the measured
+    transport cuts every response at, after which nothing parses and every trace tool
+    reports the scope as unavailable. That is how the tools failed on the parity run."""
+    backend = FakeBackend(inventory("frontend"))
+    await get_services(context(tmp_path, backend))
+
+    (call,) = backend.kubectl_calls
+    assert "-o json" not in call
+    assert "--no-headers" in call and "custom-columns=NAME:.metadata.name" in call
+
+
+async def test_app_labels_count_as_names_a_workload_may_report_under(tmp_path: Path) -> None:
+    listing = inventory(
+        "frontend-deploy", "user", labels={"frontend-deploy": ("frontend", "<none>", "<none>")}
+    )
+    ctx = context(tmp_path, FakeBackend(listing))
+
+    await get_services(ctx)
+
+    assert ctx.scope.trace_service_candidates == frozenset({"frontend-deploy", "frontend", "user"})
+
+
+async def test_a_listing_that_is_not_the_asked_shape_closes_the_scope(tmp_path: Path) -> None:
+    """A refusal the server wrote, or a listing cut mid-line, must not seed the allowed
+    set with its words."""
+    for raw in (
+        "Command Rejected: Error executing kubectl command:\nError from server (Forbidden)",
+        "frontend   frontend   <none>   <none>\nuser-service   <none>   us",
+    ):
+        ctx = context(tmp_path, FakeBackend(raw))
+        result = await get_services(ctx)
+        assert result.startswith("error: unable to enforce Jaeger namespace scope for 'shop'")
+        assert ctx.scope.trace_service_candidates is None

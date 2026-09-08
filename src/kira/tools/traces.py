@@ -15,6 +15,7 @@ application's traces and cite them as evidence for this incident.
 
 import ast
 import json
+import re
 from typing import Any
 
 from kira.tools.context import ToolContext, deliver
@@ -29,6 +30,22 @@ __all__ = ["get_dependency_graph", "get_operations", "get_services", "get_traces
 # backend is likely to know it by. A chart routinely names its Deployment one thing and
 # reports spans under another, so the object names alone are not the allowed set.
 _APP_LABELS = ("app", "app.kubernetes.io/name", "io.kompose.service")
+
+_INVENTORY_COLUMNS = (
+    "'custom-columns="
+    + ",".join(
+        ["NAME:.metadata.name"]
+        + [
+            f"L{i}:.metadata.labels.{label.replace('.', '\\.')}"
+            for i, label in enumerate(_APP_LABELS)
+        ]
+    )
+    + "'"
+)
+"""The projection the inventory is read through. Quoted, because the label keys carry
+escaped dots and the command is tokenised like a shell line before it is run."""
+
+_RESOURCE_NAME = re.compile(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?")
 
 _MAX_LISTED_CANDIDATES = 30
 
@@ -104,30 +121,25 @@ def _parse_structured(raw: str) -> Any:
 def _candidate_names_from_inventory(raw: str) -> frozenset[str] | None:
     """Collect the names one namespace's workloads could report traces under.
 
+    Reads the column listing ``_INVENTORY_COLUMNS`` asks for: one line per object, the
+    object's name and then the value of each app label, ``<none>`` where a label is
+    absent. Anything that is not exactly that shape reads as unreadable, so an error
+    message or a cut-off listing closes the scope rather than seeding it with words.
+
     None means the inventory could not be read, which is not the same as a namespace
     that holds nothing.
     """
     if not raw or raw.startswith("error:"):
         return None
-    data = _parse_structured(raw)
-    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
-        return None
     names: set[str] = set()
-    for item in data["items"]:
-        if not isinstance(item, dict):
+    width = 1 + len(_APP_LABELS)
+    for line in raw.splitlines():
+        parts = line.split()
+        if not parts:
             continue
-        metadata = item.get("metadata") or {}
-        if not isinstance(metadata, dict):
-            continue
-        name = metadata.get("name")
-        if isinstance(name, str) and name:
-            names.add(name)
-        labels = metadata.get("labels") or {}
-        if isinstance(labels, dict):
-            for key in _APP_LABELS:
-                value = labels.get(key)
-                if isinstance(value, str) and value:
-                    names.add(value)
+        if len(parts) != width or not _RESOURCE_NAME.fullmatch(parts[0]):
+            return None
+        names.update(part for part in parts if part != "<none>")
     return frozenset(names)
 
 
@@ -149,9 +161,14 @@ async def _scoped_service_candidates(
     if ctx.scope.trace_service_candidates is not None:
         return namespace, ctx.scope.trace_service_candidates, None
 
+    # Columns rather than JSON: the full objects of one application namespace run to
+    # tens of thousands of characters, and the transport the archive was measured
+    # through cuts every response at about ten thousand, after which nothing parses
+    # and the scope reads as unavailable. Four columns is a few kilobytes at most.
     raw = await read_kubectl(
         ctx,
-        f"kubectl get services,deployments,statefulsets,daemonsets -n {namespace} -o json",
+        f"kubectl get services,deployments,statefulsets,daemonsets -n {namespace} "
+        f"--no-headers -o {_INVENTORY_COLUMNS}",
     )
     candidates = _candidate_names_from_inventory(raw)
     if not candidates:
