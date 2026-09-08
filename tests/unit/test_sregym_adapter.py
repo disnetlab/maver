@@ -24,6 +24,7 @@ from test_kubectl_proxy_route import ALL_CAPABILITIES
 from test_kubectl_proxy_route import context as tool_context
 
 from kira.adapters.base import EnvironmentAdapter, EpisodeContext
+from kira.adapters.registry import get_adapter
 from kira.adapters.sregym import SREGymAdapter, SregymConfig
 from kira.adapters.sregym import api as sregym_api
 from kira.adapters.sregym.episode import reduce_feedback
@@ -38,7 +39,13 @@ from kira.memory.factory import build_storage
 from kira.memory.ports import SessionMemory
 from kira.orchestration.episode import EpisodeStart
 from kira.orchestration.runner import Deployment
-from kira.settings.groups import MemorySettings, ServerSettings, VerifySettings
+from kira.settings.groups import (
+    MemorySettings,
+    ServerSettings,
+    ToolSettings,
+    TransportSettings,
+    VerifySettings,
+)
 from kira.settings.profiles import load_profile
 from kira.settings.root import Settings
 from kira.tools.kubectl_proxy import ProxyRoute
@@ -664,6 +671,77 @@ async def test_a_cluster_read_is_pointed_at_the_proxy_and_carries_no_credential(
     assert written["clusters"][0]["cluster"]["server"] == proxy
     assert written["users"] == [{"name": "sregym-agent", "user": {}}]
     assert httpx.get(f"{proxy}/version").status_code == 200
+
+
+class _OneProblem:
+    """A conductor holding one problem, so acquiring an episode needs no harness."""
+
+    async def get_problem(self) -> dict[str, Any]:
+        return {"id": "k8s_target_port-misconfig"}
+
+    async def get_app(self) -> dict[str, Any]:
+        return {"app_name": "shop", "namespace": "shop"}
+
+
+async def test_the_configured_proxy_route_reaches_the_transport(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """Three settings decide how a cluster command runs and none of them is this
+    adapter's own: the binary and the ceiling belong to the deployment whatever
+    environment is bound, and the working directory is where the generated kubeconfig
+    has to land so that a run leaves nothing outside it. Read from the wrong place, each
+    of them fails as a kubectl that cannot reach the cluster rather than as a
+    configuration error.
+    """
+    settings = Settings(
+        server=ServerSettings(workdir=tmp_path),
+        tools=ToolSettings(kubectl_timeout_s=45),
+        transport=TransportSettings(kubectl_binary="/usr/local/bin/kubectl"),
+        adapters={"sregym": {"kubectl_proxy_url": "http://host.docker.internal:16444"}},
+    )
+    adapter = get_adapter("sregym")(settings)
+    monkeypatch.setattr(adapter, "_conductor", _OneProblem())
+
+    await adapter.acquire()
+    transport = adapter.tool_transport()
+
+    assert transport is not None
+    assert transport.kubectl_proxy_url == "http://host.docker.internal:16444"
+    assert transport.proxy.binary == "/usr/local/bin/kubectl"
+    assert transport.proxy.exec_timeout_s == 45.0
+    assert transport._kubeconfig_dir == tmp_path / ".kubectl-proxy"
+
+
+def test_the_prototype_names_for_the_proxy_route_still_decide_it() -> None:
+    """The names the evaluation deployment sets in its compose file and its agent.env."""
+    config = SregymConfig.resolve(
+        Settings(),
+        {
+            "KUBECTL_PROXY_URL": "http://127.0.0.1:16444",
+            "KUBECTL_PROXY_REQUIRED": "false",
+            "KUBECTL_PROXY_CHECK_TIMEOUT_SECONDS": "7",
+            "KUBECTL_PROXY_READY_TIMEOUT_SECONDS": "90",
+        },
+    )
+
+    assert str(config.kubectl_proxy_url).rstrip("/") == "http://127.0.0.1:16444"
+    assert config.kubectl_proxy_required is False
+    assert config.kubectl_proxy_check_timeout_s == 7.0
+    assert config.kubectl_proxy_ready_timeout_s == 90.0
+
+
+def test_the_proxy_route_defaults_are_the_configuration_the_archive_ran() -> None:
+    """Not a mode to be turned on: an unconfigured deployment reaches its cluster the
+    way every archived cell did, including the ceiling the harness ran with."""
+    config = SregymConfig()
+
+    assert str(config.kubectl_proxy_url).rstrip("/") == "http://127.0.0.1:16444"
+    assert config.kubectl_proxy_required is True
+    assert (config.kubectl_proxy_check_timeout_s, config.kubectl_proxy_ready_timeout_s) == (
+        5.0,
+        60.0,
+    )
+    assert config.timeout_s == 120.0
 
 
 async def test_a_deployment_that_never_saw_the_harness_reads_its_defaults() -> None:

@@ -21,6 +21,7 @@ import logging
 import os
 from collections.abc import Mapping, Sequence
 from importlib import import_module
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict
@@ -45,6 +46,7 @@ from kira.memory.distil import label_name
 from kira.memory.ports import TextSearch
 from kira.settings.root import Settings
 from kira.tools.context import EvidencePolicy
+from kira.tools.kubectl_proxy import ProxyRoute
 from kira.tools.transport.base import ToolTransport
 
 __all__ = ["ADAPTER_NAME", "MCP_KUBECTL_TOOLS", "SREGymAdapter", "SregymConfig"]
@@ -82,7 +84,24 @@ class SregymConfig(BaseModel):
 
     conductor_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
     mcp_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:9954")
-    timeout_s: float = 60.0
+    kubectl_proxy_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:16444")
+    """Where a local kubectl reaches the cluster, credential-free.
+
+    The harness fronts its API server with a filtering proxy and expects a real kubectl
+    to be run against it. That is how every archived cell reached the cluster, for the
+    agent's own reads and for the model's kubectl inside a shell alike, so it is the
+    route rather than an option: the MCP kubectl server truncates, and a truncated
+    ``-o json`` is unparseable without saying so."""
+    kubectl_proxy_required: bool = True
+    """Whether a shell's kubectl waits for the proxy before running anything.
+
+    The proxy is a port-forward the harness restarts between problems. Off, a command
+    that raced the restart reports a connection refused the model cannot act on."""
+    kubectl_proxy_check_timeout_s: float = 5.0
+    """How long one readiness probe of the proxy may take."""
+    kubectl_proxy_ready_timeout_s: float = 60.0
+    """How long the readiness probing continues before a command is refused."""
+    timeout_s: float = 120.0
     conductor_timeout_s: float = 30.0
     stage_wait_timeout_s: float = 600.0
     stage_poll_s: float = 5.0
@@ -143,13 +162,39 @@ class SREGymAdapter:
 
     name = ADAPTER_NAME
 
-    def __init__(self, config: SregymConfig) -> None:
+    def __init__(
+        self,
+        config: SregymConfig,
+        *,
+        kubectl_binary: str = "kubectl",
+        kubectl_timeout_s: int = 120,
+        workdir: Path = Path(".local-workspace"),
+    ) -> None:
         """Build an adapter for one episode.
+
+        The three settings beyond the adapter's own slice are passed in rather than read
+        here, because they are the deployment's and not this environment's: the same
+        kubectl binary and the same ceiling apply whatever environment is bound. The
+        defaults match the shipped settings, so an adapter built by hand behaves as a
+        deployment that changed nothing would.
 
         Args:
             config: This deployment's adapter configuration.
+            kubectl_binary: The real kubectl the proxy route runs.
+            kubectl_timeout_s: How long one cluster command may take.
+            workdir: The deployment's working directory, which holds the generated
+                kubeconfig.
         """
         self._config = config
+        self._kubectl = ProxyRoute(
+            url=str(config.kubectl_proxy_url).rstrip("/"),
+            required=config.kubectl_proxy_required,
+            check_timeout_s=config.kubectl_proxy_check_timeout_s,
+            ready_timeout_s=config.kubectl_proxy_ready_timeout_s,
+            binary=kubectl_binary,
+            exec_timeout_s=float(kubectl_timeout_s),
+        )
+        self._kubeconfig_dir = workdir / ".kubectl-proxy"
         self._conductor = Conductor(
             str(config.conductor_base_url), timeout_s=config.conductor_timeout_s
         )
@@ -174,7 +219,9 @@ class SREGymAdapter:
                 started, so this is a refusal rather than an abandoned environment.
             httpx.HTTPError: When the conductor could not describe the application.
         """
-        self._transport = _build_transport(self._config)
+        self._transport = _build_transport(
+            self._config, proxy=self._kubectl, kubeconfig_dir=self._kubeconfig_dir
+        )
         self._transport.session_id = self._session_id
         problem = await self._conductor.get_problem()
         app = await self._conductor.get_app()
@@ -453,7 +500,7 @@ class SREGymAdapter:
         return feedback
 
 
-def _build_transport(config: SregymConfig) -> Any:
+def _build_transport(config: SregymConfig, *, proxy: ProxyRoute, kubeconfig_dir: Path) -> Any:
     """Load the MCP transport, which is where the optional extra is actually needed.
 
     Imported by name rather than with a statement because the module must not sit on the
@@ -462,6 +509,8 @@ def _build_transport(config: SregymConfig) -> Any:
 
     Args:
         config: The adapter's configuration.
+        proxy: How a local kubectl reaches the cluster.
+        kubeconfig_dir: Where the generated kubeconfig is written.
 
     Returns:
         A transport for one episode.
@@ -473,7 +522,12 @@ def _build_transport(config: SregymConfig) -> Any:
         module = import_module("kira.adapters.sregym.transport")
     except ImportError as exc:
         raise ValueError(f"{_MISSING_EXTRA} ({exc})") from exc
-    return module.McpTransport(str(config.mcp_base_url), timeout_s=config.timeout_s)
+    return module.McpTransport(
+        str(config.mcp_base_url),
+        timeout_s=config.timeout_s,
+        proxy=proxy,
+        kubeconfig_dir=kubeconfig_dir,
+    )
 
 
 def _legacy_values(env: Mapping[str, str]) -> dict[str, Any]:
@@ -492,6 +546,10 @@ def _legacy_values(env: Mapping[str, str]) -> dict[str, Any]:
     for name, field in (
         ("MCP_TIMEOUT_SECONDS", "timeout_s"),
         ("MCP_KUBECTL_TOOLS_ENABLED", "mcp_kubectl_tools"),
+        ("KUBECTL_PROXY_URL", "kubectl_proxy_url"),
+        ("KUBECTL_PROXY_REQUIRED", "kubectl_proxy_required"),
+        ("KUBECTL_PROXY_CHECK_TIMEOUT_SECONDS", "kubectl_proxy_check_timeout_s"),
+        ("KUBECTL_PROXY_READY_TIMEOUT_SECONDS", "kubectl_proxy_ready_timeout_s"),
         ("SREGYM_FEEDBACK_MODE", "feedback_mode"),
         ("SREGYM_PROBLEM_ID", "problem_id"),
         ("MCP_SERVER_URL", "mcp_base_url"),
@@ -513,4 +571,9 @@ def _legacy_values(env: Mapping[str, str]) -> dict[str, Any]:
 @adapter(ADAPTER_NAME, legacy_switch="MCP_ENABLED")
 def _factory(settings: Settings) -> EnvironmentAdapter:
     """Build one episode's adapter from the deployment's settings."""
-    return SREGymAdapter(SregymConfig.resolve(settings))
+    return SREGymAdapter(
+        SregymConfig.resolve(settings),
+        kubectl_binary=settings.transport.kubectl_binary,
+        kubectl_timeout_s=settings.tools.kubectl_timeout_s,
+        workdir=settings.server.workdir,
+    )
