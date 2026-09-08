@@ -26,6 +26,8 @@ __all__ = [
     "NullEvidencePolicy",
     "ToolContext",
     "deliver",
+    "kubectl_proxy_url",
+    "kubectl_route",
     "redact",
     "redact_query",
 ]
@@ -166,6 +168,43 @@ def redact_query(policy: EvidencePolicy, query: str) -> str:
     return policy.filter_query(query)
 
 
+def kubectl_proxy_url(transport: ToolTransport) -> str | None:
+    """The credential-free endpoint a local kubectl can reach this cluster through.
+
+    Read with a default rather than as a plain attribute. Transports arrive through an
+    entry point, so one built outside this repository need not carry the property at
+    all, and the safe reading of a transport that does not answer is that it offers no
+    proxy — which leaves the sandbox tools refusing kubectl exactly as they do today.
+
+    Args:
+        transport: The run's bound transport.
+
+    Returns:
+        The proxy's base URL, or None when this environment has no proxy route.
+    """
+    url = getattr(transport, "kubectl_proxy_url", None)
+    return str(url) if url else None
+
+
+def kubectl_route(transport: ToolTransport) -> str:
+    """How roles in this deployment reach the cluster.
+
+    One question answered in one place, because three of them ask it and a disagreement
+    is silent: the sandbox tools decide whether to refuse kubectl, the description
+    catalogue decides which text the model is shown, and the prompt loader decides which
+    guidance block it composes. Two of the three saying ``tool`` while the third says
+    ``proxy_exec`` is a model told the sandbox has no credentials while its kubectl
+    works, which costs it turns on refusals it does not believe.
+
+    Args:
+        transport: The run's bound transport.
+
+    Returns:
+        ``"proxy_exec"`` when the transport offers a proxy, ``"tool"`` otherwise.
+    """
+    return "proxy_exec" if kubectl_proxy_url(transport) is not None else "tool"
+
+
 @dataclass(frozen=True)
 class ToolContext:
     """One role's run, from a tool's point of view."""
@@ -189,6 +228,23 @@ class ToolContext:
     A tool that reaches for global settings behaves differently depending on process
     state its call site cannot see, which is how the prototype ended up with five
     environment reads hidden inside its toolset builder.
+    """
+    authority_mode: str = "prompt"
+    """What the approval gate does with a write in this deployment: ``auto``, ``prompt``
+    or ``deny``.
+
+    Injected for the same reason as the settings above, and needed by exactly one
+    caller: the proxy route puts a real kubectl on a role's PATH, and a write typed
+    there does not pass through the gate at all. The shim on that PATH refuses one
+    unless this says the gate would have approved it unattended, so the mode has to
+    reach the subprocess environment. Defaults to the fail-closed mode, matching
+    ``authority.mode``, so a context built without it refuses shell writes.
+    """
+    kubectl_binary: str = "kubectl"
+    """The real kubectl the proxy route execs, from ``transport.kubectl_binary``.
+
+    Carried here rather than looked up, because the shim this puts on PATH is itself
+    named ``kubectl`` and a lookup from inside it finds the shim.
     """
     widened_write_stages: frozenset[str] = frozenset()
     """Stages this deployment opened writes to, beyond each tool's own declared set.

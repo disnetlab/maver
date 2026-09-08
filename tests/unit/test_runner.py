@@ -29,6 +29,7 @@ from kira.settings.groups import (
     MemorySettings,
     PipelineSettings,
     ServerSettings,
+    TransportSettings,
     VerifySettings,
 )
 from kira.settings.profiles import load_profile
@@ -369,6 +370,40 @@ async def test_a_deployment_that_widens_writes_reaches_the_tool_and_not_only_the
         answer = await exec_kubectl_cmd_safely(ctx, cmd="kubectl delete deploy web -n shop")
 
     assert not answer.startswith("error:")
+
+
+async def test_the_tool_context_carries_the_gates_mode_and_the_configured_kubectl(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Two values a tool cannot honestly read for itself, sourced where they are settled.
+
+    The proxy kubectl route puts a real kubectl on a role's PATH, where a write never
+    reaches the approval gate. The shim there refuses one unless the deployment approves
+    writes unattended, so the gate's own mode has to travel with the run rather than be
+    re-read from the environment — two knobs disagreeing about one call is the failure
+    the injected settings exist to prevent. The binary travels with it because the shim
+    is itself named ``kubectl`` and a lookup from inside it finds the shim.
+    """
+    settings = Settings(
+        server=ServerSettings(workdir=tmp_path),
+        memory=MemorySettings(enabled=False, learning_enabled=False),
+        authority=AuthoritySettings(mode="auto"),
+        transport=TransportSettings(kubectl_binary="/usr/local/bin/kubectl"),
+    )
+    deploy = Deployment(
+        settings=settings,
+        storage=build_storage(settings),
+        completion=FakeModel(),
+        profile=PROFILE,
+        transport_for=lambda session_id: FakeTransport(),
+    )
+    async with incident_context("s1", ALERT, deploy) as resources:
+        ctx = tool_context_for(
+            deploy, resources, "execution", "s1", Journal(session_id="s1", stage="execution")
+        )
+
+    assert ctx.authority_mode == "auto"
+    assert ctx.kubectl_binary == "/usr/local/bin/kubectl"
 
 
 def test_the_auxiliary_sampling_set_is_pinned_at_startup_too(tmp_path: pathlib.Path) -> None:

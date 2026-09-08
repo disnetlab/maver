@@ -1062,6 +1062,11 @@ def tool_context_for(
         session_id=session_id,
         journal=journal,
         settings=deployment.settings.tools,
+        # The gate's own mode, not a second knob: the proxy route puts a real kubectl on
+        # a role's PATH, where a write never reaches the gate, so the shim there refuses
+        # one unless this deployment approves writes unattended.
+        authority_mode=deployment.settings.authority.mode,
+        kubectl_binary=deployment.settings.transport.kubectl_binary,
         widened_write_stages=deployment.settings.authority.additional_write_stages,
         scope=resources.scope,
         evidence=deployment.evidence,

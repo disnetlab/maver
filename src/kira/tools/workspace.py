@@ -132,12 +132,14 @@ class SessionWorkspace:
 
         ``HOME`` and ``TMPDIR`` are pointed at the session directory so a command cannot
         write to the real home directory or leave files outside the workspace. No cluster
-        credentials are passed: the sandbox tools are for processing saved output, and a
-        tool that could reach the cluster from inside them would bypass the approval gate
-        entirely.
+        credentials are passed, and none are passed by anything layered on top of this
+        either: a deployment whose transport offers a credential-free proxy adds that
+        endpoint and the calling stage in :func:`kira.tools.execution.subprocess_env`,
+        where the stage is known, and what a command reaches through it is screened by
+        the same stage policy the approval gate applies.
 
         Returns:
-            The environment to run with.
+            The environment to run with, before any route-specific wiring.
         """
         env = {k: os.environ[k] for k in _PASS_THROUGH if k in os.environ}
         env.setdefault("PATH", os.defpath)

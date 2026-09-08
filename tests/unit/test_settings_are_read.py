@@ -50,7 +50,6 @@ DECLARED_FOR_UNBUILT_WORK = {
     "observability.event_log_enabled": "the audit sink is chosen by the composition root",
     "observability.event_log_path": "the audit sink writes to the store, not a file",
     "tools.blind_namespaces": "no telemetry wrapper filters on it",
-    "tools.kubectl_timeout_s": "the transport's own timeout bounds a cluster command",
 }
 
 
