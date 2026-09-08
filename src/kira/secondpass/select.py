@@ -239,6 +239,8 @@ class BlindSelector:
                         system=read_asset("secondpass/selector_system.txt"),
                         messages=({"role": "user", "content": prompt},),
                         sampling=ctx.sampling.model_copy(update={"max_tokens": self.max_tokens}),
+                        # Every measured run made this call with the reasoning channel off.
+                        suppress_reasoning=True,
                     ),
                     caller="secondpass.selector",
                 ),

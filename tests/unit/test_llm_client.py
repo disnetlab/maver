@@ -403,6 +403,24 @@ class TestRequestAssembly:
         )
         assert captured["kwargs"]["reasoning_effort"] == "low"
 
+    async def test_a_helper_asks_for_no_reasoning_channel_on_any_profile(self) -> None:
+        """The second-pass helpers each want one JSON object under a few hundred tokens.
+        Left with a reasoning channel, this model spends the whole budget in it and
+        returns empty content, which the gate reads as unparseable and the selector as a
+        parse failure — so both fall back and the arm's mechanism never runs. Every
+        measured run made these calls with the channel off, and it is off here whatever
+        the profile says about rescue turns."""
+        captured: dict[str, Any] = {}
+        client, _ = _client(completion=_capture(captured, _Raw(_Msg("hi"))))
+        await client.complete(
+            ModelRequest(system="s", messages=(), suppress_reasoning=True),
+            caller="secondpass.gate",
+        )
+        assert captured["kwargs"]["extra_body"]["chat_template_kwargs"] == {
+            "enable_thinking": False
+        }
+        assert "reasoning_effort" not in captured["kwargs"]
+
     async def test_a_rescue_turn_is_recorded_on_the_set_it_was_sent_on(self) -> None:
         """The rescue levers are applied after the rule that resolves the set, so a
         record derived from the rule alone said the turn ran on the profile's reasoning

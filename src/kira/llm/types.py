@@ -94,6 +94,14 @@ class ModelRequest:
     """Overrides the profile's set. Normally None: the profile is the source."""
     lite_reasoning: bool = False
     """A rescue turn, which applies the profile's rescue quirks."""
+    suppress_reasoning: bool = False
+    """Ask the server for no reasoning channel on this call, whatever the profile says.
+
+    Separate from ``lite_reasoning`` because the two answer different questions. A
+    rescue turn asks the profile whether suppressing helps this model; a helper that
+    must return one JSON object inside a few hundred tokens cannot afford a reasoning
+    channel on any model, and the measured runs set it unconditionally on all three.
+    """
 
 
 @dataclass(frozen=True, slots=True)

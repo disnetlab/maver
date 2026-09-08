@@ -69,16 +69,18 @@ def sent_sampling(
         The resolution that reaches the provider.
     """
     applied = applied_sampling(request.sampling, profile, resolved)
-    if not request.lite_reasoning:
+    if not (request.lite_reasoning or request.suppress_reasoning):
         return applied
     # A rescue turn asks only for a schema-valid submission, and a greedy local model
     # will otherwise spend the whole budget in its reasoning channel and be cut off
-    # before emitting one.
+    # before emitting one. A helper call asks for one JSON object under a small cap and
+    # has the same problem for the same reason, but on every model rather than the ones
+    # the profile names, so it says so itself.
     top_level = dict(applied.top_level)
     extra_body = dict(applied.extra_body)
-    if profile.quirks.rescue_disable_thinking:
+    if request.suppress_reasoning or profile.quirks.rescue_disable_thinking:
         extra_body.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
-    if profile.quirks.rescue_reasoning_effort is not None:
+    if request.lite_reasoning and profile.quirks.rescue_reasoning_effort is not None:
         top_level["reasoning_effort"] = profile.quirks.rescue_reasoning_effort
     return SamplingResolution(
         applied.profile_name,
