@@ -31,6 +31,7 @@ from mcp import ClientSession
 from mcp.client.sse import sse_client
 
 from kira.adapters.sregym.conductor import SSID_HEADER
+from kira.tools.kubernetes import leading_verb
 from kira.tools.transport.base import TraceOperation
 
 __all__ = ["TOOL_SERVER", "McpTransport"]
@@ -134,6 +135,9 @@ class McpTransport:
         Returns:
             The command's output, or a string beginning with ``error:``.
         """
+        refusal = _blocking_watch_refusal(argv)
+        if refusal is not None:
+            return refusal
         return await self.call("exec_kubectl_cmd_safely", {"cmd": f"kubectl {join(argv)}"})
 
     async def rollbackable_commands(self) -> str:
@@ -256,6 +260,48 @@ class McpTransport:
         except Exception as exc:
             _log.warning("[mcp] %s.%s failed: %s", server, tool, exc)
             return f"error: MCP {server}.{tool} call failed: {type(exc).__name__}: {exc}"
+
+
+_INTERACTIVE_FLAGS = frozenset({"-i", "-t", "-it", "-ti", "--stdin", "--tty"})
+
+
+def _blocking_watch_refusal(argv: Sequence[str]) -> str | None:
+    """Refuse the verbs the server cannot bound, with the guidance the archive gave.
+
+    The server runs a watch until kubectl itself gives up and honours no timeout the
+    caller sets: one ``rollout status --timeout=120s`` ran for eight and a half minutes,
+    and because the server answers one kubectl at a time, every other kubectl in the
+    session timed out behind it. The proxy the archived runs went through refused the
+    same verbs with the same advice, so the model reads what it read then.
+    """
+    verb, idx = leading_verb(argv)
+    if (
+        verb == "rollout"
+        and idx is not None
+        and idx + 1 < len(argv)
+        and argv[idx + 1].lower() == "status"
+    ):
+        return (
+            "error: kubectl rollout status is not permitted on this transport because it "
+            "can leave kubectl hanging against the SREGym server; use kubectl get with "
+            "-o json/jsonpath to check deployment generation, Ready replicas, pods, "
+            "endpoints, events, logs, or the incident SLI"
+        )
+    if verb == "wait":
+        return (
+            "error: kubectl wait is not permitted on this transport because it uses a watch "
+            "request that can wedge the SREGym server; use kubectl get with -o json/jsonpath "
+            "to check readiness or rollout fields"
+        )
+    if verb in {"exec", "run", "attach"}:
+        for arg in argv:
+            if arg in _INTERACTIVE_FLAGS:
+                return (
+                    f"error: kubectl {verb} with interactive flags ({arg}) is not permitted on "
+                    "this transport because it hangs the non-interactive server. Run "
+                    "non-interactive commands without -i or -t instead."
+                )
+    return None
 
 
 def _rendered(result: Any) -> str:

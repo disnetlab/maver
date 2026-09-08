@@ -718,3 +718,55 @@ async def test_the_episode_route_answers_to_the_same_admission_rules(
             task.cancel()
         await _settle(app)
     storage.close()
+
+
+# --- The MCP transport refuses what its server cannot bound -----------------------------
+
+
+@pytest.mark.parametrize(
+    ("argv", "head"),
+    [
+        (
+            ["rollout", "status", "deployment/user-service", "-n", "shop", "--timeout=120s"],
+            "error: kubectl rollout status is not permitted on this transport",
+        ),
+        (
+            ["wait", "--for=condition=ready", "pod/x", "-n", "shop"],
+            "error: kubectl wait is not permitted on this transport",
+        ),
+        (
+            ["exec", "-it", "pod/x", "-n", "shop", "--", "sh"],
+            "error: kubectl exec with interactive flags (-it) is not permitted",
+        ),
+    ],
+)
+async def test_the_mcp_transport_refuses_watches_before_opening_a_session(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], head: str
+) -> None:
+    """The server runs a watch until kubectl gives up, whatever timeout the caller set,
+    and serves one kubectl at a time, so one such call stalls the whole session. The
+    proxy the archive ran through refused these with the same advice."""
+
+    def explode(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("a refused command must not reach the server")
+
+    monkeypatch.setattr("kira.adapters.sregym.transport.sse_client", explode)
+
+    result = await McpTransport("http://mcp:9954").kubectl(argv)
+
+    assert result.startswith(head)
+
+
+async def test_the_mcp_transport_still_sends_an_ordinary_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        raise ConnectionRefusedError("nothing listening")
+
+    monkeypatch.setattr("kira.adapters.sregym.transport.sse_client", refuse)
+
+    result = await McpTransport("http://mcp:9954").kubectl(["get", "pods", "-n", "shop"])
+
+    assert result.startswith(
+        "error: MCP kubectl.exec_kubectl_cmd_safely call failed: ConnectionRefusedError"
+    )
