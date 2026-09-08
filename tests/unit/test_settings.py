@@ -158,6 +158,14 @@ def test_the_turn_budget_defaults_to_what_every_campaign_ran() -> None:
     assert Settings().pipeline.max_turns == 100
 
 
+def test_the_relevance_floor_and_the_query_filter_default_to_what_was_measured() -> None:
+    """No host's environment ever set MEMORY_MIN_TEXT_RANK_PER_TOKEN, so every measured
+    retrieval ran without a floor; the boilerplate filter was on for two of the four
+    September hosts and off for two, so the prototype's own default stands."""
+    assert Settings().memory.min_score_per_token == 0.0
+    assert Settings().memory.second_pass.drop_boilerplate is False
+
+
 def test_the_retrieval_depth_defaults_to_what_the_campaigns_ran() -> None:
     """Five was the prototype's code default and the depth nothing recent measured. The
     archived environment of the campaigns this build reproduces sets

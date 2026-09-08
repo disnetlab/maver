@@ -374,3 +374,15 @@ def test_force_lifts_the_nominators_veto_and_nothing_else() -> None:
     assert policy is not None
     assert isinstance(policy.briefer, FamilyAssignmentBrief)
     assert policy.briefer.on_same_family == "verify"
+
+
+def test_the_query_filter_is_read_from_settings_not_baked_into_the_composition() -> None:
+    """The campaigns varied the filter by host, so it must be settable per deployment."""
+    for flag in (False, True):
+        policy = policy_for(
+            SecondPassSettings(enabled=True, drop_boilerplate=flag), MemorySettings()
+        )
+        assert policy is not None and isinstance(policy.query, MergedQuery)
+        anchors = [q for q in policy.query.legs if isinstance(q, PreAnchorQuery)]
+        assert [q.drop_boilerplate for q in anchors] == [flag]
+        assert [q.observation_lines for q in anchors] == [12]

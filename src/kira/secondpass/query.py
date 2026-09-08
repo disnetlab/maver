@@ -109,14 +109,15 @@ class PreAnchorQuery:
     lever and the wrong one: filtering the query scored better than truncating it, and
     stacking truncation on the filter changed nothing."""
     drop_boilerplate: bool = False
-    """Off, because that is how every published cell was retrieved.
+    """Off here, because that is how the published cells were retrieved; the shipped
+    value comes from ``memory.second_pass.drop_boilerplate``.
 
     The filter is a screened mitigation, not a repair already banked. 84.6% of the
     campaign query's body was section headers and empty-state markers that the
     observation-signal regex admits, and dropping them scored 0.116 same-family
-    precedents per retrieved memory against 0.011 as deployed. The live A/B was written
-    and staged on two hosts and never ran, so the direction of the effect on a diagnosis
-    is still unmeasured."""
+    precedents per retrieved memory against 0.011 as deployed. The September 2026
+    campaign then ran it on two of four hosts and off on the other two, which measured
+    the pair of values without separating them."""
     line_chars: int = 360
 
     async def build(self, ctx: SecondPassContext, first: RootCause) -> list[NamedQuery]:

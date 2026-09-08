@@ -20,7 +20,8 @@ acted on and where the filter it suggests is a knob rather than a default.
 **Retrieval may answer "nothing".** Ranked retrieval returns its top-k whether or not
 anything is relevant, and on this corpus roughly 88% of what a role read at k=5 was
 irrelevant. A floor on the normalised score lets the retriever return nothing at all,
-which is a real answer and a more useful one than five unrelated incidents.
+which is a real answer and a more useful one than five unrelated incidents. The floor
+ships off, because no measured run set one; it is a knob the offline screen argues for.
 
 **A record is demoted for its lifecycle state, never suppressed.** Excluding invalidated
 records was measured and lost ground: coverage fell 88% -> 72% and 90% -> 68%, and 5.7pp

@@ -396,6 +396,18 @@ class SecondPassSettings(SettingsGroup):
             "nominator's veto only; it does not override the quality gate."
         ),
     )
+    drop_boilerplate: bool = setting(
+        False,
+        "KIRA_MEMORY__SECOND_PASS__DROP_BOILERPLATE",
+        "MEMORY_EVIDENCE_QUERY_DROP_BOILERPLATE",
+        description=(
+            "Strip section headers and empty-state markers from the pre-anchor "
+            "observation query before it is searched. Off is the prototype's default "
+            "and how the published cells were retrieved; the September campaign ran it "
+            "on two of its four hosts and off on the other two, so neither value is "
+            "the campaign's and an arm reproducing one host's cells pins it."
+        ),
+    )
     max_precedents: int = setting(
         6,
         "KIRA_MEMORY__SECOND_PASS__MAX_PRECEDENTS",
@@ -606,7 +618,7 @@ class MemorySettings(SettingsGroup):
         ),
     )
     min_score_per_token: float = setting(
-        0.5,
+        0.0,
         "KIRA_MEMORY__MIN_SCORE_PER_TOKEN",
         "MEMORY_MIN_TEXT_RANK_PER_TOKEN",
         description=(
@@ -614,9 +626,10 @@ class MemorySettings(SettingsGroup):
             "count, which is what lets a retrieval answer that nothing is comparable. "
             "Zero or less disables it and returns k records whatever they score, rather "
             "than setting the floor at zero: a BM25 score is not bounded below, so a "
-            "zero threshold would drop a whole small or homogeneous pool. The prototype "
-            "shipped this off and no campaign set it, so an arm reproducing one pins "
-            "zero here rather than inheriting a floor that would cut its dose."
+            "zero threshold would drop a whole small or homogeneous pool. Off by "
+            "default because no measured run set it: the prototype shipped it off and "
+            "no host's environment named it. The offline screen that favoured 0.5 is "
+            "a reason to try it, not a measured configuration to inherit."
         ),
     )
     mask_identifiers: bool = setting(

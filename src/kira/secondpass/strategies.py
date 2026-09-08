@@ -141,12 +141,20 @@ def policy_for(settings: SecondPassSettings, memory: MemorySettings) -> SecondPa
 def _apply(
     base: SecondPassPolicy, settings: SecondPassSettings, memory: MemorySettings
 ) -> SecondPassPolicy:
-    """Overlay the five numbers an arm may legitimately vary.
+    """Overlay the six values an arm may legitimately vary.
 
-    Only five, because everything else about a composition is what gives it its name.
+    Only six, because everything else about a composition is what gives it its name.
     An arm that wants a different gate, briefer or selector is a different arm and says
     so in its own file.
     """
+    query = base.query
+    if isinstance(query, MergedQuery):
+        # The filter is the one query knob the campaigns varied, by host rather than
+        # by arm, so it is read from settings and not baked into the measured query.
+        query = MergedQuery(
+            ObservationQuery(),
+            PreAnchorQuery(observation_lines=12, drop_boilerplate=settings.drop_boilerplate),
+        )
     gate = base.gate
     if isinstance(gate, QualityAuditGate):
         gate = QualityAuditGate(
@@ -178,4 +186,6 @@ def _apply(
         selector = BlindSelector(
             max_tokens=settings.selector_max_tokens, timeout_s=settings.selector_timeout_s
         )
-    return replace(base, gate=gate, briefer=briefer, retriever=retriever, selector=selector)
+    return replace(
+        base, query=query, gate=gate, briefer=briefer, retriever=retriever, selector=selector
+    )
