@@ -43,7 +43,12 @@ from kira.prompts.loader import compose_role_prompt, read_runtime, render
 from kira.roles.base import RoleContext, RoleOutcome, RoleSpec
 from kira.roles.loop import run_until_submit
 from kira.roles.policy import LoopLimits, opening, overlay_guard, role_system_prompt
-from kira.roles.prompting import overlay_context, overlay_system, retrieval_enabled
+from kira.roles.prompting import (
+    kubectl_route,
+    overlay_context,
+    overlay_system,
+    retrieval_enabled,
+)
 from kira.roles.registry import role
 
 __all__ = ["EXECUTION", "initial_execution_tool_choice", "requires_kubelet_recovery"]
@@ -239,6 +244,7 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
                         ctx.spec.prompt,
                         retrieval_enabled=retrieval_enabled(ctx),
                         override_dir=ctx.settings.prompts.override_dir,
+                        kubectl_route=kubectl_route(ctx),
                     ),
                     ctx.overlay,
                 )

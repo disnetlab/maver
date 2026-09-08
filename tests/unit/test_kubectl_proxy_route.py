@@ -12,6 +12,7 @@ refusals it can disprove, and one told the opposite spends them on kubectl comma
 cannot run. So they are checked together, against one fake transport.
 """
 
+import ast
 import sys
 import types
 from pathlib import Path
@@ -254,3 +255,31 @@ async def test_output_still_goes_through_the_evidence_policy_on_the_proxy_route(
 
     assert "chaos-mesh" not in answer
     assert "[redacted]" in answer
+
+
+# --- the role prompts ---------------------------------------------------------------
+
+
+ROLES = Path(__file__).resolve().parents[2] / "src" / "kira" / "roles"
+
+
+def test_every_role_composes_its_prompt_for_the_route_it_is_running_on() -> None:
+    """Six roles compose a prompt and each does it in its own module.
+
+    Five getting it right is not most of the way there: it is one role holding the
+    proxy's kubectl and reading guidance that says the sandbox has no credentials,
+    inside a pipeline where the other five say the opposite. The call sites are checked
+    rather than the composition, because a missing keyword takes the parameter default
+    and composes a valid prompt for the wrong route — there is nothing to raise.
+    """
+    unrouted = []
+    for path in sorted(ROLES.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            if node.func.id != "compose_role_prompt":
+                continue
+            if not any(keyword.arg == "kubectl_route" for keyword in node.keywords):
+                unrouted.append(f"{path.name}:{node.lineno}")
+
+    assert not unrouted, f"these compose a role prompt without a route: {unrouted}"

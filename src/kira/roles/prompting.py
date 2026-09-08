@@ -14,9 +14,11 @@ from typing import Any
 from kira.adapters.base import RoleOverlay
 from kira.prompts.loader import read_runtime
 from kira.roles.base import RoleContext
+from kira.tools.context import kubectl_route as transport_kubectl_route
 
 __all__ = [
     "alert_json",
+    "kubectl_route",
     "memory_guidance",
     "overlay_context",
     "overlay_system",
@@ -69,6 +71,25 @@ def retrieval_enabled(ctx: RoleContext) -> bool:
     return ctx.settings.memory.enabled and any(
         tool.name == "memory_search" for tool in ctx.toolset.definitions
     )
+
+
+def kubectl_route(ctx: RoleContext) -> str:
+    """Which kubectl route this run's environment puts the role on.
+
+    Asked of the bound transport rather than of a setting, for the same reason the
+    toolset asks it what it serves: the route is a property of the environment the run
+    was handed, and a second knob saying otherwise would compose guidance for a route
+    the run is not on. Here for the same reason the memory conjunction above is: six
+    roles compose a prompt and five of them getting it right is a system prompt that
+    contradicts the tools in the same request.
+
+    Args:
+        ctx: The role run's context.
+
+    Returns:
+        ``"proxy_exec"`` when the transport offers a kubectl proxy, ``"tool"`` otherwise.
+    """
+    return transport_kubectl_route(ctx.tool_context.transport)
 
 
 def memory_guidance(enabled: bool) -> str:

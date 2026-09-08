@@ -35,7 +35,12 @@ from kira.roles.policy import (
     overlay_guard,
     role_system_prompt,
 )
-from kira.roles.prompting import alert_json, overlay_context, overlay_system
+from kira.roles.prompting import (
+    alert_json,
+    kubectl_route,
+    overlay_context,
+    overlay_system,
+)
 from kira.roles.registry import role
 from kira.roles.trace_summary import build_trace_summary
 
@@ -92,6 +97,7 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
                 ctx.spec.prompt,
                 retrieval_enabled=False,
                 override_dir=ctx.settings.prompts.override_dir,
+                kubectl_route=kubectl_route(ctx),
             ),
             ctx.overlay,
         )

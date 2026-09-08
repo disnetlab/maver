@@ -117,11 +117,12 @@ def context(
     resume: list[dict[str, Any]] | None = None,
     profile: Any = PROFILE,
     sink: ListSink | None = None,
+    transport: Any = None,
 ) -> tuple[RoleContext, FakeModel]:
     sink = sink or ListSink()
     journal = Journal(sink, session_id="s1", stage="execution")
     tools = ToolContext(
-        transport=FakeTransport(),
+        transport=transport or FakeTransport(),
         workspace=SessionWorkspace(tmp_path),
         role="execution",
         session_id="s1",
@@ -165,6 +166,29 @@ async def test_the_opening_turn_carries_the_diagnosis_and_the_approved_plan(
 
     assert model.requests[0].messages[0]["content"] == FIXTURE["execution_first_entry"]
     assert outcome.artifact is not None
+
+
+async def test_the_system_prompt_follows_the_route_the_transport_offers(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The prompt and the tools are two halves of one request and have to agree.
+
+    On the proxy route the sandbox resolves kubectl to a stage-aware shim, so guidance
+    saying it has no cluster credentials is a contradiction the model can disprove in
+    one command — and the role composes its own prompt, so the route has to reach it
+    there and not only at the tool.
+    """
+
+    class Proxied(FakeTransport):
+        kubectl_proxy_url = "http://127.0.0.1:16444"
+
+    unproxied_ctx, unproxied = context(tmp_path)
+    await execution.EXECUTION.run(unproxied_ctx)
+    proxied_ctx, proxied = context(tmp_path, transport=Proxied())
+    await execution.EXECUTION.run(proxied_ctx)
+
+    assert "run normal `kubectl` commands directly" not in unproxied.requests[0].system
+    assert "run normal `kubectl` commands directly" in proxied.requests[0].system
 
 
 @pytest.mark.parity

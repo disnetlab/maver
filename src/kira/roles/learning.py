@@ -33,7 +33,12 @@ from kira.prompts.loader import compose_role_prompt, read_runtime, render
 from kira.roles.base import RoleContext, RoleOutcome, RoleSpec
 from kira.roles.loop import run_until_submit
 from kira.roles.policy import LoopLimits, overlay_guard, role_system_prompt
-from kira.roles.prompting import overlay_context, overlay_system, retrieval_enabled
+from kira.roles.prompting import (
+    kubectl_route,
+    overlay_context,
+    overlay_system,
+    retrieval_enabled,
+)
 from kira.roles.registry import role
 
 __all__ = ["LEARNING", "Trigger", "load_trigger"]
@@ -89,6 +94,7 @@ def _system_prompt(ctx: RoleContext, *, verify_live: bool) -> str:
             ctx.spec.prompt,
             retrieval_enabled=retrieval_enabled(ctx),
             override_dir=ctx.settings.prompts.override_dir,
+            kubectl_route=kubectl_route(ctx),
         ),
         read_runtime("learning", f"{POST_INCIDENT}.txt"),
     ]

@@ -22,6 +22,7 @@ from kira.roles.loop import run_until_submit
 from kira.roles.policy import LoopLimits, opening, overlay_guard, role_system_prompt
 from kira.roles.prompting import (
     alert_json,
+    kubectl_route,
     memory_guidance,
     overlay_context,
     overlay_system,
@@ -127,6 +128,7 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
                     ctx.spec.prompt,
                     retrieval_enabled=retrieval_enabled(ctx),
                     override_dir=ctx.settings.prompts.override_dir,
+                    kubectl_route=kubectl_route(ctx),
                 ),
                 ctx.overlay,
             )
