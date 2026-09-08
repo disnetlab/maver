@@ -85,6 +85,12 @@ DELIBERATELY_DIVERGED = {
         "dropped {{AIOPSLAB_VERIFY_CONNECTIVITY_CONTRACT}}, a benchmark-named slot no "
         "adapter can fill; it rendered empty, so the composed message is unchanged"
     ),
+    Path("roles/verify.txt"): (
+        "dropped the benchmark-supplied connectivity-contract paragraph: the prototype "
+        "added it for the AIOpsLab adapter after the image every measured verify cell "
+        "ran on (built 2026-08-29) was cut, so the September campaign's verify prompt "
+        "does not carry it; the AIOpsLab overlay supplies that instruction itself"
+    ),
 }
 
 

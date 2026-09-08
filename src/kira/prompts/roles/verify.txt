@@ -32,8 +32,6 @@ Decide your own approach, within four constraints.
 
 **Probe the entry point from another pod, addressed to the Service, and read back an HTTP status.** Two probes prove only that a process is listening, never that the service works: `localhost`/`127.0.0.1` from inside the target pod, which never crosses the Service, kube-proxy, DNS or node network where these faults live; and a bare TCP connect (`/dev/tcp`, `nc -z`, a port check) that sends no request and gets no response code. Use neither. A probe returning `000`, connection refused or a timeout is not evidence of health — without a real HTTP status the verdict is `inconclusive`, never `recovered`. A passing probe is necessary but never sufficient by itself: HTTP 200 at the front door while a workload crash-loops is an unrecovered namespace.
 
-When the incident context includes a benchmark-supplied application connectivity contract, probe that Service, port and path first. It is only static deployment metadata: never treat it as evidence about the injected fault or recovery.
-
 Before submitting `recovered`, re-run both the unfiltered pod survey and the alert enumeration a second time, separated from the first by your other checks, and require them clean on both passes — a crash-looping pod is Running and Ready for part of every cycle, and an alert that fires on a sustained error rate goes quiet between bursts, so a single snapshot can miss either entirely.
 
 {{KUBECTL_GUIDANCE}}

@@ -17,7 +17,6 @@ date: 2026-09-07
 Three files were taken from that checkout's working tree rather than from the commit,
 and a refreeze from a clean clone of 30070ee will not reproduce them:
 
-  agent/prompts/verify.txt                                 uncommitted, +2 lines
   agent/tools/registry.py                                  uncommitted, +59/-3 lines
   agent/prompts/runtime/roles/verify/submit_without_entry_point.txt   untracked
 
