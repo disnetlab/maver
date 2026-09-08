@@ -13,8 +13,6 @@ cannot run. So they are checked together, against one fake transport.
 """
 
 import ast
-import sys
-import types
 from pathlib import Path
 from typing import Any
 
@@ -60,31 +58,6 @@ class FakeTransport:
 
 
 PROXY = "http://127.0.0.1:16444"
-
-
-@pytest.fixture
-def shim(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Stand in for ``kira.tools.kubectl_proxy``, recording what it was handed.
-
-    The module under test reaches the real one by name at call time, so a stand-in in
-    ``sys.modules`` is what a caller sees. It is a test double rather than a second
-    implementation: what is asserted here is the arguments the sandbox tools compute —
-    the stage, the deployment's approval mode, the configured kubectl and the timeout —
-    which is this module's half of the contract.
-
-    Returns:
-        The recorded calls, in order.
-    """
-    calls: list[dict[str, Any]] = []
-    module = types.ModuleType("kira.tools.kubectl_proxy")
-
-    def apply_proxy_env(env: dict[str, str], **kwargs: Any) -> dict[str, str]:
-        calls.append({"env": dict(env), **kwargs})
-        return {**env, "KUBECTL_MODE": "proxy_exec", "AGENT_STAGE": str(kwargs["stage"])}
-
-    module.apply_proxy_env = apply_proxy_env  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "kira.tools.kubectl_proxy", module)
-    return calls
 
 
 def context(

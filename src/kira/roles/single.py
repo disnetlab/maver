@@ -22,6 +22,8 @@ than the one being compared against.
 
 import json
 import logging
+from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from kira.contracts.artifacts import SingleDiagnosis, SingleResult
@@ -43,6 +45,7 @@ from kira.roles.prompting import (
 )
 from kira.roles.registry import role
 from kira.roles.trace_summary import build_trace_summary
+from kira.tools.registry import BoundTool
 
 __all__ = ["SINGLE"]
 
@@ -88,6 +91,21 @@ def _submitted_diagnosis(messages: list[Message]) -> tuple[SingleDiagnosis, list
     return None
 
 
+def _for_stage(dispatch: Mapping[str, BoundTool], stage: str) -> dict[str, BoundTool]:
+    """Rebind every tool in a dispatch map to the phase about to run.
+
+    Args:
+        dispatch: The role's resolved dispatch.
+        stage: The phase label the loop reports to the approval gate.
+
+    Returns:
+        The same tools, each bound to a context naming that phase.
+    """
+    return {
+        name: replace(bound, ctx=replace(bound.ctx, role=stage)) for name, bound in dispatch.items()
+    }
+
+
 async def _run(ctx: RoleContext) -> RoleOutcome:
     system = role_system_prompt(
         overlay_system(
@@ -110,7 +128,6 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
     shared: dict[str, Any] = {
         "model": ctx.completion,
         "system": system,
-        "dispatch": ctx.toolset.dispatch,
         "limits": limits,
         "session_id": ctx.session_id,
         "journal": ctx.journal,
@@ -147,6 +164,7 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         )
         diagnosis_run = await run_until_submit(
             role="single.diagnosis",
+            dispatch=ctx.toolset.dispatch,
             tools=_hide(ctx.toolset.definitions, "submit_mitigation"),
             submit_tool="submit_diagnosis",
             messages=list(ctx.resume)
@@ -176,6 +194,14 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
 
     mitigation_run = await run_until_submit(
         role="single.mitigation",
+        # The phase, not the role. This pass answers a separately graded question and
+        # the gate is told which one: the write policy names `single.mitigation`, and
+        # that is the label the loop hands it. A tool that screens a call by the stage
+        # has to be looking at the same label, and the only one a tool can see is the
+        # role its context was bound to — one role for both passes, so the writing pass
+        # rebinds it. The diagnosis pass deliberately does not: its label is what says
+        # it may not write.
+        dispatch=_for_stage(ctx.toolset.dispatch, "single.mitigation"),
         tools=_hide(ctx.toolset.definitions, "submit_diagnosis"),
         submit_tool="submit_mitigation",
         messages=mitigation_opening,

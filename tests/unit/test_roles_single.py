@@ -16,7 +16,7 @@ from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from kira.middleware.base import MiddlewareStack
 from kira.roles import single
 from kira.roles.base import RoleContext
-from kira.settings.groups import MemorySettings, PipelineSettings
+from kira.settings.groups import MemorySettings, PipelineSettings, ToolSettings
 from kira.settings.profiles import load_profile
 from kira.settings.root import Settings
 from kira.tools.context import ToolContext
@@ -79,15 +79,17 @@ class ScriptedModel:
         )
 
 
-def context(tmp_path: pathlib.Path, model: ScriptedModel) -> RoleContext:
+def context(tmp_path: pathlib.Path, model: ScriptedModel, transport: Any = None) -> RoleContext:
     sink = ListSink()
     journal = Journal(sink, session_id="s1", stage="single")
     tools = ToolContext(
-        transport=FakeTransport(),
+        transport=transport or FakeTransport(),
         workspace=SessionWorkspace(tmp_path),
         role="single",
         session_id="s1",
         journal=journal,
+        settings=ToolSettings(fs_sandbox=False),
+        authority_mode="auto",
     )
     return RoleContext(
         spec=single.SINGLE,
@@ -166,3 +168,30 @@ async def test_a_failed_diagnosis_ends_the_run_with_nothing(tmp_path: pathlib.Pa
     assert outcome.artifact is None
     assert outcome.error is not None and outcome.error.startswith("single-agent diagnosis failed")
     assert outcome.delta == {}
+
+
+async def test_each_phase_screens_its_shell_commands_under_its_own_stage(
+    tmp_path: pathlib.Path, shim: list[dict[str, Any]]
+) -> None:
+    """One transcript, two separately graded phases, and only the second may write.
+
+    The gate is told which phase is running and refuses a write from the first. A tool
+    that screens by the stage sees only the role its context was bound to, and one role
+    covers both phases — so the writing phase had to rebind it. Without that the shim on
+    the sandbox's PATH would refuse the whole remediation pass of this arm, on a stage
+    the gate would have allowed every command in.
+    """
+
+    class Proxied(FakeTransport):
+        kubectl_proxy_url = "http://127.0.0.1:16444"
+
+    model = ScriptedModel(
+        ("bash_exec", {"cmd": "kubectl get pods -n shop"}),
+        ("submit_diagnosis", DIAGNOSIS),
+        ("bash_exec", {"cmd": "kubectl scale deploy/user -n shop --replicas=2"}),
+        ("submit_mitigation", MITIGATION),
+    )
+
+    await single.SINGLE.run(context(tmp_path, model, transport=Proxied()))
+
+    assert [call["stage"] for call in shim] == ["single", "single.mitigation"]
