@@ -91,11 +91,7 @@ ssh_exec:
     start kubelet` on every affected NotReady worker, then verify Ready;
     cordon/drain cannot repair that fault. This is a function tool: never type
     `ssh_exec` into bash/code. Do not run kubectl through it; use the Kubernetes
-    tool for cluster operations. Every command in the line must start with a
-    host binary — systemctl, journalctl, df, du, free, uptime, ps, top, dmesg,
-    mount, lsblk, ip, ss, netstat, ping, dig, nslookup, ls, stat, cat, head,
-    tail, grep, swapoff, sysctl — optionally behind sudo; a shell, an
-    interpreter, xargs, eval or a script path is refused.
+    tool for cluster operations.
 
 exec_kubectl_cmd_safely:
   default: >-
