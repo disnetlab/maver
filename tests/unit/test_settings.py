@@ -158,6 +158,14 @@ def test_the_turn_budget_defaults_to_what_every_campaign_ran() -> None:
     assert Settings().pipeline.max_turns == 100
 
 
+def test_the_retrieval_depth_defaults_to_what_the_campaigns_ran() -> None:
+    """Five was the prototype's code default and the depth nothing recent measured. The
+    archived environment of the campaigns this build reproduces sets
+    MEMORY_SEARCH_TOP_K=3 and both frozen memory arms pin three, so a deployment left on
+    five reads two records more per retrieval than anything the results describe."""
+    assert Settings().memory.top_k == 3
+
+
 class TestExperienceAdoption:
     """A past incident reaches a present one two ways, and they share one store."""
 
@@ -294,7 +302,7 @@ class TestValidation:
         monkeypatch.setenv("MODEL", "some-value")
         monkeypatch.setenv("MEMORY__TOP_K", "9")
         settings = load_settings()
-        assert settings.memory.top_k == 5
+        assert settings.memory.top_k == 3
         assert unknown_prefixed_names() == []
 
 
@@ -369,7 +377,7 @@ class TestArmFiles:
         working, so it belongs in the report rather than in a refusal."""
         monkeypatch.setenv("KIRA_ARM", "ma")
         monkeypatch.setenv("KIRA_MEMORY__TOP_K", "9")
-        assert arm_overrides(load_settings()).allowed["memory.top_k"] == (5, 9)
+        assert arm_overrides(load_settings()).allowed["memory.top_k"] == (3, 9)
 
     def test_the_arm_reaches_the_run_record(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A frozen arm carries a published number, so a later edit has to be detectable."""

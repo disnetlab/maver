@@ -578,10 +578,19 @@ class MemorySettings(SettingsGroup):
         ),
     )
     top_k: int = setting(
-        5,
+        3,
         "KIRA_MEMORY__TOP_K",
         "MEMORY_SEARCH_TOP_K",
-        description="Records returned by a retrieval.",
+        description=(
+            "Records returned by a retrieval. Three rather than the prototype's code "
+            "default of five: the archived environment of the campaigns this build "
+            "reproduces sets MEMORY_SEARCH_TOP_K=3, and the frozen arm files pin three. "
+            "Recall and precision pull against each other here — over the offline "
+            "corpus 1 to 20 results moves useful-precedent recall 0.39 to 0.59 while "
+            "precision falls 0.39 to 0.04 — and a small model that anchors easily is "
+            "served the precision end of that trade. The earlier MA+R arm, whose "
+            "campaign ran at five, pins five in its own file."
+        ),
     )
     candidate_pool: int = setting(
         500,
