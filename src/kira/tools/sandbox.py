@@ -89,6 +89,13 @@ def _runtime_read_roots(session: Path) -> list[Path]:
     candidates = [
         project_access,
         Path(sys.executable).resolve().parent.parent,
+        # A virtualenv's python is a symlink to the base interpreter, so the resolved
+        # path above lands on the base install and not on the environment the
+        # subprocess actually starts in. Without the environment root, Python dies in
+        # site initialisation reading pyvenv.cfg, which is how every sandboxed
+        # code_exec in the image failed while every test on a developer machine passed.
+        Path(sys.prefix),
+        Path(sys.base_prefix),
         Path("/usr"),
         Path("/bin"),
         Path("/sbin"),
