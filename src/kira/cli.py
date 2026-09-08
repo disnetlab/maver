@@ -15,6 +15,7 @@ import json
 import logging
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Annotated, Any, cast
 
 import httpx
@@ -25,6 +26,7 @@ from kira import __version__
 from kira.adapters.registry import available_adapters
 from kira.api.app import enabled_adapters, validate_deployment
 from kira.api.hitl import request_payload
+from kira.memory.corpus import MalformedRecord, import_records, parse_records
 from kira.memory.factory import build_storage
 from kira.memory.ports import ApprovalStatus, ApprovalStore
 from kira.roles.registry import RoleRegistryError
@@ -42,8 +44,10 @@ config_app = typer.Typer(
 approvals_app = typer.Typer(
     help="Review and decide the writes waiting on a person.", no_args_is_help=True
 )
+memory_app = typer.Typer(help="Load and inspect the experience corpus.", no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(approvals_app, name="approvals")
+app.add_typer(memory_app, name="memory")
 
 UrlOption = Annotated[
     str | None,
@@ -192,6 +196,71 @@ def config_adapters() -> None:
         typer.echo(f"{name}: {status}" if status != "ready" else f"{name}: {mark}")
     for name in sorted(enabled - set(available_adapters())):
         typer.echo(f"{name}: ENABLED BUT NOT INSTALLED", err=True)
+
+
+@memory_app.command("import")
+def memory_import(
+    path: Annotated[Path, typer.Argument(help="JSON Lines, one record per line.")],
+    corpus: Annotated[
+        str | None,
+        typer.Option(
+            "--corpus",
+            help="Which corpus to load, defaulting to the configured memory.corpus_id.",
+        ),
+    ] = None,
+    replace: Annotated[
+        bool, typer.Option("--replace", help="Overwrite a session the corpus already holds.")
+    ] = False,
+) -> None:
+    """Load distilled records from a file into the configured store.
+
+    For a campaign whose corpus was written by an earlier system: the records go in
+    through the same port the distilling pass writes through, so the backend's own index
+    is built by the normaliser that retrieval queries with rather than by whatever wrote
+    the file. ``docs/adapters/sregym.md`` carries the export the archive is read out by.
+
+    The file is read and validated whole before the store is opened, so a bad line leaves
+    nothing behind. Keyed by session: without ``--replace`` a session already in the
+    corpus is left exactly as it is, which makes an interrupted import safe to re-run and
+    stops a second file quietly revising a record a run has already retrieved.
+
+    Args:
+        path: The JSON Lines file.
+        corpus: The corpus to write into. The partition is the database itself, so this
+            decides which campaign's records these become.
+        replace: Overwrite the records the corpus already holds.
+    """
+    settings = _resolved()
+    if corpus is not None:
+        settings = settings.model_copy(
+            update={"memory": settings.memory.model_copy(update={"corpus_id": corpus})}
+        )
+    try:
+        records = parse_records(path.read_text(encoding="utf-8"))
+    except (OSError, MalformedRecord) as exc:
+        typer.echo(f"{path}: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    try:
+        storage = build_storage(settings)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    try:
+        report = import_records(storage.index, records, replace=replace)
+    finally:
+        storage.close()
+    typer.echo(
+        f"{settings.memory.corpus_id}: imported {report.imported}, "
+        f"replaced {report.replaced}, skipped {report.skipped} already present"
+    )
+    if report.unknown_states:
+        # The ranker demotes by state, and a state its table cannot name is worth the
+        # default weight. A typo in an export is therefore a re-weighting of the corpus,
+        # and this is the only place it is visible.
+        typer.echo(
+            "lifecycle state(s) this build does not name, stored as given and ranked at "
+            f"the default weight: {', '.join(report.unknown_states)}"
+        )
 
 
 @approvals_app.command("list")
