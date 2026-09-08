@@ -22,6 +22,8 @@ from kira.tools.transport.base import ToolTransport
 from kira.tools.workspace import SessionWorkspace
 
 __all__ = [
+    "DEFAULT_KUBECTL_ROUTE",
+    "KUBECTL_ROUTES",
     "EvidencePolicy",
     "NullEvidencePolicy",
     "ToolContext",
@@ -33,6 +35,18 @@ __all__ = [
 ]
 
 _log = logging.getLogger(__name__)
+
+DEFAULT_KUBECTL_ROUTE = "tool"
+"""The route with no proxy: the cluster tool, and a sandbox that refuses kubectl."""
+
+KUBECTL_ROUTES: tuple[str, ...] = (DEFAULT_KUBECTL_ROUTE, "proxy_exec")
+"""Every way a deployment's roles can reach the cluster.
+
+The vocabulary is here because three layers spell it: the sandbox tools, the description
+catalogue and the prompt loader. The loader keys its block maps by these names rather
+than importing them, since prompt assets sit below the tool layer; the composition test
+is what holds the two spellings together.
+"""
 
 
 @runtime_checkable

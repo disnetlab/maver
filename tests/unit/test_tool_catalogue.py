@@ -9,6 +9,7 @@ import yaml
 from kira.prompts.loader import compose_role_prompt, read_runtime
 from kira.settings.root import known_env_names
 from kira.tools.allowlists import RETRIEVAL_TOOLS, ROLE_TOOLSETS
+from kira.tools.context import DEFAULT_KUBECTL_ROUTE, KUBECTL_ROUTES
 from kira.tools.registry import ToolSpec, validate_registry
 
 DESCRIPTIONS: dict[str, Any] = yaml.safe_load(
@@ -53,28 +54,53 @@ def test_the_shipped_catalogue_satisfies_every_registry_rule() -> None:
 SETTING_TOKEN = re.compile(r"\b([A-Z][A-Z0-9_]{5,})=")
 """An assignment to a shouting name: how a description spells a setting."""
 
+VARIANT_ROUTES = tuple(sorted(frozenset(KUBECTL_ROUTES) - {DEFAULT_KUBECTL_ROUTE}))
+"""The catalogue keys that carry a route's own text. The default route is the entry."""
+
+SET_BY_THE_SYSTEM = frozenset({"KUBECTL_MODE"})
+"""Names this system writes into a subprocess environment rather than reads as settings.
+
+``KUBECTL_MODE`` is set by the proxy wiring and read by the kubectl shim it puts on the
+sandbox's PATH, so a description naming it names something live. It is absent from the
+settings model because an operator does not choose the route: the bound transport does,
+by offering a proxy or not. The archived text below describes both routes in those terms
+and is carried word for word, which is why the name reaches the model at all.
+"""
+
 
 def shipped_descriptions() -> Iterator[tuple[str, str]]:
-    """Every description string the model can be shown, with where it came from."""
+    """Every description string the model can be shown, with where it came from.
+
+    Route sub-entries included. They are the strings a deployment on that route is the
+    only one to see, so leaving them out would exempt exactly the text nobody reads by
+    accident from the check that reads it for them.
+    """
     for tool, entry in DESCRIPTIONS.items():
-        yield tool, entry["default"]
-        for role, text in (entry.get("agents") or {}).items():
-            yield f"{tool}/{role}", text
+        for route in ("", *VARIANT_ROUTES):
+            variant = entry if not route else entry.get(route)
+            if not isinstance(variant, dict):
+                continue
+            where = tool if not route else f"{tool}[{route}]"
+            yield where, variant["default"]
+            for role, text in (variant.get("agents") or {}).items():
+                yield f"{where}/{role}", text
 
 
 def test_no_description_names_a_setting_the_system_does_not_have() -> None:
     """Descriptions ship to the model, so a stale setting name is a stale instruction.
 
-    ``bash_exec`` and ``code_exec`` branched on ``KUBECTL_MODE=proxy_exec`` for a mode
-    the rebuild dropped, telling the model kubectl works in the sandbox while the
-    kubectl block in the same request told it the sandbox has no credentials. The
-    prompt blocks lost the mode axis and the descriptions did not, because nothing
-    checked one hand-edited file against the settings model.
+    ``bash_exec`` and ``code_exec`` branched on ``KUBECTL_MODE=proxy_exec`` for a route
+    the rebuild had dropped, telling the model kubectl works in the sandbox while the
+    kubectl block in the same request told it the sandbox has no credentials. The prompt
+    blocks lost the route axis and the descriptions did not, because nothing checked one
+    hand-edited file against the settings model. The route is back and the two files
+    carry it in step, so what is left of that failure is the name itself, excused above
+    for a reason rather than by having no reader look at it.
 
     This only catches a setting written as an assignment, which is how the drift was
     written. A setting named in prose still gets past it.
     """
-    accepted = known_env_names()
+    accepted = known_env_names() | SET_BY_THE_SYSTEM
     named = [
         (where, name)
         for where, text in shipped_descriptions()

@@ -21,7 +21,6 @@ from importlib.resources import files
 from pathlib import Path
 
 __all__ = [
-    "KUBECTL_ROUTES",
     "PROMPT_PACKAGE",
     "PromptError",
     "compose_role_prompt",
@@ -69,13 +68,19 @@ _KUBECTL_PROXY_BLOCK: dict[str, str] = {
     "single": "single",
 }
 
-KUBECTL_ROUTES: frozenset[str] = frozenset({"tool", "proxy_exec"})
+_KUBECTL_ROUTE_BLOCKS: dict[str, dict[str, str]] = {
+    "tool": _KUBECTL_BLOCK,
+    "proxy_exec": _KUBECTL_PROXY_BLOCK,
+}
 """How a role reaches the cluster, and therefore which guidance it is given.
 
 ``tool`` is the cluster tool with the sandbox refusing kubectl; ``proxy_exec`` is a real
 kubectl on the role's PATH, pointed at a credential-free proxy and screened per stage by
 the shim it resolves to. The two are mutually exclusive and a deployment is in exactly
-one of them, decided by whether its bound transport offers a proxy URL.
+one of them, decided by whether its bound transport offers a proxy URL — which is what
+:func:`kira.tools.context.kubectl_route` answers. Keyed by the route name rather than
+guarded by a separate set of them, so a route this cannot fill is not a route it claims
+to know.
 """
 
 
@@ -300,7 +305,7 @@ def _block_for(marker: str, role: str, *, retrieval_enabled: bool, kubectl_route
     family = _ROLE_MARKERS.get(marker)
     if family == "kubectl":
         proxied = kubectl_route == "proxy_exec"
-        variant = (_KUBECTL_PROXY_BLOCK if proxied else _KUBECTL_BLOCK).get(role)
+        variant = _KUBECTL_ROUTE_BLOCKS[kubectl_route].get(role)
         if variant is None:
             raise PromptError(f"role {role!r} declares {{{{{marker}}}}} but holds no cluster tools")
         name = f"proxy_exec.{variant}" if proxied else variant
@@ -335,8 +340,8 @@ def compose_role_prompt(
             second-pass control deliberately runs with memory on and no retrieval.
         override_dir: Where a deployment keeps its own role prompts, or None. A role
             with no file there keeps the packaged one.
-        kubectl_route: How this deployment's roles reach the cluster, one of
-            :data:`KUBECTL_ROUTES`. The default is the cluster tool, which is what an
+        kubectl_route: How this deployment's roles reach the cluster, as
+            :func:`kira.tools.context.kubectl_route` answers it. The default is the cluster tool, which is what an
             unbound run and every direct-transport deployment uses; the caller passes
             ``proxy_exec`` when the bound transport offers a proxy the roles run their
             own kubectl against, because the two routes prescribe opposite things about
@@ -351,9 +356,10 @@ def compose_role_prompt(
     """
     override = override_for(role, override_dir)
     template = override if override is not None else read_asset(f"roles/{role}.txt")
-    if kubectl_route not in KUBECTL_ROUTES:
+    if kubectl_route not in _KUBECTL_ROUTE_BLOCKS:
         raise PromptError(
-            f"unknown kubectl route {kubectl_route!r}; expected one of {sorted(KUBECTL_ROUTES)}"
+            f"unknown kubectl route {kubectl_route!r}; "
+            f"expected one of {sorted(_KUBECTL_ROUTE_BLOCKS)}"
         )
     values = {
         marker: _block_for(

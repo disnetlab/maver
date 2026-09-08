@@ -19,11 +19,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from kira.audit.journal import Journal
 from kira.settings.groups import ToolSettings
+from kira.tools.allowlists import ROLE_TOOLSETS
 from kira.tools.context import EvidencePolicy, ToolContext, kubectl_route
 from kira.tools.execution import bash_exec, code_exec, subprocess_env
+from kira.tools.registry import ToolRegistryError, description_for, validate_registry
+from kira.tools.toolsets import build_toolset
 from kira.tools.workspace import SessionWorkspace
 
 
@@ -283,3 +287,105 @@ def test_every_role_composes_its_prompt_for_the_route_it_is_running_on() -> None
                 unrouted.append(f"{path.name}:{node.lineno}")
 
     assert not unrouted, f"these compose a role prompt without a route: {unrouted}"
+
+
+# --- the description catalogue ------------------------------------------------------
+
+
+ARCHIVED = yaml.safe_load(
+    """
+bash_exec:
+  default: no credentials here
+  agents:
+    execution: no credentials here either
+  proxy_exec:
+    default: kubectl resolves to the shim
+    agents:
+      execution: kubectl resolves to the shim, and you may write
+"""
+)
+
+
+def test_a_route_replaces_the_whole_entry_rather_than_blending_with_it() -> None:
+    """Blended, the two would describe a tool that both refuses kubectl and resolves it.
+
+    The per-role rule is the same one a level down, so a route's text has to be complete
+    on its own — and a role the route says nothing about reads that route's default, not
+    the other route's role text.
+    """
+    assert description_for("bash_exec", "rca", descriptions=ARCHIVED) == "no credentials here"
+    assert (
+        description_for("bash_exec", "rca", descriptions=ARCHIVED, route="proxy_exec")
+        == "kubectl resolves to the shim"
+    )
+    assert (
+        description_for("bash_exec", "execution", descriptions=ARCHIVED, route="proxy_exec")
+        == "kubectl resolves to the shim, and you may write"
+    )
+
+
+def test_a_tool_that_says_nothing_about_a_route_reads_the_same_on_all_of_them() -> None:
+    entry = {"get_logs": {"default": "read logs"}}
+
+    assert description_for("get_logs", "rca", descriptions=entry, route="proxy_exec") == "read logs"
+
+
+def test_a_route_entry_without_a_default_is_refused_at_startup() -> None:
+    """It would serve the roles it does not name the *other* route's text, which is the
+    contradiction the whole route axis exists to avoid — silently, and only for some
+    roles."""
+    catalogue = {"bash_exec": {"default": "d", "proxy_exec": {"agents": {"execution": "x"}}}}
+    with pytest.raises(ToolRegistryError, match="has no default"):
+        validate_registry(
+            descriptions=catalogue,
+            allowlists={"execution": ("bash_exec",)},
+            registry={"bash_exec": _stand_in()},
+        )
+
+
+def test_a_route_entry_may_not_describe_a_role_that_cannot_call_the_tool() -> None:
+    """The same rule as the entry above it: a description for a role that is not
+    allowlisted means the two hand-edited files disagree while each looks right."""
+    catalogue = {
+        "bash_exec": {"default": "d", "proxy_exec": {"default": "p", "agents": {"rca": "r"}}}
+    }
+    with pytest.raises(ToolRegistryError, match="not allowed to call it"):
+        validate_registry(
+            descriptions=catalogue,
+            allowlists={"execution": ("bash_exec",)},
+            registry={"bash_exec": _stand_in()},
+        )
+
+
+def _stand_in():
+    from kira.tools.registry import ToolSpec  # noqa: PLC0415
+
+    async def fn(ctx: object, **_: object) -> str:
+        return "ok"
+
+    return ToolSpec(
+        name="bash_exec",
+        parameters={"type": "object", "properties": {}},
+        safety="read_only",
+        dispatch=fn,
+    )
+
+
+SANDBOX_ROLES = sorted(role for role, names in ROLE_TOOLSETS.items() if "bash_exec" in names)
+
+
+@pytest.mark.parametrize("role", SANDBOX_ROLES)
+def test_the_toolset_describes_the_sandbox_tools_for_the_route_it_resolved(
+    tmp_path: Path, role: str
+) -> None:
+    """The description and the guidance block are the same claim in two places. Serving
+    the default text on the proxy route tells the model kubectl is rejected in the very
+    request whose system prompt tells it to run kubectl."""
+    proxied = build_toolset(role, context(tmp_path, role=role))
+    unproxied = build_toolset(role, context(tmp_path, role=role, proxy_url=None))
+
+    described = {d.name: d.description for d in proxied.definitions}
+    plain = {d.name: d.description for d in unproxied.definitions}
+    for name in ("bash_exec", "code_exec"):
+        assert "KUBECTL_MODE=proxy_exec" in described[name]
+        assert "KUBECTL_MODE" not in plain[name]

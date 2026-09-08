@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from kira.adapters.base import AdapterTool
 from kira.llm.types import ToolSpec as ModelToolSpec
 from kira.tools.allowlists import RETRIEVAL_TOOLS, ROLE_TOOLSETS
-from kira.tools.context import ToolContext
+from kira.tools.context import ToolContext, kubectl_route
 from kira.tools.registry import (
     BoundTool,
     ToolRegistryError,
@@ -90,6 +90,10 @@ def build_toolset(
 
     catalogue = descriptions if descriptions is not None else load_descriptions()
     served = frozenset(capabilities if capabilities is not None else ctx.transport.capabilities)
+    # Asked of the transport, like the capabilities above and for the same reason: what
+    # a tool can do here is a property of the environment this run was handed, and the
+    # two sandbox tools do opposite things on the two routes.
+    route = kubectl_route(ctx.transport)
     specs = registered()
 
     definitions: list[ModelToolSpec] = []
@@ -134,7 +138,7 @@ def build_toolset(
             ModelToolSpec(
                 name=name,
                 description=description_for(
-                    name, role, descriptions=spec.descriptions or catalogue
+                    name, role, descriptions=spec.descriptions or catalogue, route=route
                 ),
                 parameters=definition_for(spec),
             )

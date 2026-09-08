@@ -19,7 +19,7 @@ from importlib.metadata import entry_points
 from importlib.resources import files
 from typing import Any, Literal
 
-from kira.tools.context import ToolContext
+from kira.tools.context import DEFAULT_KUBECTL_ROUTE, KUBECTL_ROUTES, ToolContext
 from kira.tools.policy import policy_for
 from kira.tools.schema import RATIONALE_ARG, strip_rationale, with_rationale
 from kira.tools.transport.base import CAPABILITIES
@@ -123,6 +123,11 @@ class ToolSpec:
 
 
 _REGISTRY: dict[str, ToolSpec] = {}
+
+_VARIANT_ROUTES = frozenset(KUBECTL_ROUTES) - {DEFAULT_KUBECTL_ROUTE}
+"""Catalogue keys that carry a route's own text. The default route is the entry itself,
+so it is not one of them: a `tool:` key beside `default:` would be a role name typo of
+exactly the kind the shape check exists to catch."""
 
 
 def tool(
@@ -331,25 +336,24 @@ def validate_registry(
     for name, entry in descriptions.items():
         if not isinstance(entry, dict):
             raise ToolRegistryError(f"description for {name!r} must be a mapping")
-        # A typo'd key is why this rule exists: the prototype wrote a role name as a
-        # sibling of `default` instead of nesting it under `agents`, nothing rejected
-        # it, and that role was served the generic text for the life of the system.
-        unknown = sorted(set(entry) - {"default", "agents"})
-        if unknown:
-            raise ToolRegistryError(
-                f"description for {name!r} has unknown keys {unknown}; "
-                "a per-role description belongs under 'agents'"
-            )
-        agents = entry.get("agents") or {}
-        if not isinstance(agents, dict):
-            raise ToolRegistryError(f"tool {name!r} agents descriptions must be a mapping")
         allowed_roles = {role for role, names in allowlists.items() if name in names}
-        for role in agents:
-            if role not in allowed_roles:
+        _check_entry(name, entry, allowed_roles, where="")
+        for route in _VARIANT_ROUTES:
+            variant = entry.get(route)
+            if variant is None:
+                continue
+            if not isinstance(variant, dict):
                 raise ToolRegistryError(
-                    f"tool {name!r} has a description for role {role!r}, "
-                    "which is not allowed to call it"
+                    f"description for {name!r} route {route!r} must be a mapping"
                 )
+            if not variant.get("default"):
+                # The route replaces the whole entry, so a variant naming only some
+                # roles would silently serve the *other* route's text to the rest.
+                raise ToolRegistryError(
+                    f"description for {name!r} route {route!r} has no default; a route's "
+                    "text replaces the entry outright and has to be complete on its own"
+                )
+            _check_entry(name, variant, allowed_roles, where=f" route {route!r}")
 
     for role, names in allowlists.items():
         for name in names:
@@ -358,7 +362,13 @@ def validate_registry(
                 raise ToolRegistryError(f"role {role!r} allows unregistered tool {name!r}")
             if spec.safety != "submit" and spec.dispatch is None:
                 raise ToolRegistryError(f"tool {name!r} is allowlisted but has no implementation")
-            description_for(name, role, descriptions=spec.descriptions or descriptions)
+            # Every route, not just the default one: a deployment discovers which route
+            # it is on when it binds a transport, and a tool describable on one route
+            # and not the other would fail at the first toolset it builds.
+            for route in KUBECTL_ROUTES:
+                description_for(
+                    name, role, descriptions=spec.descriptions or descriptions, route=route
+                )
 
     for name, spec in specs.items():
         unknown_caps = sorted(spec.requires - CAPABILITIES)
@@ -385,16 +395,28 @@ def validate_registry(
             )
 
 
-def description_for(name: str, role: str, *, descriptions: Mapping[str, Any]) -> str:
-    """Resolve the description one role sees for one tool.
+def description_for(
+    name: str,
+    role: str,
+    *,
+    descriptions: Mapping[str, Any],
+    route: str = DEFAULT_KUBECTL_ROUTE,
+) -> str:
+    """Resolve the description one role sees for one tool, on one kubectl route.
 
     A per-role entry replaces the default outright rather than extending it, which is
-    easy to misread and worth stating: a role-specific description must be complete.
+    easy to misread and worth stating: a role-specific description must be complete. A
+    route's sub-entry replaces the whole entry the same way, for the same reason — the
+    two routes are opposites for the sandbox tools, so blending them would describe a
+    tool that refuses kubectl and resolves it.
 
     Args:
         name: The tool.
         role: The role about to be offered it.
         descriptions: The description catalogue.
+        route: How this deployment reaches the cluster, from
+            :func:`kira.tools.context.kubectl_route`. A tool that says nothing about a
+            route is described the same way on all of them.
 
     Returns:
         The description to send.
@@ -405,10 +427,46 @@ def description_for(name: str, role: str, *, descriptions: Mapping[str, Any]) ->
     raw = descriptions.get(name)
     if not isinstance(raw, dict):
         raise ToolRegistryError(f"missing description entry for tool {name!r}")
-    agents = raw.get("agents") or {}
-    text = agents.get(role) or raw.get("default")
+    variant = raw.get(route)
+    entry = variant if route != DEFAULT_KUBECTL_ROUTE and isinstance(variant, dict) else raw
+    agents = entry.get("agents") or {}
+    text = agents.get(role) or entry.get("default")
     if not isinstance(text, str) or not text.strip():
         raise ToolRegistryError(
             f"missing non-empty description for tool {name!r} and role {role!r}"
         )
     return text.strip()
+
+
+def _check_entry(
+    name: str, entry: Mapping[str, Any], allowed_roles: set[str], *, where: str
+) -> None:
+    """Check one description entry, or one route's sub-entry of the same shape.
+
+    Args:
+        name: The tool.
+        entry: The mapping to check.
+        allowed_roles: The roles allowed to call the tool.
+        where: Appended to the message, naming the route when this is a sub-entry.
+
+    Raises:
+        ToolRegistryError: When a key is unrecognised or a role cannot call the tool.
+    """
+    # A typo'd key is why this rule exists: the prototype wrote a role name as a
+    # sibling of `default` instead of nesting it under `agents`, nothing rejected
+    # it, and that role was served the generic text for the life of the system.
+    unknown = sorted(set(entry) - {"default", "agents"} - _VARIANT_ROUTES)
+    if unknown:
+        raise ToolRegistryError(
+            f"description for {name!r}{where} has unknown keys {unknown}; "
+            "a per-role description belongs under 'agents'"
+        )
+    agents = entry.get("agents") or {}
+    if not isinstance(agents, dict):
+        raise ToolRegistryError(f"tool {name!r}{where} agents descriptions must be a mapping")
+    for role in agents:
+        if role not in allowed_roles:
+            raise ToolRegistryError(
+                f"tool {name!r}{where} has a description for role {role!r}, "
+                "which is not allowed to call it"
+            )

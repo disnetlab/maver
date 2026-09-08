@@ -2,9 +2,21 @@
 #
 # A tool's JSON schema and implementation live with the tool, on its @tool
 # decorator. This file holds only the human-editable top-level descriptions the
-# model is shown. An entry is {default: str, agents: {<role>: str}} and nothing
-# else; a per-role entry replaces the default outright rather than extending it,
-# so it has to be complete on its own.
+# model is shown. An entry is {default: str, agents: {<role>: str}}, optionally
+# with one sub-entry of the same shape per non-default kubectl route — today just
+# `proxy_exec` — and nothing else. A per-role entry replaces the default outright
+# rather than extending it, and a route's sub-entry replaces the whole entry the
+# same way, so each has to be complete on its own.
+#
+# A route sub-entry exists because the two routes are opposites for the two
+# sandbox tools: on the default route the sandbox has no credentials and kubectl
+# is refused, and on `proxy_exec` a stage-aware kubectl shim is first on its PATH.
+# The `proxy_exec` text below is the archived deployment's, carried word for word
+# because it is what the published measurements were taken with. It describes
+# both routes in terms of KUBECTL_MODE, which was that system's name for the
+# choice; here the route is decided by whether the bound transport offers a proxy,
+# and nothing reads a KUBECTL_MODE an operator sets. The variable itself is real —
+# the proxy wiring sets it for the shim it puts on PATH.
 
 bash_exec:
   default: >-
@@ -19,6 +31,24 @@ bash_exec:
       sleep), local text filtering, and post-processing kubectl output saved under
       tool_outputs/. It has no cluster credentials and kubectl is rejected; use
       exec_kubectl_cmd_safely for cluster operations.
+
+  proxy_exec:
+    default: >-
+      Run a bash command inside the session workspace (cwd and HOME are both set
+      there). Use it for local text filtering, simple file reads, and processing
+      saved tool outputs such as tool_outputs/pods.json. In KUBECTL_MODE=mcp it
+      has no cluster credentials and kubectl is rejected; in
+      KUBECTL_MODE=proxy_exec, kubectl resolves to the stage-aware SREGym proxy
+      shim. Returns combined stdout, stderr, and exit code.
+    agents:
+      execution: >-
+        Run a bash command inside the session workspace. Use it for waiting (e.g.
+        sleep), local text filtering, and post-processing kubectl output saved under
+        tool_outputs/. In KUBECTL_MODE=proxy_exec, kubectl resolves to the
+        stage-aware SREGym proxy shim; do not use watch-style kubectl commands such
+        as `kubectl wait` or `kubectl rollout status`; prefer short
+        `kubectl get ... -o json/jsonpath` checks. In KUBECTL_MODE=mcp, use
+        exec_kubectl_cmd_safely for cluster operations.
 
 code_exec:
   default: >-
@@ -35,6 +65,22 @@ code_exec:
       analysis too complex for a shell one-liner. It has no cluster credentials
       and kubectl subprocess calls are rejected; use exec_kubectl_cmd_safely for
       cluster operations.
+  proxy_exec:
+    default: >-
+      Execute a Python script inside the session workspace (cwd and HOME are set
+      there). Only Python is supported. Use it for local parsing, comparison, and
+      multi-step analysis over saved tool outputs such as tool_outputs/pods.json.
+      In KUBECTL_MODE=mcp, kubectl subprocess calls are rejected; in
+      KUBECTL_MODE=proxy_exec, kubectl resolves to the stage-aware SREGym proxy
+      shim. Returns combined stdout, stderr, and exit code.
+    agents:
+      execution: >-
+        Execute a Python script inside the session workspace. Use it for generating
+        config snippets, comparing cluster state programmatically, or any multi-step
+        analysis too complex for a shell one-liner. In KUBECTL_MODE=proxy_exec,
+        kubectl subprocess calls route through the stage-aware SREGym proxy shim;
+        do not use `kubectl wait` or `kubectl rollout status`; prefer short
+        `kubectl get` status/readiness checks.
 
 ssh_exec:
   default: >-
