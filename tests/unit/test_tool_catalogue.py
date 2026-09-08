@@ -178,7 +178,10 @@ An entry is an admission, not an exemption to reach for.
 
 @pytest.mark.parametrize("role", sorted(ROLE_TOOLSETS))
 @pytest.mark.parametrize("retrieval", [True, False], ids=["memory-on", "memory-off"])
-def test_a_role_prompt_only_names_tools_that_role_is_offered(role: str, retrieval: bool) -> None:
+@pytest.mark.parametrize("route", KUBECTL_ROUTES)
+def test_a_role_prompt_only_names_tools_that_role_is_offered(
+    role: str, retrieval: bool, route: str
+) -> None:
     """A prompt that prescribes a tool the model was never given costs turns and tokens.
 
     The Learning prompt prescribed four ``playbook_*`` tools through every distillation
@@ -188,15 +191,16 @@ def test_a_role_prompt_only_names_tools_that_role_is_offered(role: str, retrieva
     instruction.
 
     This reads the system prompt as the role assembles it, role prompt and appended
-    runtime blocks together. It does not see the runtime blocks a role emits into the
-    conversation as user turns.
+    runtime blocks together, on every kubectl route — the route swaps one block out for
+    another, and a block naming a tool is exactly what this reads. It does not see the
+    runtime blocks a role emits into the conversation as user turns.
     """
     offered = set(ROLE_TOOLSETS[role])
     if not retrieval:
         offered -= RETRIEVAL_TOOLS
     prompt = "\n".join(
         [
-            compose_role_prompt(role, retrieval_enabled=retrieval),
+            compose_role_prompt(role, retrieval_enabled=retrieval, kubectl_route=route),
             *(read_runtime(role, name) for name in APPENDED_TO_THE_SYSTEM_PROMPT.get(role, ())),
         ]
     )

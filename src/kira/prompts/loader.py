@@ -60,12 +60,12 @@ _KUBECTL_BLOCK: dict[str, str] = {
 # rather than four: the archived deployment gave Planning the read-only text, not a
 # Planning-specific one, and the composed prompts it ran under say so.
 _KUBECTL_PROXY_BLOCK: dict[str, str] = {
-    "rca": "read_only",
-    "planning": "read_only",
-    "execution": "execution",
-    "verify": "read_only",
-    "learning": "read_only",
-    "single": "single",
+    "rca": "proxy_exec.read_only",
+    "planning": "proxy_exec.read_only",
+    "execution": "proxy_exec.execution",
+    "verify": "proxy_exec.read_only",
+    "learning": "proxy_exec.read_only",
+    "single": "proxy_exec.single",
 }
 
 _KUBECTL_ROUTE_BLOCKS: dict[str, dict[str, str]] = {
@@ -304,12 +304,10 @@ def render(template: str, values: Mapping[str, str]) -> str:
 def _block_for(marker: str, role: str, *, retrieval_enabled: bool, kubectl_route: str) -> str:
     family = _ROLE_MARKERS.get(marker)
     if family == "kubectl":
-        proxied = kubectl_route == "proxy_exec"
         variant = _KUBECTL_ROUTE_BLOCKS[kubectl_route].get(role)
         if variant is None:
             raise PromptError(f"role {role!r} declares {{{{{marker}}}}} but holds no cluster tools")
-        name = f"proxy_exec.{variant}" if proxied else variant
-        return read_asset(f"blocks/kubectl/{name}.txt")
+        return read_asset(f"blocks/kubectl/{variant}.txt")
     if family == "memory":
         state = "enabled" if retrieval_enabled else "disabled"
         # An intentionally empty block is valid: the memory-off variant of a role

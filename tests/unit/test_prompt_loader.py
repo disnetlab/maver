@@ -300,12 +300,12 @@ def test_an_unfillable_override_fails_at_startup_not_at_the_incident(tmp_path: P
 @pytest.mark.parametrize(
     ("role", "expected"),
     [
-        ("rca", "read_only"),
-        ("planning", "read_only"),
-        ("execution", "execution"),
-        ("verify", "read_only"),
-        ("learning", "read_only"),
-        ("single", "single"),
+        ("rca", "proxy_exec.read_only"),
+        ("planning", "proxy_exec.read_only"),
+        ("execution", "proxy_exec.execution"),
+        ("verify", "proxy_exec.read_only"),
+        ("learning", "proxy_exec.read_only"),
+        ("single", "proxy_exec.single"),
     ],
 )
 def test_the_proxy_route_block_map_mirrors_the_archive(role: str, expected: str) -> None:
