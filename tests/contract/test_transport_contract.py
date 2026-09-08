@@ -55,6 +55,7 @@ class _Conforming:
     name = "conforming"
     capabilities = frozenset({"kubernetes", "kubernetes.rollback", "metrics", "logs", "traces"})
     timeout_seconds = 30
+    kubectl_proxy_url = None
 
     def __init__(self, *, reachable: bool = True) -> None:
         self.reachable = reachable
@@ -207,6 +208,16 @@ class _EdgesWithoutTheirEnvelope(_Conforming):
         return await super().query_traces(operation, **kwargs)
 
 
+class _SchemelessProxyRoute(_Conforming):
+    """A proxy route given as a host and port, which is what a port-forward is called.
+
+    Truthy, so the sandbox tools offer kubectl in the shell on the strength of it, and
+    not an address kubectl can be pointed at.
+    """
+
+    kubectl_proxy_url = "127.0.0.1:16444"
+
+
 class _SilentRollback(_Conforming):
     """A transport with no journal of inverses answering as though it had undone a write."""
 
@@ -236,6 +247,7 @@ CASES = [
         _SilentRollback,
         "test_a_rollback_answer_agrees_with_the_capability_that_was_declared",
     ),
+    (_SchemelessProxyRoute, "test_the_proxy_route_is_a_url_or_nothing"),
 ]
 
 

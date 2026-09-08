@@ -10,8 +10,11 @@ makes, because they were written against the prototype and cannot move.
 
 import ast
 import asyncio
+import http.server
 import json
 import pathlib
+import threading
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -38,6 +41,7 @@ from kira.orchestration.runner import Deployment
 from kira.settings.groups import MemorySettings, ServerSettings, VerifySettings
 from kira.settings.profiles import load_profile
 from kira.settings.root import Settings
+from kira.tools.kubectl_proxy import ProxyRoute
 from kira.tools.toolsets import build_toolset
 from kira.tools.workspace import SessionWorkspace
 
@@ -403,7 +407,7 @@ async def test_each_tool_call_opens_and_closes_its_own_connection(
 
     transport = McpTransport("http://mcp:9954")
     transport.session_id = "session-7"
-    await transport.kubectl(["get", "pods"])
+    await transport.query_logs('{app="user"}')
     await transport.query_alerts()
     await transport.rollback_last()
 
@@ -611,6 +615,57 @@ def test_the_rollback_carries_the_policy_the_approval_gate_reads() -> None:
     assert listing.classify({}, ToolSettings()) is ActionClass.READ
 
 
+class _ProxyVersion(http.server.BaseHTTPRequestHandler):
+    """A proxy answering ``/version``, which is the only route readiness reads."""
+
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return None
+
+
+@pytest.fixture
+def proxy() -> Iterator[str]:
+    """A proxy on a loopback port of its own, so no test here needs a cluster."""
+    server = http.server.HTTPServer(("127.0.0.1", 0), _ProxyVersion)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+async def test_a_cluster_read_is_pointed_at_the_proxy_and_carries_no_credential(
+    proxy: str, tmp_path: pathlib.Path
+) -> None:
+    """The kubeconfig is the whole of what makes a local kubectl this environment's.
+
+    It names the proxy as the cluster's server and nothing else: no user, no token, no
+    context to inherit. The proxy holds the credentials and decides what a request may
+    do, so a kubeconfig carrying a second answer would be a way around the first — and
+    one that named the wrong endpoint would fail as a cluster that is down.
+    """
+    transport = McpTransport(
+        "http://mcp:9954",
+        proxy=ProxyRoute(url=proxy, binary=str(_echoing_kubectl(tmp_path))),
+        kubeconfig_dir=tmp_path,
+    )
+
+    result = await transport.kubectl(["get", "pods", "-n", "shop", "-o", "json"])
+
+    assert result.startswith(str(tmp_path / "config"))
+    written = json.loads((tmp_path / "config").read_text(encoding="utf-8"))
+    assert written["clusters"][0]["cluster"]["server"] == proxy
+    assert written["users"] == [{"name": "sregym-agent", "user": {}}]
+    assert httpx.get(f"{proxy}/version").status_code == 200
+
+
 async def test_a_deployment_that_never_saw_the_harness_reads_its_defaults() -> None:
     """The conductor's own address is where the two names that used to fight over the
     bind port now land."""
@@ -799,19 +854,39 @@ async def test_the_mcp_transport_refuses_watches_before_opening_a_session(
     assert result.startswith(head)
 
 
-async def test_the_mcp_transport_still_sends_an_ordinary_read(
-    monkeypatch: pytest.MonkeyPatch,
+def _echoing_kubectl(directory: pathlib.Path) -> pathlib.Path:
+    """A kubectl that reports the kubeconfig and arguments it was given, and no more."""
+    stub = directory / "kubectl-stub"
+    stub.write_text("#!/bin/sh\nprintf '%s' \"$KUBECONFIG $*\"\n")
+    stub.chmod(0o755)
+    return stub
+
+
+async def test_an_ordinary_read_runs_the_local_kubectl_and_never_the_server(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
-    def refuse(*args: Any, **kwargs: Any) -> Any:
-        raise ConnectionRefusedError("nothing listening")
+    """The kubectl server is not a fallback for the proxy route, it is unused.
 
-    monkeypatch.setattr("kira.adapters.sregym.transport.sse_client", refuse)
+    Its responses are cut at about ten thousand characters with a marker appended, which
+    a caller reading prose does not notice and a caller parsing ``-o json`` cannot
+    recover from — and the two internal readers of this method, the namespace snapshot
+    and the trace scoping, both parse it. A transport that quietly went back to the
+    server for one call would put that truncation back for exactly the reads that cannot
+    survive it.
+    """
 
-    result = await McpTransport("http://mcp:9954").kubectl(["get", "pods", "-n", "shop"])
+    def explode(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("kubectl must not reach the MCP server")
 
-    assert result.startswith(
-        "error: MCP kubectl.exec_kubectl_cmd_safely call failed: ConnectionRefusedError"
-    )
+    monkeypatch.setattr("kira.adapters.sregym.transport.sse_client", explode)
+
+    result = await McpTransport(
+        "http://mcp:9954",
+        proxy=ProxyRoute(url="http://127.0.0.1:16444", binary=str(_echoing_kubectl(tmp_path))),
+        kubeconfig_dir=tmp_path,
+    ).kubectl(["get", "pods", "-n", "shop"])
+
+    assert result == f"{tmp_path / 'config'} get pods -n shop"
 
 
 # --- what the benchmark's roles are actually offered ---------------------------------

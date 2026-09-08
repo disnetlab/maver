@@ -99,6 +99,24 @@ class ToolTransport(Protocol):
         ...
 
     @property
+    def kubectl_proxy_url(self) -> str | None:
+        """Where a local kubectl reaches this environment's cluster without credentials.
+
+        Some environments front their API server with a filtering HTTP proxy and expect a
+        real kubectl to be run against it, which is a different arrangement from calling
+        a cluster tool over this transport: the binary is the model's, the proxy holds
+        the credentials, and anything the environment wants to hide is hidden there
+        rather than here. Saying so is what lets the sandboxed execution tools offer
+        kubectl inside a shell at all — without a route of this kind they refuse it,
+        because a shell has no approval gate in front of it and no credentials to use.
+
+        Returns:
+            The proxy's base URL, or None where there is no such route and cluster access
+            is only through this transport's own methods.
+        """
+        ...
+
+    @property
     def timeout_seconds(self) -> int:
         """How long this transport waits before abandoning a call.
 

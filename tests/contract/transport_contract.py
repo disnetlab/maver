@@ -230,6 +230,20 @@ class ToolTransportContract:
         assert isinstance(timeout, int) and not isinstance(timeout, bool)
         assert timeout > 0
 
+    def test_the_proxy_route_is_a_url_or_nothing(self, transport: ToolTransport) -> None:
+        """Two readers, and each one is wrong about a value that is neither.
+
+        The sandboxed execution tools read this as a yes-or-no: with a route they stop
+        refusing kubectl inside a shell, and without one they refuse it, because a shell
+        has no approval gate in front of it. Then the same value is written into a
+        generated kubeconfig as the cluster's server. Anything truthy that is not a URL
+        therefore turns the shell's kubectl on and hands it an address it cannot use, so
+        every cluster command the model writes fails with a connection error instead of
+        the refusal that would have told it there is no route.
+        """
+        route = transport.kubectl_proxy_url
+        assert route is None or route.startswith(("http://", "https://"))
+
     async def test_no_call_raises_when_the_backend_is_gone(
         self, unreachable: ToolTransport
     ) -> None:

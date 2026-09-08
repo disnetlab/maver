@@ -149,6 +149,17 @@ class AiopsLabTransport:
         return "aiopslab"
 
     @property
+    def kubectl_proxy_url(self) -> str | None:
+        """Report that there is no proxy route here.
+
+        Returns:
+            None. Cluster access is the bridge's own HTTP API, which runs kubectl on the
+            orchestrator host: there is no endpoint a kubectl inside this process could
+            be pointed at.
+        """
+        return None
+
+    @property
     def capabilities(self) -> frozenset[str]:
         """What the bridge serves.
 

@@ -1,13 +1,17 @@
-"""The MCP transport against the shared contract, stubbed at its own I/O seam.
+"""The MCP transport against the shared contract, stubbed at its own I/O seams.
 
-One seam, because every call opens its own session: replacing the client library's
-connection and session objects replaces the whole of this transport's I/O. The stubbed
-servers answer from the contract's payloads in the encoding the harness's own servers
-use, which is a Python literal rather than JSON.
+Two seams, since kubectl stopped going over MCP. Every telemetry call opens its own
+session, so replacing the client library's connection and session objects replaces the
+whole of that half; the stubbed servers answer from the contract's payloads in the
+encoding the harness's own servers use, which is a Python literal rather than JSON.
+kubectl is a local subprocess run against the harness's proxy, so it is given a script on
+PATH that prints one canned read and never looks at a cluster or a proxy.
 """
 
+import stat
 import time
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -26,10 +30,35 @@ from transport_contract import (
 )
 
 from kira.adapters.sregym.transport import McpTransport
+from kira.tools.kubectl_proxy import ProxyRoute
 
 SEAM = "kira.adapters.sregym.transport"
 
+# Never resolves, so the unreachable fixture does not depend on whether the host running
+# the suite happens to have kubectl on it.
+ABSENT_KUBECTL = "kubectl-that-is-not-installed"
+
 _STAMP = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(SAMPLE_AT))
+
+
+def _kubectl_stub(tmp_path: Path) -> Path:
+    """Install a kubectl that prints the contract's canned read and nothing else.
+
+    It cats a file rather than echoing, because echo and heredocs both append a newline
+    the contract's byte-for-byte comparison would then be about.
+
+    Args:
+        tmp_path: The test's own directory.
+
+    Returns:
+        The path to the executable.
+    """
+    payload = tmp_path / "read.json"
+    payload.write_text(KUBECTL_JSON)
+    script = tmp_path / "kubectl"
+    script.write_text(f"#!/bin/sh\ncat '{payload}'\n")
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    return script
 
 
 def _lines(rows: list[tuple[str, str]]) -> str:
@@ -38,7 +67,6 @@ def _lines(rows: list[tuple[str, str]]) -> str:
 
 
 _ANSWER = {
-    "exec_kubectl_cmd_safely": KUBECTL_JSON,
     "get_alerts": repr(ALERTS),
     "get_metrics": repr({"resultType": "vector", "result": METRIC_SERIES}),
     "get_services": repr(SERVICES),
@@ -86,25 +114,39 @@ class _Connection:
 
 class TestMcpTransport(ToolTransportContract):
     @pytest.fixture
-    def transport(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[McpTransport]:
+    def transport(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[McpTransport]:
         monkeypatch.setattr(f"{SEAM}.sse_client", lambda *a, **k: _Connection())
         monkeypatch.setattr(f"{SEAM}.ClientSession", lambda read, write: _Session())
-        yield McpTransport("http://mcp.contract.test:9954", timeout_s=30.0)
+        yield McpTransport(
+            "http://mcp.contract.test:9954",
+            timeout_s=30.0,
+            proxy=ProxyRoute(
+                url="http://proxy.contract.test:16444", binary=str(_kubectl_stub(tmp_path))
+            ),
+            kubeconfig_dir=tmp_path,
+        )
 
     @pytest.fixture
-    def unreachable(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[McpTransport]:
-        """Nothing listening on the servers' port.
+    def unreachable(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> Iterator[McpTransport]:
+        """Nothing listening on the servers' port, and no kubectl to run.
 
-        The connection is where this fails rather than the tool call, because that is
-        where it failed in the measured runs: the session died and every later call in
-        the episode failed contiguously from that moment.
+        The connection is where the telemetry half fails rather than the tool call,
+        because that is where it failed in the measured runs: the session died and every
+        later call in the episode failed contiguously from that moment.
         """
 
         def refuse(*args: Any, **kwargs: Any) -> Any:
             raise ConnectionRefusedError("nothing listening")
 
         monkeypatch.setattr(f"{SEAM}.sse_client", refuse)
-        yield McpTransport("http://mcp.contract.test:9954", timeout_s=30.0)
+        yield McpTransport(
+            "http://mcp.contract.test:9954",
+            timeout_s=30.0,
+            proxy=ProxyRoute(url="http://proxy.contract.test:16444", binary=ABSENT_KUBECTL),
+            kubeconfig_dir=tmp_path,
+        )
 
 
 class _Counter:
@@ -146,6 +188,9 @@ async def test_every_call_opens_and_closes_its_own_session(
 ) -> None:
     """One session per call, and nothing counted how many there were.
 
+    Telemetry calls, because kubectl no longer opens a session at all: it runs a local
+    binary against the harness's proxy.
+
     The server ends a session after a period of inactivity and does not say so. Holding
     one open across an episode is the single worst failure this project has measured: a
     mean 59% tool-call failure rate across cells making forty-odd calls, worst case
@@ -162,8 +207,8 @@ async def test_every_call_opens_and_closes_its_own_session(
     monkeypatch.setattr(f"{SEAM}.ClientSession", lambda read, write: _CountingSession(counter))
     transport = McpTransport("http://mcp.contract.test:9954", timeout_s=30.0)
 
-    await transport.kubectl(["get", "pods"])
-    await transport.kubectl(["get", "svc"])
+    await transport.query_alerts()
+    await transport.query_logs('{namespace="shop"}')
     await transport.query_metrics("up")
 
     assert counter.sessions_entered == 3

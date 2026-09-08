@@ -133,6 +133,17 @@ class DirectTransport:
         return "direct"
 
     @property
+    def kubectl_proxy_url(self) -> str | None:
+        """Report that there is no proxy route here.
+
+        Returns:
+            None. This transport runs kubectl against the deployment's own kubeconfig,
+            so a shell that ran kubectl itself would be running it with the agent's
+            cluster credentials and no approval gate in front of it.
+        """
+        return None
+
+    @property
     def capabilities(self) -> frozenset[str]:
         """What this deployment was actually configured to serve.
 

@@ -20,17 +20,26 @@ characters and append a marker, which is harmless for text and fatal for structu
 output, since the parse then fails and the caller sees nothing. That is a property of
 the measured configuration, not a defect to fix here, and it is one reason a comparison
 against the archive has to run on this transport rather than the direct one.
+
+kubectl is the exception, and it does not go over MCP at all. It runs as a local binary
+against the harness's filtering proxy, which is what the archived campaign measured: the
+proxy holds the credentials, applies the same screens on the way out of the cluster, and
+returns a full response, so a namespace read comes back parseable. That is also the
+route the model's own kubectl takes inside a shell, so the two agree by construction.
 """
 
 import logging
+import tempfile
 from collections.abc import Sequence
-from shlex import join
+from pathlib import Path
 from typing import Any
 
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 
 from kira.adapters.sregym.conductor import SSID_HEADER
+from kira.tools.errors import tool_error
+from kira.tools.kubectl_proxy import ProxyRoute, run_via_proxy
 from kira.tools.kubernetes import leading_verb
 from kira.tools.transport.base import TraceOperation
 
@@ -73,15 +82,40 @@ _TRACE_TOOL: dict[str, str] = {
 class McpTransport:
     """One episode's cluster and telemetry access, over four MCP servers."""
 
-    def __init__(self, base_url: str, *, timeout_s: float = 60.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        timeout_s: float = 60.0,
+        proxy: ProxyRoute | None = None,
+        kubeconfig_dir: Path | None = None,
+    ) -> None:
         """Bind the transport to one deployment of the harness's servers.
 
         Args:
             base_url: Where the servers are mounted.
             timeout_s: How long one tool call may take.
+            proxy: How a local kubectl reaches the cluster. The shipped defaults are the
+                configuration the archived campaign ran.
+            kubeconfig_dir: Where the generated kubeconfig is written. Defaults to the
+                system temporary directory, which is where the prototype's own internal
+                reads wrote it; the adapter points it at the deployment's working
+                directory instead, so a run leaves nothing outside it and the file it
+                actually used can be read afterwards.
         """
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout_s
+        self.proxy = proxy or ProxyRoute()
+        """How a local kubectl reaches the cluster.
+
+        Public because the sandboxed execution tools read it: they build the environment
+        a shell's own ``kubectl`` runs under, and every field of it is this environment's
+        to decide rather than the core's."""
+        self._kubeconfig_dir = (
+            Path(tempfile.gettempdir()) / ".kubectl-proxy"
+            if kubeconfig_dir is None
+            else kubeconfig_dir
+        )
         self.session_id = ""
         """The episode's correlation id, sent on every request.
 
@@ -98,6 +132,16 @@ class McpTransport:
             ``mcp``.
         """
         return "mcp"
+
+    @property
+    def kubectl_proxy_url(self) -> str | None:
+        """Where a local kubectl reaches this harness's cluster without credentials.
+
+        Returns:
+            The proxy's base URL. Always set here: the harness deploys the proxy as part
+            of the environment, and it is the only cluster route this transport has.
+        """
+        return self.proxy.url
 
     @property
     def capabilities(self) -> frozenset[str]:
@@ -122,23 +166,40 @@ class McpTransport:
         return max(1, int(self._timeout))
 
     async def kubectl(self, argv: Sequence[str]) -> str:
-        """Run one kubectl invocation on the server that holds the credentials.
+        """Run one kubectl locally, against the harness's filtering proxy.
 
-        The arguments are re-joined into the command string the server's own tool
-        takes. Nothing is reclassified on the way: authority was settled before this was
-        reached, and a second parse is a second chance to disagree about what the
-        command says.
+        Not over MCP, which is where every other call here goes. The harness's kubectl
+        server cuts a response at about ten thousand characters and appends a marker,
+        which is invisible in prose and fatal to ``-o json``: the namespace snapshot and
+        the trace scoping both parse this text, and a truncated payload leaves them with
+        nothing while reporting no failure. The proxy filters the same things the server
+        does, on the way out of the cluster rather than on the way back, so nothing is
+        hidden by the change — and the model's own kubectl inside a shell reaches the
+        cluster through exactly this route, so what a role reads here and what it reads
+        there come from one place.
+
+        Nothing is reclassified on the way: authority was settled before this was
+        reached, and a second parse is a second chance to disagree about what the command
+        says.
 
         Args:
             argv: The arguments, without a leading ``kubectl``.
 
         Returns:
-            The command's output, or a string beginning with ``error:``.
+            A successful command's own stdout, byte for byte, or a string beginning with
+            ``error:``.
         """
         refusal = _blocking_watch_refusal(argv)
         if refusal is not None:
             return refusal
-        return await self.call("exec_kubectl_cmd_safely", {"cmd": f"kubectl {join(argv)}"})
+        code, output = await run_via_proxy(
+            argv,
+            proxy_url=self.proxy.url,
+            kubeconfig_dir=self._kubeconfig_dir,
+            binary=self.proxy.binary,
+            timeout_s=self.proxy.exec_timeout_s,
+        )
+        return output if code == 0 else tool_error(output)
 
     async def rollbackable_commands(self) -> str:
         """List the writes the harness could still undo.
