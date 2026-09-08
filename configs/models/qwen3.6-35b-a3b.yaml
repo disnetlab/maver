@@ -30,10 +30,17 @@ limits:
   request_timeout_s: 1800      # a 300 s ceiling abandoned long generations mid-flight
   num_retries: 3
 
+# The three values below are the ones every host ran this model under from 2026-08-23 on
+# (LLM_TOOL_CHOICE_MODE=auto, LLM_KEEP_REASONING=true, LLM_RESCUE_DISABLE_THINKING=true in
+# every archived agent.env and campaign launcher). The parser does handle a forced tool
+# choice, but the measured runs never sent one; a profile that says otherwise describes
+# a system nobody measured. The August era-1 campaigns (single, ma-r) ran tool_choice
+# required with frequency_penalty 0.3 and a 300 s timeout; this file does not describe
+# those.
 quirks:
-  tool_choice: required        # this parser handles a forced tool choice correctly
-  keep_reasoning: false        # the model re-reasons each turn; carrying it forward is an arm
-  rescue_disable_thinking: false
+  tool_choice: auto
+  keep_reasoning: true         # a bounded tail of the reasoning channel is carried between turns
+  rescue_disable_thinking: true
   rescue_reasoning_effort: null
   drop_unsupported_params: true
   extra_body_fields: [top_k, min_p, repetition_penalty, no_repeat_ngram_size]

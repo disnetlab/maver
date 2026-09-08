@@ -382,7 +382,11 @@ class TestRequestAssembly:
         await client.complete(
             ModelRequest(system="s", messages=(), tools=(ToolSpec("t", "d", {}),)), caller="rca"
         )
-        assert captured["kwargs"]["tool_choice"] == "required"
+        # The mechanism is under test, not the shipped value, which describes an era.
+        assert (
+            captured["kwargs"]["tool_choice"]
+            == load_profile("qwen3.6-35b-a3b", MODELS).quirks.tool_choice
+        )
 
     async def test_the_retry_loop_is_ours(self) -> None:
         captured: dict[str, Any] = {}
