@@ -47,7 +47,7 @@ from kira.settings.root import Settings
 from kira.tools.context import EvidencePolicy
 from kira.tools.transport.base import ToolTransport
 
-__all__ = ["ADAPTER_NAME", "SREGymAdapter", "SregymConfig"]
+__all__ = ["ADAPTER_NAME", "MCP_KUBECTL_TOOLS", "SREGymAdapter", "SregymConfig"]
 
 _log = logging.getLogger(__name__)
 
@@ -58,6 +58,16 @@ MITIGATION = "mitigation"
 ACCEPT = "accept"
 
 _MISSING_EXTRA = "the sregym adapter needs its MCP transport: install kira[sregym]"
+
+MCP_KUBECTL_TOOLS = frozenset(
+    {"exec_kubectl_cmd_safely", "rollback_command", "get_previous_rollbackable_cmd"}
+)
+"""The tools that reach the cluster through this harness's own kubectl server.
+
+Withheld together because they are one mechanism: the rollback pair replays the journal
+that server keeps of what the kubectl tool applied, so offering either without it leaves
+a tool whose whole subject is a history nothing is writing.
+"""
 
 
 class SregymConfig(BaseModel):
@@ -84,6 +94,14 @@ class SregymConfig(BaseModel):
     problem_id: str | None = None
     """The runner's own name for this problem, used only when the conductor no longer
     serves one. Storage-only: it is the ground-truth fault label."""
+    mcp_kubectl_tools: bool = False
+    """Whether roles reach the cluster through the harness's own kubectl server.
+
+    Off, as every measured campaign ran it: those runs typed kubectl into the sandbox,
+    where it resolved to a stage-aware shim against the filtering proxy, and the three
+    tools this switch governs were withheld from every role. The transport still serves
+    ``kubernetes`` with this off — the pipeline's own reads, the namespace snapshot and
+    the trace inventory among them, go through it and are not the model's calls."""
     leave_one_out: bool = True
     """Whether an episode withholds the corpus records of its own problem.
 
@@ -371,19 +389,29 @@ class SREGymAdapter:
         return adapter_tools()
 
     def role_overlay(self, role: str, state: IncidentState) -> RoleOverlay | None:
-        """Leave every role exactly as it built itself.
+        """Withhold the harness's kubectl tools, unless this deployment asked for them.
 
-        The benchmark asks the two questions the pipeline was written to answer, so
-        there is nothing to narrow.
+        The benchmark asks the two questions the pipeline was written to answer, so the
+        prompts and the budgets are left as each role built them. What is narrowed is
+        the route to the cluster: with the kubectl server off, roles run kubectl in the
+        sandbox against the filtering proxy, and leaving these three offered would give
+        the model a second route that answers every call with a refusal — which reads to
+        it as a fault to work around rather than as a tool it does not have.
+
+        Every role, not just the writing ones: the diagnostic roles hold the kubectl
+        tool to read with, and a read through a server this deployment is not using
+        fails exactly as a write does.
 
         Args:
-            role: The role about to run.
+            role: The role about to run. The same three tools go for all of them.
             state: The incident as it stands.
 
         Returns:
-            None, always.
+            The withholding, or None when the deployment enabled the kubectl server.
         """
-        return None
+        if self._config.mcp_kubectl_tools:
+            return None
+        return RoleOverlay(drop_tools=MCP_KUBECTL_TOOLS)
 
     def routes(self) -> Any | None:
         """Supply the episode routes the external driver posts to.
@@ -463,6 +491,7 @@ def _legacy_values(env: Mapping[str, str]) -> dict[str, Any]:
     found: dict[str, Any] = {}
     for name, field in (
         ("MCP_TIMEOUT_SECONDS", "timeout_s"),
+        ("MCP_KUBECTL_TOOLS_ENABLED", "mcp_kubectl_tools"),
         ("SREGYM_FEEDBACK_MODE", "feedback_mode"),
         ("SREGYM_PROBLEM_ID", "problem_id"),
         ("MCP_SERVER_URL", "mcp_base_url"),

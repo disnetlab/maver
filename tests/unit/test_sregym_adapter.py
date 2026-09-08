@@ -17,6 +17,8 @@ from typing import Any
 import httpx
 import pytest
 import respx
+from test_kubectl_proxy_route import ALL_CAPABILITIES
+from test_kubectl_proxy_route import context as tool_context
 
 from kira.adapters.base import EnvironmentAdapter, EpisodeContext
 from kira.adapters.sregym import SREGymAdapter, SregymConfig
@@ -24,6 +26,7 @@ from kira.adapters.sregym import api as sregym_api
 from kira.adapters.sregym.episode import reduce_feedback
 from kira.adapters.sregym.evidence import EvidenceFilter
 from kira.adapters.sregym.signal import build_diagnosis_solution, build_signal
+from kira.adapters.sregym.tools import adapter_tools
 from kira.adapters.sregym.transport import McpTransport
 from kira.api.app import create_app
 from kira.audit.journal import Journal, ListSink
@@ -35,6 +38,7 @@ from kira.orchestration.runner import Deployment
 from kira.settings.groups import MemorySettings, ServerSettings, VerifySettings
 from kira.settings.profiles import load_profile
 from kira.settings.root import Settings
+from kira.tools.toolsets import build_toolset
 from kira.tools.workspace import SessionWorkspace
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
@@ -274,23 +278,61 @@ class TestEvidenceFilter:
         ]
 
 
-def test_the_shipped_adapter_satisfies_the_whole_contract_and_narrows_no_role() -> None:
+ROLES = ("rca", "planning", "execution", "verify", "single", "learning")
+
+
+def test_the_shipped_adapter_satisfies_the_whole_contract() -> None:
     """A capability the protocol grew is one every adapter has to answer for.
 
     The overlay hook is how an environment narrows a role, and an adapter that simply
-    did not have it would be found out at the first role run rather than here. This one
-    answers None for every role: the benchmark asks the two questions the pipeline was
-    written to answer, so there is nothing to narrow, and a run under it must be
-    byte-identical to a run under no environment at all.
+    did not have it would be found out at the first role run rather than here.
+    """
+    assert isinstance(SREGymAdapter(SregymConfig()), EnvironmentAdapter)
+
+
+def test_every_role_loses_the_harnesss_kubectl_tools_by_default() -> None:
+    """This deployment does not run that kubectl server: roles reach the cluster by
+    typing kubectl in the sandbox, where it resolves to the shim. Leaving the three
+    offered gives the model a second route that refuses every call, which reads to it as
+    a fault to work around rather than as a tool it was not given.
+
+    Including the diagnostic roles. They hold the kubectl tool to read with, and a read
+    through a server nobody is running fails exactly as a write does.
     """
     adapter = SREGymAdapter(SregymConfig())
-
-    assert isinstance(adapter, EnvironmentAdapter)
     state: Any = {"session_id": "s1", "alert": {}}
-    assert all(
-        adapter.role_overlay(role, state) is None
-        for role in ("rca", "planning", "execution", "verify", "single", "learning")
+
+    for role in ROLES:
+        overlay = adapter.role_overlay(role, state)
+        assert overlay is not None
+        assert overlay.drop_tools == frozenset(
+            {"exec_kubectl_cmd_safely", "rollback_command", "get_previous_rollbackable_cmd"}
+        )
+        # Only the route is narrowed. The prompts, the budgets and the guards are the
+        # role's own, so a run under this environment composes what an unbound one does.
+        assert overlay.system_replacement is None
+        assert overlay.system_suffix == ""
+        assert overlay.context_blocks == ()
+        assert overlay.max_turns is None
+        assert overlay.submit_guard is None
+
+
+def test_a_deployment_that_runs_the_kubectl_server_keeps_those_tools() -> None:
+    """The switch is the archived MCP_KUBECTL_TOOLS_ENABLED, off in every measured run
+    and kept because a deployment that does run that server needs the tools back."""
+    adapter = SREGymAdapter(SregymConfig(mcp_kubectl_tools=True))
+    state: Any = {"session_id": "s1", "alert": {}}
+
+    assert all(adapter.role_overlay(role, state) is None for role in ROLES)
+
+
+def test_the_archived_name_for_the_switch_still_decides_it() -> None:
+    config = SregymConfig.resolve(
+        Settings(memory=MemorySettings(enabled=False, learning_enabled=False)),
+        env={"MCP_KUBECTL_TOOLS_ENABLED": "true"},
     )
+
+    assert config.mcp_kubectl_tools is True
 
 
 def test_an_ungraded_episode_is_not_stamped_with_the_oracles_name() -> None:
@@ -770,3 +812,76 @@ async def test_the_mcp_transport_still_sends_an_ordinary_read(
     assert result.startswith(
         "error: MCP kubectl.exec_kubectl_cmd_safely call failed: ConnectionRefusedError"
     )
+
+
+# --- what the benchmark's roles are actually offered ---------------------------------
+
+
+ARCHIVED_TOOLSETS: dict[str, frozenset[str]] = {
+    "rca": frozenset(
+        {
+            "bash_exec",
+            "code_exec",
+            "get_alerts",
+            "get_dependency_graph",
+            "get_label_values",
+            "get_labels",
+            "get_logs",
+            "get_metrics",
+            "get_operations",
+            "get_services",
+            "get_traces",
+            "namespace_snapshot",
+            "submit_root_cause",
+        }
+    ),
+    "planning": frozenset({"bash_exec", "code_exec", "submit_plan"}),
+    "execution": frozenset({"bash_exec", "code_exec", "ssh_exec", "submit_execution_result"}),
+    "verify": frozenset(
+        {
+            "bash_exec",
+            "code_exec",
+            "get_alerts",
+            "get_logs",
+            "get_metrics",
+            "get_services",
+            "get_traces",
+            "submit_verify_result",
+        }
+    ),
+}
+"""What the model was offered per role on the archived host, read from its own records.
+
+No ``exec_kubectl_cmd_safely`` and no rollback pair anywhere: that deployment ran with
+the harness's kubectl server off and reached the cluster through the sandbox.
+"""
+
+HOST_RECOVERY = frozenset({"ssh_exec"})
+"""Allowed to differ here. Whether the remediating role is offered a host tool with no
+node configured is a separate decision, made where that rule lives."""
+
+
+@pytest.mark.parity
+@pytest.mark.parametrize("role", sorted(ARCHIVED_TOOLSETS))
+def test_the_benchmarks_roles_are_offered_what_the_archive_offered_them(
+    tmp_path: pathlib.Path, role: str
+) -> None:
+    """The whole route, end to end: the environment's overlay, the transport's
+    capabilities and this configuration's absent experience store, resolved together.
+
+    Each piece has its own check; what none of them says is what the model ends up
+    holding, which is the thing a published result is a measurement of.
+    """
+    adapter = SREGymAdapter(SregymConfig())
+    overlay = adapter.role_overlay(role, {"session_id": "s1", "alert": {}})
+    assert overlay is not None
+    resolved = build_toolset(
+        role,
+        tool_context(tmp_path, role=role, capabilities=ALL_CAPABILITIES),
+        extras=adapter_tools(),
+        drop=overlay.drop_tools,
+    )
+    offered = {definition.name for definition in resolved.definitions}
+
+    assert offered - HOST_RECOVERY == ARCHIVED_TOOLSETS[role] - HOST_RECOVERY
+    assert resolved.dropped["exec_kubectl_cmd_safely"] == "withheld by the environment"

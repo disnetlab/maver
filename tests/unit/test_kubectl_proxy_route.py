@@ -30,12 +30,17 @@ from kira.tools.registry import ToolRegistryError, description_for, validate_reg
 from kira.tools.toolsets import build_toolset
 from kira.tools.workspace import SessionWorkspace
 
+ALL_CAPABILITIES = frozenset({"kubernetes", "kubernetes.rollback", "metrics", "logs", "traces"})
+
 
 class FakeTransport:
     """A transport that may or may not offer the proxy route."""
 
-    def __init__(self, proxy_url: str | None = None) -> None:
+    def __init__(
+        self, proxy_url: str | None = None, capabilities: frozenset[str] | None = None
+    ) -> None:
         self._proxy_url = proxy_url
+        self._capabilities = capabilities or frozenset({"kubernetes"})
 
     @property
     def name(self) -> str:
@@ -43,7 +48,7 @@ class FakeTransport:
 
     @property
     def capabilities(self) -> frozenset[str]:
-        return frozenset({"kubernetes"})
+        return self._capabilities
 
     @property
     def timeout_seconds(self) -> int:
@@ -90,6 +95,7 @@ def context(
     authority_mode: str = "auto",
     kubectl_binary: str = "/usr/local/bin/kubectl",
     evidence: EvidencePolicy | None = None,
+    capabilities: frozenset[str] | None = None,
 ) -> ToolContext:
     """A tool context on either route, with the sandbox wrapper off.
 
@@ -97,7 +103,7 @@ def context(
     wrapper is a Linux-only confinement this has nothing to say about.
     """
     return ToolContext(
-        transport=FakeTransport(proxy_url),  # type: ignore[arg-type]
+        transport=FakeTransport(proxy_url, capabilities),  # type: ignore[arg-type]
         workspace=SessionWorkspace(tmp_path),
         role=role,
         session_id="s1",
