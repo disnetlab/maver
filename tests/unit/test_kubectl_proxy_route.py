@@ -368,3 +368,21 @@ def test_the_toolset_describes_the_sandbox_tools_for_the_route_it_resolved(
     for name in ("bash_exec", "code_exec"):
         assert "KUBECTL_MODE=proxy_exec" in described[name]
         assert "KUBECTL_MODE" not in plain[name]
+
+
+async def test_a_killed_sandbox_command_is_reported_in_the_words_the_archive_used(
+    tmp_path: Path,
+) -> None:
+    """A rebuild is validated by comparing the `error:` strings the model saw against the
+    archive's, where a string only Kira emits reads as a defect. The prototype called
+    these `command` and `script`; the saved-output labels stay `shell` and `code_exec`,
+    which is also what it used."""
+    ctx = context(tmp_path)
+    object.__setattr__(ctx.settings, "shell_exec_timeout_s", 0)
+    object.__setattr__(ctx.settings, "code_exec_timeout_s", 0)
+
+    shell = await bash_exec(ctx, cmd="sleep 30")
+    code = await code_exec(ctx, code="import time; time.sleep(30)", language="python")
+
+    assert shell.startswith("error: command timed out after")
+    assert code.startswith("error: script timed out after")

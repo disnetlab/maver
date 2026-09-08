@@ -919,7 +919,9 @@ async def test_a_tool_that_hit_its_bound_is_recorded_as_an_intervention(
     )
 
     async def blocks() -> str:
-        return await _run(ctx, ["/bin/sh", "-c", "sleep 5"], timeout=0.05, label="shell")
+        return await _run(
+            ctx, ["/bin/sh", "-c", "sleep 5"], timeout=0.05, label="shell", killed="command"
+        )
 
     model = FakeModel([turn(call("blocks", {}, id="t1")), turn(call(SUBMIT, {"ok": True}, id="s"))])
     sink = ListSink()
@@ -941,4 +943,4 @@ async def test_a_tool_that_hit_its_bound_is_recorded_as_an_intervention(
         if isinstance(e.payload, InterventionEvent) and e.payload.control == "timeout"
     ]
     assert timeout.action == "refused"
-    assert timeout.detail.startswith("blocks: error: shell timed out after")
+    assert timeout.detail.startswith("blocks: error: command timed out after")

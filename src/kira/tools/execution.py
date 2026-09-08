@@ -179,7 +179,9 @@ def subprocess_env(ctx: ToolContext) -> dict[str, str]:
     return applied
 
 
-async def _run(ctx: ToolContext, command: list[str], *, timeout: float, label: str) -> str:
+async def _run(
+    ctx: ToolContext, command: list[str], *, timeout: float, label: str, killed: str
+) -> str:
     """Run a sandboxed subprocess and render its result.
 
     Args:
@@ -187,6 +189,10 @@ async def _run(ctx: ToolContext, command: list[str], *, timeout: float, label: s
         command: The command to run, before sandbox wrapping.
         timeout: Seconds to wait before killing it.
         label: Used in the saved output's filename.
+        killed: What the timeout message calls this command. Separate from ``label``
+            because the two were the same word here and different words in the
+            prototype, and the message is model-facing: a wording nobody measured is
+            a new error string in a comparison that reads new strings as defects.
 
     Returns:
         The rendered result, or a string beginning with ``error:``.
@@ -204,7 +210,7 @@ async def _run(ctx: ToolContext, command: list[str], *, timeout: float, label: s
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
     except TimeoutError:
         process.kill()
-        return timed_out(label, timeout)
+        return timed_out(killed, timeout)
 
     output = stdout.decode(errors="replace")
     if process.returncode == 126 and output.startswith(SANDBOX_ERROR_PREFIX):
@@ -249,6 +255,7 @@ async def bash_exec(ctx: ToolContext, cmd: str) -> str:
         ["/bin/sh", "-c", cmd],
         timeout=max(10.0, float(ctx.settings.shell_exec_timeout_s)),
         label="shell",
+        killed="command",
     )
 
 
@@ -306,6 +313,7 @@ async def code_exec(ctx: ToolContext, code: str, language: str) -> str:
             [sys.executable, path],
             timeout=max(10.0, float(ctx.settings.code_exec_timeout_s)),
             label="code_exec",
+            killed="script",
         )
     finally:
         Path(path).unlink(missing_ok=True)
