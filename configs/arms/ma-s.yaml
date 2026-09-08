@@ -32,11 +32,9 @@ settings:
     role_retrieval: false
     learning_enabled: false
     top_k: 3
-    # Pinned, and not to the shipped value. Kira floors a hit at 0.5 of its lexical score
-    # per query token so retrieval can answer that nothing is comparable. The prototype
-    # shipped that floor at zero and no archived environment sets it, so the cells this
-    # arm reproduces admitted every text match; inheriting the floor would cut the
-    # precedent dose the arm's result is read against.
+    # Pinned to the value the cells ran at, which is also the shipped default: no
+    # archived environment set a relevance floor, so every text match was admitted.
+    # Named here so the arm still says so if the default ever moves.
     min_score_per_token: 0.0
     second_pass:
       enabled: true
