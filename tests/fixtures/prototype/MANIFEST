@@ -28,7 +28,7 @@ the alternative is a copy that says "commit 30070ee" and silently is not.
 What is here
 ------------
 
-The 72 prompt assets test_prompt_assets.py maps a shipped asset back to, the tool
+The 75 prompt assets test_prompt_assets.py maps a shipped asset back to, the tool
 registry test_toolsets.py parses AGENT_TOOLSETS out of, and the projection renderer
 test_projections.py re-derives its golden file by running. Nothing else of the
 prototype: tests/unit/test_frozen_prototype.py fails on a file the checks read that is

@@ -21,6 +21,7 @@ from importlib.resources import files
 from pathlib import Path
 
 __all__ = [
+    "KUBECTL_ROUTES",
     "PROMPT_PACKAGE",
     "PromptError",
     "compose_role_prompt",
@@ -54,6 +55,28 @@ _KUBECTL_BLOCK: dict[str, str] = {
     "learning": "read_only",
     "single": "single",
 }
+
+# The same question under the route where a role runs kubectl itself, through a
+# credential-free proxy on PATH, rather than through the cluster tool. Three blocks
+# rather than four: the archived deployment gave Planning the read-only text, not a
+# Planning-specific one, and the composed prompts it ran under say so.
+_KUBECTL_PROXY_BLOCK: dict[str, str] = {
+    "rca": "read_only",
+    "planning": "read_only",
+    "execution": "execution",
+    "verify": "read_only",
+    "learning": "read_only",
+    "single": "single",
+}
+
+KUBECTL_ROUTES: frozenset[str] = frozenset({"tool", "proxy_exec"})
+"""How a role reaches the cluster, and therefore which guidance it is given.
+
+``tool`` is the cluster tool with the sandbox refusing kubectl; ``proxy_exec`` is a real
+kubectl on the role's PATH, pointed at a credential-free proxy and screened per stage by
+the shim it resolves to. The two are mutually exclusive and a deployment is in exactly
+one of them, decided by whether its bound transport offers a proxy URL.
+"""
 
 
 class PromptError(RuntimeError):
@@ -273,13 +296,15 @@ def render(template: str, values: Mapping[str, str]) -> str:
     return _MARKER.sub(_replace, template)
 
 
-def _block_for(marker: str, role: str, *, retrieval_enabled: bool) -> str:
+def _block_for(marker: str, role: str, *, retrieval_enabled: bool, kubectl_route: str) -> str:
     family = _ROLE_MARKERS.get(marker)
     if family == "kubectl":
-        variant = _KUBECTL_BLOCK.get(role)
+        proxied = kubectl_route == "proxy_exec"
+        variant = (_KUBECTL_PROXY_BLOCK if proxied else _KUBECTL_BLOCK).get(role)
         if variant is None:
             raise PromptError(f"role {role!r} declares {{{{{marker}}}}} but holds no cluster tools")
-        return read_asset(f"blocks/kubectl/{variant}.txt")
+        name = f"proxy_exec.{variant}" if proxied else variant
+        return read_asset(f"blocks/kubectl/{name}.txt")
     if family == "memory":
         state = "enabled" if retrieval_enabled else "disabled"
         # An intentionally empty block is valid: the memory-off variant of a role
@@ -295,6 +320,7 @@ def compose_role_prompt(
     *,
     retrieval_enabled: bool,
     override_dir: Path | None = None,
+    kubectl_route: str = "tool",
 ) -> str:
     """Build a role's system prompt from its template and the applicable blocks.
 
@@ -309,17 +335,30 @@ def compose_role_prompt(
             second-pass control deliberately runs with memory on and no retrieval.
         override_dir: Where a deployment keeps its own role prompts, or None. A role
             with no file there keeps the packaged one.
+        kubectl_route: How this deployment's roles reach the cluster, one of
+            :data:`KUBECTL_ROUTES`. The default is the cluster tool, which is what an
+            unbound run and every direct-transport deployment uses; the caller passes
+            ``proxy_exec`` when the bound transport offers a proxy the roles run their
+            own kubectl against, because the two routes prescribe opposite things about
+            typing kubectl into the sandbox.
 
     Returns:
         The fully rendered system prompt.
 
     Raises:
-        PromptError: When an asset is missing or a marker cannot be filled.
+        PromptError: When an asset is missing, the route is not a known one, or a
+            marker cannot be filled.
     """
     override = override_for(role, override_dir)
     template = override if override is not None else read_asset(f"roles/{role}.txt")
+    if kubectl_route not in KUBECTL_ROUTES:
+        raise PromptError(
+            f"unknown kubectl route {kubectl_route!r}; expected one of {sorted(KUBECTL_ROUTES)}"
+        )
     values = {
-        marker: _block_for(marker, role, retrieval_enabled=retrieval_enabled)
+        marker: _block_for(
+            marker, role, retrieval_enabled=retrieval_enabled, kubectl_route=kubectl_route
+        )
         for marker in markers(template)
     }
     return render(template, values)

@@ -166,6 +166,44 @@ def test_a_role_without_cluster_tools_may_not_declare_the_kubectl_marker(
         compose_role_prompt("invented", retrieval_enabled=False, override_dir=tmp_path)
 
 
+ROLES_WITH_A_KUBECTL_MARKER = ["rca", "planning", "execution", "verify", "learning", "single"]
+
+
+@pytest.mark.parametrize("role", ROLES_WITH_A_KUBECTL_MARKER)
+def test_every_role_composes_on_the_proxy_route_too(role: str) -> None:
+    """A deployment whose transport offers the proxy has to compose every role.
+
+    A missing block is only reachable through that route, so without this it would
+    surface as a role that cannot build its system prompt during an incident.
+    """
+    prompt = compose_role_prompt(role, retrieval_enabled=False, kubectl_route="proxy_exec")
+    assert prompt.strip()
+    assert "{{" not in prompt
+
+
+def test_the_proxy_route_tells_a_role_to_run_kubectl_and_the_tool_route_not_to() -> None:
+    """The two routes prescribe opposite things, which is why the route has to reach here.
+
+    On the tool route the sandbox refuses kubectl and the block says to use the cluster
+    tool. On the proxy route kubectl resolves to a stage-aware shim and the block says
+    to run it directly. Composing the wrong one leaves the model with a system prompt
+    contradicting the tool it was handed, which costs it turns on refusals.
+    """
+    tool_route = compose_role_prompt("execution", retrieval_enabled=False)
+    proxied = compose_role_prompt("execution", retrieval_enabled=False, kubectl_route="proxy_exec")
+
+    assert "exec_kubectl_cmd_safely" in tool_route
+    assert "run normal `kubectl` commands directly" in proxied
+    assert "`exec_kubectl_cmd_safely` and rollback tools are not available" in proxied
+
+
+def test_an_unknown_route_is_refused_rather_than_silently_composing_the_other_one() -> None:
+    """A typo would otherwise fall through to the cluster-tool blocks, and a whole
+    campaign would run on guidance describing a route it was not using."""
+    with pytest.raises(PromptError, match="unknown kubectl route"):
+        compose_role_prompt("rca", retrieval_enabled=False, kubectl_route="proxy-exec")
+
+
 @pytest.mark.parity
 @pytest.mark.parametrize(
     ("role", "expected"),
@@ -256,3 +294,28 @@ def test_an_unfillable_override_fails_at_startup_not_at_the_incident(tmp_path: P
     (tmp_path / "roles" / "rca.txt").write_text("{{NOT_A_REAL_MARKER}}", encoding="utf-8")
     with pytest.raises(RoleRegistryError, match="declares markers nothing fills"):
         validate_roles(override_dir=tmp_path)
+
+
+@pytest.mark.parity
+@pytest.mark.parametrize(
+    ("role", "expected"),
+    [
+        ("rca", "read_only"),
+        ("planning", "read_only"),
+        ("execution", "execution"),
+        ("verify", "read_only"),
+        ("learning", "read_only"),
+        ("single", "single"),
+    ],
+)
+def test_the_proxy_route_block_map_mirrors_the_archive(role: str, expected: str) -> None:
+    """Planning is the one that differs from the cluster-tool map.
+
+    It has its own block on the tool route and reads the shared read-only text on the
+    proxy route, which is what the archived host's own composed system prompts carry.
+    Giving it a Planning-specific block here would change a prompt the published
+    measurements were taken under.
+    """
+    from kira.prompts.loader import _KUBECTL_PROXY_BLOCK  # noqa: PLC0415
+
+    assert _KUBECTL_PROXY_BLOCK[role] == expected

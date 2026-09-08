@@ -102,6 +102,12 @@ def _prototype_source(relative: Path) -> Path:
                 return PROTOTYPE / "minimal" / filename
             return PROTOTYPE / filename
         case ("blocks", "kubectl", filename):
+            # The prototype kept one block family per kubectl route: `safe.*` for the
+            # cluster-tool route and `proxy_exec.*` for the one where a role runs its
+            # own kubectl against the proxy. Only the first was prefixed on the way in,
+            # so the second keeps the name it already has.
+            if filename.startswith("proxy_exec."):
+                return PROTOTYPE / "shared" / "kubectl" / filename
             return PROTOTYPE / "shared" / "kubectl" / f"safe.{filename}"
         case ("blocks", "memory", filename):
             role, state = filename.removesuffix(".txt").split(".")
