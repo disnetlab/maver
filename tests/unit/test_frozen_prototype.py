@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 
 import pytest
+import test_kubectl_proxy
 import test_projections
 import test_prompt_assets
 import test_toolsets
@@ -48,7 +49,11 @@ def _prompt_assets() -> set[Path]:
 COMPARED = tuple(
     sorted(
         path.relative_to(ROOT)
-        for path in {test_toolsets.PROTOTYPE_REGISTRY, test_projections.PROTOTYPE}
+        for path in {
+            test_toolsets.PROTOTYPE_REGISTRY,
+            test_projections.PROTOTYPE,
+            test_kubectl_proxy.PROTOTYPE_SHIM,
+        }
         | _prompt_assets()
     )
 )
