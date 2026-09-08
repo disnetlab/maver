@@ -55,6 +55,10 @@ services:
       KIRA_INTAKE__ADAPTERS: sregym
       KIRA_ADAPTERS__SREGYM__CONDUCTOR_BASE_URL: http://host.docker.internal:8000
       KIRA_ADAPTERS__SREGYM__MCP_BASE_URL: http://host.docker.internal:9954
+      # kubectl runs locally against the harness's filtering proxy rather than through
+      # the MCP server, and `scripts/sregym-mcp-port-forward.sh` binds that forward on
+      # the docker bridge as well as on loopback for exactly this container.
+      KIRA_ADAPTERS__SREGYM__KUBECTL_PROXY_URL: http://host.docker.internal:16444
       # Unattended: nobody is waiting to approve a write during a sweep.
       KIRA_AUTHORITY__MODE: auto
       # And therefore not a production deployment. The settings layer refuses

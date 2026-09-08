@@ -126,6 +126,11 @@ fail on a remote host part-way through a run, so the contract between the entry 
 the driver it loads is pinned by a test. `aiopslab-driver.py` is the same arrangement for
 the other adapter, and `scripts/aiopslab/` holds the two things its host runs by hand.
 
+Under SREGym, kubectl reaches the cluster through the harness's own filtering proxy: the
+sandbox shell runs a real kubectl against a credential-free endpoint the harness serves,
+which is the route every measured run took. The MCP kubectl tools are hidden by default,
+so the model reaches the cluster from the shell and telemetry still arrives over MCP.
+
 Two environment adapters ship, and the difference between them is instructive. Under
 SREGym the harness starts the agent and hands it a problem. Under AIOpsLab the direction
 reverses: a driver runs inside the benchmark's own interpreter, holds the cluster-admin
@@ -174,9 +179,11 @@ named so an adopter can judge the risk themselves.
   budget of two rejections and the third is accepted, recorded as a bypass on the run row
   and in the event log. That row is in the table above; the bypass is deliberate, so that
   a guard cannot end a run by refusing it forever.
-- The host-recovery tool is withheld from the toolset unless recovery nodes are
-  configured. The node allowlist is empty by default, and a tool that refuses every call
-  reads in a result as a model that could not use it.
+- The host-recovery tool is offered to the remediating role whether or not recovery
+  nodes are configured, and the node allowlist is empty by default, so a deployment that
+  configures none is offering a tool that refuses every call. It is offered anyway
+  because every measured campaign offered it on an empty allowlist, and what a role is
+  shown is an input to the result; the startup log says so.
 - Retrieval is one retriever across both backends by construction, and the normalisation
   both index and query with is a documented approximation of PostgreSQL's text parser,
   not a copy of it. `src/kira/memory/lexemes.py` states what it reproduces and what it

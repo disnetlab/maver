@@ -36,6 +36,16 @@ frozen".
   `KIRA_TOOLS__HOST_RECOVERY_NODES` was empty in every campaign, so every call returned
   the "not an allowed recovery node" refusal before reaching a command.
 
+- **`ssh_exec` is offered whether or not a recovery node is configured.** The toolset
+  resolver withheld it from a deployment with an empty host allowlist, on the same rule
+  that drops a log tool with no log backend behind it. Every measured campaign ran with
+  an empty allowlist and offered the tool regardless, so withholding it removes a tool
+  definition from the remediating role's request and changes what the model was shown.
+  It is offered again, and a call naming a node the deployment may not reach gets the
+  refusal the archive gave: `error: host '<node>' is not an allowed recovery node;
+  configured: (none configured)`. The startup warning now says that is what will happen
+  rather than saying the tool is withheld.
+
 ## Model-facing text
 
 Prompts and tool descriptions are held-constant inputs to every published measurement,
@@ -61,14 +71,14 @@ recorded here rather than left to the commit log.
 
 - **`bash_exec`, `code_exec` and `exec_kubectl_cmd_safely` no longer branch on
   `KUBECTL_MODE`.** The two-mode conditional described a `proxy_exec` mode in which
-  kubectl resolved to a proxy shim inside the sandbox. That mode is not in this system:
-  there is no such setting and no such code path, the sandbox carries no cluster
-  credentials, and both sandbox tools refuse kubectl unconditionally. The model was
-  told, in one request, both that the sandbox has no credentials (the kubectl guidance
-  block) and that a mode exists in which kubectl works there (the description). The
-  entries now state the one behaviour: no credentials, kubectl rejected, use
-  `exec_kubectl_cmd_safely`. `exec_kubectl_cmd_safely` also drops "via the kubectl MCP
-  server", which named one adapter's transport in a core description.
+  kubectl resolved to a proxy shim inside the sandbox, and at the time this build had no
+  such route: the sandbox carried no cluster credentials and both sandbox tools refused
+  kubectl unconditionally, so the model was told in one request both that the sandbox has
+  no credentials (the kubectl guidance block) and that a mode exists in which kubectl
+  works there. `exec_kubectl_cmd_safely` also dropped "via the kubectl MCP server", which
+  named one adapter's transport in a core description. The route has since been restored
+  under SREGym, recorded below, and the descriptions branch on it again. They now branch
+  on the bound transport rather than on an environment variable.
 
 ## Retrieval
 
@@ -102,6 +112,16 @@ number, so a change to how it is built belongs here rather than in the commit lo
   BM25 scoring is unchanged: it still tokenises the raw text, because raw tokens are what
   was scored. Both backends migrate an existing database on open, deriving the terms from
   the raw text they already hold.
+
+- **A retrieval returns three records, not five.** Five was the prototype's code default
+  and a depth nothing recent measured: the archived environment of the campaigns this
+  build reproduces sets `MEMORY_SEARCH_TOP_K=3`, and the frozen memory arms pin three. A
+  deployment left on the shipped default therefore read two records more per retrieval
+  than any published result describes. Recall and precision pull hard against each other
+  at this knob. Over the offline corpus, 1 to 20 results moves useful-precedent recall
+  from 0.39 to 0.59 while precision falls from 0.39 to 0.04, and three is the precision
+  end of that trade, which is the end a small model that anchors easily wants. The
+  earlier MA+R arm, whose campaign ran at five, pins five in its own file.
 
 - **An incident can be denied records that the deployment as a whole is not.** The
   exclusion setting is a process-wide floor, and its description already said that an
@@ -159,6 +179,20 @@ versions the submission schemas and the event contract.
 
 An environment adapter decides what a benchmark result means, so the parts of one that
 change a reported number are recorded here rather than left to the commit log.
+
+- **Under SREGym, kubectl runs locally against the harness's filtering proxy.** The
+  archive reached the cluster this way in every measured run: `KUBECTL_MODE=proxy_exec`
+  put a shim on the sandbox's PATH, a real kubectl ran against a credential-free HTTP
+  endpoint the harness serves, and `MCP_KUBECTL_TOOLS_ENABLED=false` took the MCP kubectl
+  and rollback tools out of every role's toolset. This build had only the MCP route, so
+  the model was shown a different set of tools, given different guidance about what the
+  shell may do, and served by a kubectl implementation with different limits from the one
+  the results describe. The proxy route is back and is what the adapter configures
+  (`adapters.sregym.kubectl_proxy_url`, `http://127.0.0.1:16444`); the MCP kubectl tools
+  are hidden unless `adapters.sregym.mcp_kubectl_tools` says otherwise, and telemetry
+  still arrives over MCP. One thing is new rather than restored: a write through the
+  shell is refused unless the deployment approves writes automatically, because that
+  path cannot be held for a person the way the kubectl tool's can.
 
 - **The AIOpsLab analysis answer says who decided it.** Two hand-written rules in the
   taxonomy mapper override the model's own classification — an operator mutation to a
