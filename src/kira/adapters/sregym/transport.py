@@ -144,6 +144,35 @@ class McpTransport:
         return self.proxy.url
 
     @property
+    def kubectl_proxy_required(self) -> bool:
+        """Whether a kubectl inside a shell waits for the proxy before it runs.
+
+        Returns:
+            True by default. The proxy is a port-forward the harness restarts between
+            problems, and a command that raced the restart reports a connection refused
+            the model has no way to act on.
+        """
+        return self.proxy.required
+
+    @property
+    def kubectl_proxy_check_timeout_s(self) -> float:
+        """How long one readiness probe of the proxy may take.
+
+        Returns:
+            The per-probe timeout.
+        """
+        return self.proxy.check_timeout_s
+
+    @property
+    def kubectl_proxy_ready_timeout_s(self) -> float:
+        """How long readiness probing continues before a command is refused.
+
+        Returns:
+            The total wait.
+        """
+        return self.proxy.ready_timeout_s
+
+    @property
     def capabilities(self) -> frozenset[str]:
         """What these servers serve.
 

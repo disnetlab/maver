@@ -707,6 +707,12 @@ async def test_the_configured_proxy_route_reaches_the_transport(
 
     assert transport is not None
     assert transport.kubectl_proxy_url == "http://host.docker.internal:16444"
+    # Read off the transport by the sandbox tools, which build the environment a
+    # shell's own kubectl runs under: every field of it is this environment's to
+    # decide, and a default silently standing in for one is a wait that never happens.
+    assert transport.kubectl_proxy_required is True
+    assert transport.kubectl_proxy_check_timeout_s == 5.0
+    assert transport.kubectl_proxy_ready_timeout_s == 60.0
     assert transport.proxy.binary == "/usr/local/bin/kubectl"
     assert transport.proxy.exec_timeout_s == 45.0
     assert transport._kubeconfig_dir == tmp_path / ".kubectl-proxy"
