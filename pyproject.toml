@@ -163,6 +163,7 @@ ignore = [
 # over src/kira by an AST walk in tests/unit/test_adapters.py, which a lint rule cannot
 # do for an adapter nobody has written yet or for an import taken by name.
 "tests/unit/test_sregym_adapter.py" = ["TID251"]
+"tests/unit/test_sregym_exclusions.py" = ["TID251"]
 # The shared transport contract runs against both transports, and one of them is an
 # adapter's.
 "tests/contract/test_transport_mcp.py" = ["TID251"]

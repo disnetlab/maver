@@ -39,6 +39,7 @@ from kira.adapters.registry import adapter
 from kira.adapters.sregym.conductor import Conductor
 from kira.adapters.sregym.episode import reduce_feedback, submit_stage, wait_for_stage
 from kira.adapters.sregym.evidence import EvidenceFilter
+from kira.adapters.sregym.exclusions import load_exclusion_map
 from kira.adapters.sregym.signal import build_diagnosis_solution, build_signal, problem_id
 from kira.adapters.sregym.tools import adapter_tools
 from kira.contracts.state import IncidentState
@@ -128,6 +129,15 @@ class SregymConfig(BaseModel):
     cross-application twins stay retrievable, so a cell is scored on what generalises
     rather than on having seen this problem before. Off retrieves the whole corpus,
     which is a measurement of something else."""
+    exclusion_map: Path | None = None
+    """A file naming each problem's own records, for a corpus that cannot say.
+
+    Leave-one-out is normally derived from the records: the distilling pass labels each
+    one with the episode it came from. A corpus imported from a campaign whose sessions
+    never recorded a problem id carries no such label, so the derived set is empty and
+    a cell retrieves its own answer. This is the archive's own answer to that — one line
+    per problem, ``<problem id>\t<comma-separated session ids>`` — read at startup and
+    unioned with the labels rather than replacing them."""
 
     @classmethod
     def resolve(cls, settings: Settings, env: Mapping[str, str] | None = None) -> "SregymConfig":
@@ -186,6 +196,9 @@ class SREGymAdapter:
                 kubeconfig.
         """
         self._config = config
+        # Read here rather than per episode, so a file that cannot be parsed stops the
+        # deployment at startup instead of at the first cell that needed a row from it.
+        self._excluded = load_exclusion_map(config.exclusion_map) if config.exclusion_map else {}
         self._kubectl = ProxyRoute(
             url=str(config.kubectl_proxy_url).rstrip("/"),
             required=config.kubectl_proxy_required,
@@ -386,15 +399,24 @@ class SREGymAdapter:
 
         The records name their own problem because the distilling pass copies the
         signal's underscore-prefixed keys onto them as labels, and the driver writes this
-        episode's key under one of those.
+        episode's key under one of those. An imported corpus has no such label — the
+        archived campaign's sessions recorded no problem id — so ``exclusion_map`` names
+        those records instead, and the two sets are unioned: a corpus that is partly
+        imported and partly written by this build is covered by both at once.
+
+        A configured map with no row for this problem is a warning and an empty
+        contribution, where the archived runner aborted the cell. The difference is
+        deliberate: this process is long-lived and serves whatever episode the harness
+        starts next, so refusing here would take down a sweep over one missing row. The
+        warning is the record that the cell ran with less withheld than the protocol says.
 
         Args:
             ctx: What :meth:`acquire` reported.
             records: The corpus.
 
         Returns:
-            The session ids of every record from this problem, and nothing else. Empty
-            when the protocol is off or the conductor served no problem to key on.
+            The session ids of every record from this problem, sorted, and nothing else.
+            Empty when the protocol is off or the conductor served no problem to key on.
         """
         if not self._config.leave_one_out:
             return ()
@@ -406,9 +428,32 @@ class SREGymAdapter:
                 "withheld, and a memory arm's cell is void"
             )
             return ()
-        withheld = records.session_ids_with_label(label_name(EXTERNAL_KEY), ctx.external_key)
-        _log.info("withholding %d record(s) from this episode's own problem", len(withheld))
+        labelled = records.session_ids_with_label(label_name(EXTERNAL_KEY), ctx.external_key)
+        mapped = self._mapped(ctx.external_key)
+        withheld = sorted(set(labelled) | set(mapped))
+        _log.info(
+            "withholding %d record(s) from this episode's own problem %s: %d by label, "
+            "%d by the exclusion map",
+            len(withheld),
+            ctx.external_key,
+            len(labelled),
+            len(mapped),
+        )
         return withheld
+
+    def _mapped(self, external_key: str) -> Sequence[str]:
+        """Read this problem's row from the exclusion map, if there is a map."""
+        if not self._excluded:
+            return ()
+        if (sessions := self._excluded.get(external_key)) is None:
+            _log.warning(
+                "the exclusion map has no row for problem %s, so nothing is withheld by "
+                "it and this cell may retrieve its own records; add the row or run "
+                "without a map",
+                external_key,
+            )
+            return ()
+        return sessions
 
     def tool_transport(self) -> ToolTransport | None:
         """Supply the transport built for this episode.

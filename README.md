@@ -130,6 +130,8 @@ Under SREGym, kubectl reaches the cluster through the harness's own filtering pr
 sandbox shell runs a real kubectl against a credential-free endpoint the harness serves,
 which is the route every measured run took. The MCP kubectl tools are hidden by default,
 so the model reaches the cluster from the shell and telemetry still arrives over MCP.
+`docs/adapters/sregym.md` covers that route's settings, loading an archived corpus with
+`kira memory import`, and the leave-one-out map an imported corpus needs.
 
 Two environment adapters ship, and the difference between them is instructive. Under
 SREGym the harness starts the agent and hands it a problem. Under AIOpsLab the direction
