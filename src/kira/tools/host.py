@@ -9,8 +9,10 @@ approval gate.
 Two honest notes. The node allowlist was never configured on any measured run, so no
 graded session ever executed a command here; every invocation returned the
 "not an allowed recovery node" refusal. The tool's *definition* was nonetheless in the
-Execution role's prompt throughout, which is why it is kept rather than dropped: removing
-it would edit a prompt, and a prompt edit is a change to measured behaviour.
+Execution role's prompt throughout, which is why it is kept rather than dropped, and why
+the resolver offers it whatever the allowlist holds: withholding it, like removing it,
+edits what the model was shown, and that is a change to measured behaviour. A node the
+deployment may not reach is refused here instead, in the words the archive refused it in.
 
 Its description also names one specific fault, which the project's own rule against
 benchmark-specific text in the harness forbids. Generalising that, and the two role

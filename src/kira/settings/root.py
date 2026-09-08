@@ -621,14 +621,20 @@ def _warn_if_no_node_can_be_recovered(settings: Settings) -> None:
     SSH, and for them declining node-level recovery is the correct configuration. The
     resolved value is in the run's configuration record either way, which is what lets a
     later reader tell one of those campaigns from the other.
+
+    The tool is still offered, because every measured campaign offered it on an empty
+    allowlist and what a role is shown is an input to the result. So the warning says
+    what an operator will otherwise infer from a transcript: the calls are made and each
+    one is refused.
     """
     if settings.tools.host_recovery_nodes:
         return
     _log.warning(
-        "no host-recovery node is configured, so ssh_exec is withheld from the "
-        "remediating role and a fault that can only be repaired on the node itself will "
-        "end the incident unfixed. Set KIRA_TOOLS__HOST_RECOVERY_NODES to the SSH "
-        "aliases of the nodes this deployment may act on."
+        "no host-recovery node is configured. ssh_exec is still offered to the "
+        "remediating role, and every call it makes will be refused until nodes are "
+        "configured, so a fault that can only be repaired on the node itself will end "
+        "the incident unfixed. Set KIRA_TOOLS__HOST_RECOVERY_NODES to the SSH aliases "
+        "of the nodes this deployment may act on."
     )
 
 

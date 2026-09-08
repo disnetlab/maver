@@ -373,6 +373,39 @@ def _on_a_worker(tmp_path: Path) -> ToolContext:
     )
 
 
+async def test_ssh_exec_refuses_a_node_outside_the_allowlist_in_the_archive_s_words(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal every archived call to this tool received, byte for byte.
+
+    No measured campaign configured a node, so this string — and the empty allowlist
+    rendering as "(none configured)" — is the whole of what the model ever saw back from
+    ssh_exec. It is offered on an empty allowlist rather than withheld, so the refusal is
+    now the only thing standing between the model and a node, and a reworded one would
+    change a measured input.
+    """
+
+    def never_runs(*argv: object, **kwargs: object) -> None:
+        raise AssertionError(f"a subprocess was started: {argv}")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", never_runs)
+    nowhere = ToolContext(
+        transport=_NoCluster(),
+        workspace=SessionWorkspace(tmp_path),
+        role="execution",
+        session_id="s1",
+        journal=Journal(session_id="s1", stage="execution"),
+        settings=ToolSettings(),
+    )
+
+    assert await ssh_exec(nowhere, node="worker1", command="systemctl start kubelet") == (
+        "error: host 'worker1' is not an allowed recovery node; configured: (none configured)"
+    )
+    assert await ssh_exec(
+        _on_a_worker(tmp_path), node="worker2", command="systemctl start kubelet"
+    ) == ("error: host 'worker2' is not an allowed recovery node; configured: worker1")
+
+
 @pytest.mark.parametrize(
     "command",
     [

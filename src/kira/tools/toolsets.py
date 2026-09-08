@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 
 from kira.adapters.base import AdapterTool
 from kira.llm.types import ToolSpec as ModelToolSpec
-from kira.tools.allowlists import HOST_RECOVERY_TOOLS, RETRIEVAL_TOOLS, ROLE_TOOLSETS
+from kira.tools.allowlists import RETRIEVAL_TOOLS, ROLE_TOOLSETS
 from kira.tools.context import ToolContext
 from kira.tools.registry import (
     BoundTool,
@@ -128,15 +128,6 @@ def build_toolset(
                 # call for a whole incident, which in the results is indistinguishable
                 # from a model that could not use them.
                 dropped[name] = "no filesystem sandbox on this kernel"
-                continue
-            if name in HOST_RECOVERY_TOOLS and not ctx.settings.host_recovery_nodes:
-                # The same rule as every drop above, applied to the one tool that was
-                # exempt from it. Node recovery needs an allowlist of hosts, the
-                # allowlist is empty by default and was empty across every measured
-                # campaign, so the remediating role was offered a tool that refused
-                # every call — and a fault repairable only on the node was recorded as
-                # one the agent failed to fix.
-                dropped[name] = "no host-recovery node is configured"
                 continue
 
         definitions.append(

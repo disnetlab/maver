@@ -11,16 +11,14 @@ in, it was hand-tuned (namespace snapshot first for RCA, submit last everywhere)
 every published measurement was taken with it.
 """
 
-__all__ = ["HOST_RECOVERY_TOOLS", "RETRIEVAL_TOOLS", "ROLE_TOOLSETS"]
+__all__ = ["RETRIEVAL_TOOLS", "ROLE_TOOLSETS"]
 
-HOST_RECOVERY_TOOLS = frozenset({"ssh_exec"})
-"""The tools that act on a node rather than through the cluster API.
-
-Named here for the same reason as the retrieval tools: the resolver has to withhold them
-from a deployment that has no node it may reach, and it must not learn a tool's name by
-reading its implementation. Each needs an allowlist of hosts to be usable at all, and
-that allowlist is empty by default.
-"""
+# The tools that act on a node rather than through the cluster API were named here so
+# that the resolver could withhold them from a deployment with no node it may reach.
+# They are not withheld: the measured campaigns offered ssh_exec to the remediating role
+# with an empty host allowlist, so withholding it changes what the model was shown. The
+# tool refuses each call against the allowlist instead, which is where the archive
+# refused it too.
 
 RETRIEVAL_TOOLS = frozenset({"memory_search", "open_memory", "session_trace_summary"})
 """The tools that read the experience store.

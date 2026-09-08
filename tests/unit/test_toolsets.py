@@ -173,17 +173,19 @@ def test_a_role_offers_what_the_prototype_offered_in_the_order_it_offered_it(rol
     assert tuple(t for t in prototype if t not in DROPPED[role]) == tuple(ROLE_TOOLSETS[role])
 
 
-def test_node_recovery_is_withheld_when_there_is_no_node_to_reach(tmp_path: Path) -> None:
-    """Every other tool that cannot work is dropped before the run, with the reason
-    recorded, because a tool that errors reads to a model as a fault to work around.
-    Node recovery was the exception: its host allowlist is empty by default and was empty
-    across every measured campaign, so the remediating role was offered a tool that
-    refused every call, and a fault repairable only on the node was recorded as one the
-    agent failed to fix.
+def test_node_recovery_is_offered_with_no_node_to_reach(tmp_path: Path) -> None:
+    """The one tool exempt from the drop-before-the-run rule, and deliberately so.
+
+    Its host allowlist is empty by default and was empty across every measured campaign,
+    and the remediating role was offered it in all of them: the definition sat in the
+    execution toolset and its description sat in the prompt. Withholding it on an empty
+    allowlist reads better — a tool that refuses every call reads to a model as a fault
+    to work around — and it changes what the model was shown, which is an input to every
+    published number. So it is offered either way and the tool refuses the call.
     """
-    withheld = build_toolset("execution", context(tmp_path))
-    assert "ssh_exec" not in {tool.name for tool in withheld.definitions}
-    assert withheld.dropped["ssh_exec"] == "no host-recovery node is configured"
+    empty = build_toolset("execution", context(tmp_path))
+    assert "ssh_exec" in {tool.name for tool in empty.definitions}
+    assert "ssh_exec" not in empty.dropped
 
     reachable = context(tmp_path)
     reachable = replace(

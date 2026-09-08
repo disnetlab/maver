@@ -194,8 +194,10 @@ async def test_an_incident_runs_end_to_end_on_the_shipped_transport(deployment: 
 
     # What a run offered the model is reconstructible from its own row, which is the
     # point of recording it: with only kubectl on PATH the transport serves no telemetry
-    # and this deployment has no node, so four tools were never offered and the row says
-    # which and why rather than leaving it to be inferred from the environment.
+    # and this configuration has no experience store, so these were never offered and the
+    # row says which and why rather than leaving it to be inferred from the environment.
+    # ssh_exec is not among them: it is offered on an empty node allowlist, as every
+    # measured campaign offered it, and refuses each call itself.
     withheld = {
         name: reason
         for run in runs
@@ -211,7 +213,6 @@ async def test_an_incident_runs_end_to_end_on_the_shipped_transport(deployment: 
         "get_operations": "transport lacks traces",
         "get_traces": "transport lacks traces",
         "get_dependency_graph": "transport lacks traces",
-        "ssh_exec": "no host-recovery node is configured",
         "memory_search": "no experience store in this configuration",
         "open_memory": "no experience store in this configuration",
         "session_trace_summary": "no experience store in this configuration",
