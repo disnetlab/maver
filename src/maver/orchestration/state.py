@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from maver.contracts.runtime import RunState
 from maver.contracts.state import IncidentState, TargetStage
 
 __all__ = ["initial_state"]
@@ -41,6 +42,7 @@ def initial_state(
         The state the first role is entered with.
     """
     return IncidentState(
+        runtime=RunState(),
         session_id=session_id,
         alert=alert,
         target_stage=target_stage,

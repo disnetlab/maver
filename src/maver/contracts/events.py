@@ -214,8 +214,9 @@ class InterventionEvent(BaseModel):
         "turn_limit",
         "timeout",
         "hook_failure",
+        "middleware_context",
     ]
-    action: Literal["warned", "refused", "rescued", "bypassed", "ended_run"]
+    action: Literal["warned", "refused", "rescued", "bypassed", "ended_run", "injected"]
     """``bypassed`` is a control that was reached and not applied — because its own
     budget was spent, because the endpoint being served cannot accept it, or because it
     raised and was skipped. It is not ``warned``: nothing was said to the model and

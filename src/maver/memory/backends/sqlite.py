@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     run_status          TEXT NOT NULL DEFAULT 'pending',
     current_stage       TEXT,
     checkpoint_json     TEXT,
+    runtime_json        TEXT NOT NULL DEFAULT '{}',
     awaiting_request_id TEXT,
     alert_json          TEXT NOT NULL DEFAULT '{}',
     root_cause_json     TEXT,
@@ -303,16 +304,19 @@ class _SqliteSchema(StoreSchema):
     def detect_version(self) -> int:
         """Read an index's layout off its columns, oldest distinguishing one first.
 
-        A database with no record index at all is current rather than old: there is
-        nothing here of the layout versions below described.
+        Record-index generations are checked first. A sessions-only database can
+        still need the private-runtime column even when no record index exists.
         """
         with self._db.read() as conn:
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(records_fts)")}
-        if not columns:
-            return STORE_SCHEMA_VERSION
-        if "evidence_terms" not in columns:
+            session_columns = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)")}
+        if columns and "evidence_terms" not in columns:
             return 1
-        return 2 if "labels_json" not in columns else STORE_SCHEMA_VERSION
+        if columns and "labels_json" not in columns:
+            return 2
+        if session_columns and "runtime_json" not in session_columns:
+            return 3
+        return STORE_SCHEMA_VERSION
 
     def stamp(self, version: int) -> None:
         with self._db.write() as conn:
@@ -320,7 +324,17 @@ class _SqliteSchema(StoreSchema):
 
     @property
     def steps(self) -> Mapping[int, Callable[[], None]]:
-        return {1: self._index_normalised_terms, 2: self._add_labels}
+        return {1: self._index_normalised_terms, 2: self._add_labels, 3: self._add_runtime}
+
+    def _add_runtime(self) -> None:
+        """Add private run state when the operational half of the store exists."""
+        with self._db.write() as conn:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)")}
+            if columns and "runtime_json" not in columns:
+                conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN runtime_json TEXT NOT NULL DEFAULT '{}'"
+                )
+            _stamp(conn, 4)
 
     def _index_normalised_terms(self) -> None:
         """Rebuild the record index over normalised terms.
@@ -487,6 +501,19 @@ class SqliteStore:
                 "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
             ).fetchone()
         return None if row is None else _to_session(row)
+
+    def set_runtime(self, session_id: str, runtime: dict[str, Any]) -> None:
+        """Replace private run state without changing the alert or approval checkpoint.
+
+        Args:
+            session_id: The incident.
+            runtime: JSON-safe application-owned run state.
+        """
+        with self._db.write() as conn:
+            conn.execute(
+                "UPDATE sessions SET runtime_json = ? WHERE session_id = ?",
+                (_dumps(runtime), session_id),
+            )
 
     def awaiting_sessions(self) -> list[SessionRecord]:
         """Read every session parked on a human decision.
@@ -1177,6 +1204,7 @@ def _to_session(row: sqlite3.Row) -> SessionRecord:
         run_status=row["run_status"],
         current_stage=row["current_stage"],
         checkpoint=_loads(row["checkpoint_json"]),
+        runtime=_loads_or_empty(row["runtime_json"]),
         awaiting_request_id=row["awaiting_request_id"],
         alert=_loads_or_empty(row["alert_json"]),
         root_cause=_loads(row["root_cause_json"]),

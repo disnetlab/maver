@@ -12,25 +12,22 @@ that could only be distilled from live state would be lost to any restart.
 """
 
 import logging
+from dataclasses import replace
 from typing import Any
 
-from maver.audit.journal import Journal
 from maver.contracts.artifacts import LearningPacket, LearningResult, RoleTraceSummary
+from maver.contracts.runtime import RunState
 from maver.memory.distil import distil
-from maver.middleware.base import MiddlewareStack
-from maver.middleware.write_gate import WriteGate
-from maver.observability.usage import RecordingCompletion
 from maver.orchestration.jobs import bound_deployment
 from maver.orchestration.runner import (
     Deployment,
+    _context_builder,
     incident_context,
-    record_hook_failures,
-    tool_context_for,
 )
-from maver.roles.base import RoleContext
+from maver.orchestration.runtime import load_runtime, save_runtime
+from maver.pipelines import PipelineChangedError, restore_selection
 from maver.roles.prompting import visible_alert
 from maver.roles.registry import get_role
-from maver.tools.toolsets import build_toolset
 
 __all__ = ["build_packet", "distil_incident", "run_learning"]
 
@@ -108,51 +105,45 @@ async def run_learning(
     if packet is None:
         return "nothing_to_distil"
 
-    spec = get_role("learning")
-    async with incident_context(session_id, dict(packet.alert), deployment) as resources:
-        journal = Journal(
-            deployment.sink,
-            session_id=session_id,
-            stage=spec.name,
-            sequence=deployment.sequences.for_session(session_id),
+    runtime = load_runtime(deployment.storage.sessions, session_id) or RunState()
+    if runtime.deployment_digest and runtime.deployment_digest != deployment.runtime_digest:
+        raise PipelineChangedError(
+            "deployment behavior changed since admission; restore its original configuration before learning"
         )
-        tools = tool_context_for(deployment, resources, spec.name, session_id, journal)
-        outcome = await spec.run(
-            RoleContext(
-                spec=spec,
-                state={"session_id": session_id, "alert": dict(packet.alert)},
-                handback=None,
-                settings=deployment.settings,
-                # Wrapped, like every other stage. Handed the raw client, the distilling
-                # pass ran off the books entirely: no model-call event, no tokens, no
-                # cost, in the arm whose whole claim is that its memory is worth what it
-                # costs to build. The rule is that a model call anywhere is counted.
-                completion=RecordingCompletion(
-                    deployment.completion, journal, deployment.profile, deployment.sampling
-                ),
-                profile=deployment.profile,
-                middleware=MiddlewareStack(
-                    [
-                        WriteGate(
-                            authorities=deployment.authorities,
-                            settings=deployment.settings.authority,
-                            tools=deployment.settings.tools,
-                            journal=journal,
-                        ),
-                        *deployment.hooks,
-                    ],
-                    on_error=record_hook_failures(journal),
-                ),
-                write_lock=deployment.write_lock,
-                toolset=build_toolset(spec.name, tools, extras=deployment.tool_extras),
-                tool_context=tools,
-                journal=journal,
-                run_id=f"{session_id}:learning:1",
-                session_id=session_id,
-                memory=tools.memory,
-                packet=packet,
+    definition = None
+    if runtime.selection:
+        assert deployment.pipelines is not None
+        selected = restore_selection(deployment.pipelines, runtime.selection)
+        definition = selected.pipeline.learning_agent
+        if definition is None:
+            return "disabled"
+    # Sessions predating configured pipelines retain their original role selection.
+    spec = definition.spec if definition is not None else get_role("learning")
+    attempt = 1 + sum(agent.role == "learning" for agent in runtime.agents.values())
+    run_id = f"{session_id}:learning:{attempt}"
+    while run_id in runtime.agents:
+        attempt += 1
+        run_id = f"{session_id}:learning:{attempt}"
+    previous_stage, previous_agent = runtime.active_stage, runtime.active_agent
+    runtime.active_stage = None
+    try:
+        async with incident_context(session_id, dict(packet.alert), deployment) as resources:
+            context = _context_builder(
+                deployment, resources, retrieval=True, definition_override=definition
+            )(
+                spec,
+                {"session_id": session_id, "alert": dict(packet.alert), "runtime": runtime},
+                None,
+                run_id,
             )
-        )
+            outcome = await spec.run(replace(context, packet=packet))
+            if context.agent_state is not None:
+                context.agent_state.messages = list(outcome.transcript)
+    finally:
+        # Learning is an asynchronous invocation, not a foreground workflow step.
+        # Its private state persists without advancing or replacing that workflow.
+        runtime.active_stage, runtime.active_agent = previous_stage, previous_agent
+        save_runtime(deployment.storage.sessions, session_id, runtime)
 
     if not isinstance(outcome.artifact, LearningResult):
         _log.warning("learning produced nothing for %s: %s", session_id, outcome.error)

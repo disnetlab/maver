@@ -252,3 +252,36 @@ def _stamped_versions(path: pathlib.Path) -> list[int]:
 def _index_columns(path: pathlib.Path) -> list[str]:
     with contextlib.closing(sqlite3.connect(path)) as conn:
         return [row[1] for row in conn.execute("PRAGMA table_info(records_fts)")]
+
+
+@pytest.mark.parametrize("stamped", [False, True])
+@pytest.mark.parametrize("index_first", [False, True])
+def test_private_runtime_migrates_existing_sessions_without_changing_artifacts(
+    tmp_path: pathlib.Path, stamped: bool, index_first: bool
+) -> None:
+    path = tmp_path / "old-layout.db"
+    with contextlib.closing(SqliteStore(path)) as store:
+        session = store.create_session({"alertname": "existing"})
+        store.update_artefacts(session.session_id, root_cause={"summary": "old diagnosis"})
+    with contextlib.closing(sqlite3.connect(path)) as connection:
+        connection.execute("ALTER TABLE sessions DROP COLUMN runtime_json")
+        if stamped:
+            connection.execute("UPDATE schema_version SET version = 3")
+        else:
+            connection.execute("DROP TABLE schema_version")
+        connection.commit()
+    if index_first:
+        with contextlib.closing(SqliteRecordIndex(path)):
+            pass
+    with contextlib.closing(SqliteStore(path)) as store:
+        original = store.get_session(session.session_id)
+        assert original is not None
+        assert original.alert == {"alertname": "existing"}
+        assert original.root_cause == {"summary": "old diagnosis"}
+        assert original.runtime == {}
+        store.set_runtime(session.session_id, {"metadata": {"tenant": "private"}})
+    with contextlib.closing(SqliteStore(path)) as store:
+        restored = store.get_session(session.session_id)
+        assert restored is not None
+        assert restored.runtime == {"metadata": {"tenant": "private"}}
+        assert store.schema_version == STORE_SCHEMA_VERSION

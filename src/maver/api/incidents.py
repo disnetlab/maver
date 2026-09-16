@@ -24,14 +24,17 @@ from collections.abc import Mapping
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from maver.api.deps import Service, ServiceDep, admit
 from maver.contracts.lifecycle import LifecycleState, RunStatus
+from maver.contracts.runtime import RunState
 from maver.contracts.state import TargetStage
 from maver.middleware.authority import ApprovalPending
 from maver.orchestration.jobs import record_cancellation
 from maver.orchestration.runner import Deployment, run_incident
+from maver.orchestration.runtime import load_runtime, save_runtime
+from maver.pipelines import SelectedPipeline, select_pipeline
 from maver.roles.prompting import visible_alert
 
 __all__ = ["IncidentRequest", "fingerprint", "router", "run_incident_task", "start_incident"]
@@ -56,6 +59,9 @@ class IncidentRequest(BaseModel):
 
     alert: dict[str, Any]
     target_stage: Literal["full", "rca", "diagnose"] = "full"
+    pipeline: str | None = Field(default=None, min_length=1)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    """Private routing and middleware context, never merged into the model-visible alert."""
 
 
 @router.post("/incidents", status_code=202)
@@ -79,6 +85,10 @@ async def create_incident(body: IncidentRequest, service: ServiceDep) -> dict[st
             status_code=503, detail="HTTP intake disabled (MAVER_INTAKE__HTTP_ENABLED=false)"
         )
 
+    # Validate explicit names before reserving capacity or opening a session. Resolving
+    # selectors is deferred until this request owns the alert, so retries cannot run
+    # selection middleware repeatedly for one incident.
+    explicit = _requested_pipeline(body, service.deployment)
     claim = admit(service, fingerprint=fingerprint(body.alert))
 
     # A retrying alert source posting the same alert twice wants one incident, not two
@@ -93,16 +103,38 @@ async def create_incident(body: IncidentRequest, service: ServiceDep) -> dict[st
                 headers={"Retry-After": "30"},
             )
         record = await asyncio.to_thread(service.deployment.storage.sessions.get_session, existing)
+        runtime = await asyncio.to_thread(
+            load_runtime, service.deployment.storage.sessions, existing
+        )
+        selected = runtime.selection.get("name") if runtime is not None else None
+        if explicit is not None and selected != explicit:
+            raise HTTPException(
+                status_code=409,
+                detail=f"this alert is already handled by pipeline {selected!r} in incident {existing}",
+            )
         _log.info("alert already being handled by %s; not starting a second run", existing)
-        return {
+        receipt = {
             "session_id": existing,
             "status": "accepted",
             "target_stage": body.target_stage,
             "started_at": record.started_at if record is not None else "",
         }
+        if _show_pipeline(body, service.deployment):
+            receipt["pipeline"] = str(selected or "")
+        return receipt
 
     try:
-        return await start_incident(body.alert, target_stage=body.target_stage, service=service)
+        selection = await _select(body, service.deployment, explicit)
+        receipt = await start_incident(
+            body.alert,
+            target_stage=body.target_stage,
+            service=service,
+            selection=selection,
+            metadata=body.metadata,
+        )
+        if _show_pipeline(body, service.deployment):
+            receipt["pipeline"] = selection.pipeline.name
+        return receipt
     finally:
         service.runs.release(claim)
 
@@ -125,7 +157,7 @@ async def read_incident(session_id: str, service: ServiceDep) -> dict[str, Any]:
     record = await asyncio.to_thread(service.deployment.storage.sessions.get_session, session_id)
     if record is None:
         raise HTTPException(status_code=404, detail="incident not found")
-    return {
+    result = {
         "session_id": record.session_id,
         "status": record.state,
         "run_status": record.run_status,
@@ -143,6 +175,9 @@ async def read_incident(session_id: str, service: ServiceDep) -> dict[str, Any]:
         "notes": record.notes,
         "error": record.notes if record.state == LifecycleState.INVALIDATED.value else None,
     }
+    if record.runtime.get("selection"):
+        result["pipeline"] = record.runtime["selection"].get("name")
+    return result
 
 
 @router.post("/incidents/{session_id}/cancel", status_code=202)
@@ -178,7 +213,12 @@ async def cancel_incident(session_id: str, service: ServiceDep) -> dict[str, Any
 
 
 async def start_incident(
-    alert: dict[str, Any], *, target_stage: str, service: Service
+    alert: dict[str, Any],
+    *,
+    target_stage: str,
+    service: Service,
+    selection: SelectedPipeline | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Open a session, put a task on it, and hand back what to poll.
 
@@ -190,16 +230,44 @@ async def start_incident(
         alert: The payload that raised the incident.
         target_stage: The requested stage, in the wire's vocabulary.
         service: The process's resources.
+        selection: The already resolved admission choice, if the caller selected it.
+        metadata: Private middleware context, separate from the alert.
 
     Returns:
         The intake receipt: session id, acceptance, the stage as asked for, and when the
         session was opened.
     """
+    if selection is None:
+        body = IncidentRequest.model_validate(
+            {"alert": alert, "target_stage": target_stage, "metadata": metadata or {}}
+        )
+        selection = await _select(
+            body, service.deployment, _requested_pipeline(body, service.deployment)
+        )
+    # Validate private state before opening anything. A malformed custom caller must
+    # not leave a session which has neither a task nor a complete selection record.
+    runtime = RunState(selection=selection.manifest(), metadata=metadata or {})
     sessions = service.deployment.storage.sessions
     record = await asyncio.to_thread(sessions.create_session, alert)
-    # A created session and a session being worked on are different things, and the
-    # field a poller keys on has to tell them apart from the moment the task exists.
-    await asyncio.to_thread(sessions.set_run_status, record.session_id, RunStatus.RUNNING)
+    try:
+        # Saved before register wakes deduplicated requests and before any model call.
+        await asyncio.to_thread(save_runtime, sessions, record.session_id, runtime)
+        # Pollers must see the run as started from the moment its task exists.
+        await asyncio.to_thread(sessions.set_run_status, record.session_id, RunStatus.RUNNING)
+    except Exception as exc:
+        _log.exception("initial persistence failed for incident %s", record.session_id)
+        # Database errors can quote rejected JSON, including private metadata. The
+        # operator log keeps the cause; publicly readable notes carry only the phase.
+        _record_failure(
+            service.deployment,
+            record.session_id,
+            RuntimeError("could not persist initial incident state"),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="the incident could not be initialized",
+            headers={"Retry-After": "30"},
+        ) from exc
 
     # Registered before the task, so a run that finishes inside one loop iteration
     # cannot be unregistered before it was ever registered.
@@ -210,6 +278,8 @@ async def start_incident(
             alert=alert,
             target_stage=_TARGET_STAGES[target_stage],
             service=service,
+            selection=selection,
+            metadata=metadata,
         )
     )
     service.runs.attach(record.session_id, task)
@@ -222,7 +292,13 @@ async def start_incident(
 
 
 async def run_incident_task(
-    *, session_id: str, alert: dict[str, Any], target_stage: TargetStage, service: Service
+    *,
+    session_id: str,
+    alert: dict[str, Any],
+    target_stage: TargetStage,
+    service: Service,
+    selection: SelectedPipeline | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """Run one incident, and leave the session readable whatever happens to it.
 
@@ -231,9 +307,18 @@ async def run_incident_task(
         alert: The payload that raised it.
         target_stage: How far to run.
         service: The process's resources.
+        selection: The pinned admission choice; the runtime must not select it again.
+        metadata: Private context, separate from all prompt input.
     """
     try:
-        await run_incident(alert, session_id, service.deployment, target_stage=target_stage)
+        await run_incident(
+            alert,
+            session_id,
+            service.deployment,
+            target_stage=target_stage,
+            selection=selection,
+            metadata=metadata,
+        )
     except ApprovalPending as pending:
         # Not a failure. The incident is parked on a person, with everything needed to
         # continue it already written down.
@@ -252,6 +337,52 @@ async def run_incident_task(
         _record_failure(service.deployment, session_id, exc)
     finally:
         service.runs.unregister(session_id)
+
+
+def _requested_pipeline(body: IncidentRequest, deployment: Deployment) -> str | None:
+    """Validate a caller's selection and preserve the historical diagnosis-only route."""
+    catalog = deployment.pipelines
+    assert catalog is not None, "deployment must resolve its pipeline catalog before intake"
+    explicit = body.pipeline
+    if explicit is None and body.target_stage in ("rca", "diagnose"):
+        explicit = "diagnose"
+    if explicit is not None:
+        try:
+            pipeline = catalog.get(explicit)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        stages = pipeline.workflow.stages
+        if body.target_stage in ("rca", "diagnose") and not (
+            len(stages) == 1 and stages[0].role == "rca"
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="target_stage=diagnose requires a pipeline with one RCA stage",
+            )
+    return explicit
+
+
+async def _select(
+    body: IncidentRequest, deployment: Deployment, explicit: str | None
+) -> SelectedPipeline:
+    """Select for the claim owner, translating configured refusals into intake errors."""
+    catalog = deployment.pipelines
+    assert catalog is not None, "deployment must resolve its pipeline catalog before intake"
+    try:
+        return await select_pipeline(
+            catalog,
+            alert=body.alert,
+            metadata=body.metadata,
+            explicit=explicit,
+            selectors=deployment.pipeline_selectors,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _show_pipeline(body: IncidentRequest, deployment: Deployment) -> bool:
+    """Keep the held receipt shape for callers using only the original request fields."""
+    return body.pipeline is not None or deployment.settings.customisation is not None
 
 
 def _record_failure(deployment: Deployment, session_id: str, exc: BaseException) -> None:

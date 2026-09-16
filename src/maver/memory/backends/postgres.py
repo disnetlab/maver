@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     run_status          TEXT NOT NULL DEFAULT 'pending',
     current_stage       TEXT,
     checkpoint          JSONB,
+    runtime             JSONB NOT NULL DEFAULT '{}'::jsonb,
     awaiting_request_id TEXT,
     alert               JSONB NOT NULL DEFAULT '{}'::jsonb,
     root_cause          JSONB,
@@ -553,8 +554,8 @@ class _PostgresSchema(StoreSchema):
     def detect_version(self) -> int:
         """Tell a vector over raw text from one over normalised terms, by its expression.
 
-        A database with no record table at all is current rather than old: there is
-        nothing here of the layout version 1 described.
+        Record-index generations are checked first. Sessions can independently need
+        the runtime column even when the record table does not exist.
         """
         with self._db.read() as conn:
             generated = conn.execute(
@@ -563,12 +564,20 @@ class _PostgresSchema(StoreSchema):
                 "  ON a.attrelid = d.adrelid AND a.attnum = d.adnum "
                 "WHERE d.adrelid = to_regclass('records') AND a.attname = 'evidence_tsv'"
             ).fetchone()
-        if generated is None:
-            return STORE_SCHEMA_VERSION
-        expression = generated["expression"] or ""
-        if "array_to_tsvector" not in expression:
-            return 1
-        return STORE_SCHEMA_VERSION if self._has_labels() else 2
+        if generated is not None:
+            expression = generated["expression"] or ""
+            if "array_to_tsvector" not in expression:
+                return 1
+            if not self._has_labels():
+                return 2
+        with self._db.read() as conn:
+            columns = conn.execute(
+                "SELECT attname FROM pg_attribute WHERE attrelid = to_regclass('sessions') "
+                "AND attnum > 0 AND NOT attisdropped"
+            ).fetchall()
+        if columns and "runtime" not in {row["attname"] for row in columns}:
+            return 3
+        return STORE_SCHEMA_VERSION
 
     def _has_labels(self) -> bool:
         """Whether the record table carries the environment's own labels."""
@@ -585,7 +594,16 @@ class _PostgresSchema(StoreSchema):
 
     @property
     def steps(self) -> Mapping[int, Callable[[], None]]:
-        return {1: self._index_normalised_terms, 2: self._add_labels}
+        return {1: self._index_normalised_terms, 2: self._add_labels, 3: self._add_runtime}
+
+    def _add_runtime(self) -> None:
+        """Add private run state to existing sessions, without requiring that half."""
+        with self._db.write() as conn:
+            conn.execute(
+                "ALTER TABLE IF EXISTS sessions ADD COLUMN IF NOT EXISTS "
+                "runtime JSONB NOT NULL DEFAULT '{}'::jsonb"
+            )
+            _stamp(conn, 4)
 
     def _index_normalised_terms(self) -> None:
         """Rebuild the record vectors over normalised terms.
@@ -730,6 +748,19 @@ class PostgresStore:
                 (self.corpus_id, session_id),
             ).fetchone()
         return None if row is None else _to_session(row)
+
+    def set_runtime(self, session_id: str, runtime: dict[str, Any]) -> None:
+        """Replace private run state in this corpus only.
+
+        Args:
+            session_id: The incident.
+            runtime: JSON-safe application-owned run state.
+        """
+        with self._db.write() as conn:
+            conn.execute(
+                "UPDATE sessions SET runtime = %s WHERE corpus_id = %s AND session_id = %s",
+                (_json(runtime), self.corpus_id, session_id),
+            )
 
     def awaiting_sessions(self) -> list[SessionRecord]:
         """Read every session parked on a human decision.
@@ -1464,6 +1495,7 @@ def _to_session(row: _Row) -> SessionRecord:
         run_status=row["run_status"],
         current_stage=row["current_stage"],
         checkpoint=row["checkpoint"],
+        runtime=row["runtime"] or {},
         awaiting_request_id=row["awaiting_request_id"],
         alert=row["alert"] or {},
         root_cause=row["root_cause"],

@@ -21,6 +21,7 @@ from maver.adapters.base import RoleOverlay
 from maver.audit.journal import Journal
 from maver.contracts.artifacts import LearningPacket
 from maver.contracts.routing import HandBack
+from maver.contracts.runtime import AgentState, RunState
 from maver.contracts.state import IncidentState
 from maver.llm.types import Completion, Message
 from maver.memory.retrieval import Retriever
@@ -108,6 +109,8 @@ class RoleContext:
     journal: Journal
     run_id: str
     session_id: str
+    run_state: RunState | None = None
+    agent_state: AgentState | None = None
     memory: Retriever | None = None
     """None when this configuration has no experience store."""
     overlay: RoleOverlay | None = None

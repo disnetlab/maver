@@ -25,11 +25,14 @@ from pathlib import Path
 from typing import Any, cast
 
 from maver.adapters.base import AdapterTool, EnvironmentAdapter
+from maver.agents import AgentDefinition
 from maver.audit.journal import EventSink, Journal, NullSink, SequenceRegistry
+from maver.configuration import behavior_digest, load_configuration
 from maver.contracts import SCHEMA_VERSION
 from maver.contracts.events import InterventionEvent, StageEvent
 from maver.contracts.lifecycle import RunStatus
 from maver.contracts.routing import HandBack, Route
+from maver.contracts.runtime import AgentState, RunState
 from maver.contracts.state import IncidentState, TargetStage
 from maver.llm.sampling import (
     SamplingResolution,
@@ -62,7 +65,17 @@ from maver.orchestration.resume import (
     save_checkpoint,
 )
 from maver.orchestration.routing import RoutingPolicy, pending_handback
+from maver.orchestration.runtime import save_runtime
 from maver.orchestration.state import initial_state
+from maver.pipelines import (
+    PipelineCatalog,
+    PipelineChangedError,
+    PipelineSelector,
+    ResolvedPipeline,
+    SelectedPipeline,
+    restore_selection,
+    select_pipeline,
+)
 from maver.roles.base import RoleContext, RoleSpec, StateDelta, stage_role
 from maver.roles.policy import close_dangling_tool_calls
 from maver.roles.registry import get_role, registered_roles
@@ -113,6 +126,9 @@ class Deployment:
     completion: Completion
     profile: ModelProfile
     transport_for: TransportFactory
+    pipelines: PipelineCatalog | None = None
+    pipeline_selectors: tuple[PipelineSelector, ...] = ()
+    completion_for: Callable[[ModelProfile, Settings], Completion] | None = None
     authorities: Mapping[Mode, Authority] = field(default_factory=lambda: {"auto": AutoApprove()})
     """Who rules on a cluster write, per mode. The gate that consults them is built per
     role run, because it records into that run's journal.
@@ -147,6 +163,7 @@ class Deployment:
     """One cluster writer per process. Held here rather than in a module global so two
     deployments in one process are genuinely independent, which is what makes the
     serialisation testable."""
+    runtime_digest: str = field(init=False)
     sampling: SamplingResolution = field(init=False)
     """The profile's set resolved against settings, once, for the whole process."""
 
@@ -156,6 +173,29 @@ class Deployment:
         # point builds a Deployment, so a set that cannot be sent fails at startup
         # rather than at the first call, or — the case that actually happened — not at
         # all, with the run completing on a configuration nobody could reconstruct.
+        if self.pipelines is None:
+            configuration = load_configuration(self.settings, default_profile=self.profile)
+            object.__setattr__(self, "pipelines", configuration.pipelines)
+            object.__setattr__(
+                self, "pipeline_selectors", (*configuration.selectors, *self.pipeline_selectors)
+            )
+        assert self.pipelines is not None
+        if self.completion_for is None and any(
+            agent.profile is not None and agent.profile != self.profile
+            for pipeline in self.pipelines.pipelines.values()
+            for agent in (*pipeline.agents.values(), pipeline.learning_agent)
+            if agent is not None
+        ):
+            raise ValueError("configured agent model profiles require a completion_for factory")
+        for pipeline in self.pipelines.pipelines.values():
+            definitions = [*pipeline.agents.values()]
+            if pipeline.learning_agent is not None:
+                definitions.append(pipeline.learning_agent)
+            for definition in definitions:
+                effective = definition.settings_for(self.settings)
+                profile = definition.profile or self.profile
+                assert_sampling_is_pinned(profile, resolve_sampling(profile, effective))
+        object.__setattr__(self, "runtime_digest", behavior_digest(self.settings, self.profile))
         resolution = resolve_sampling(self.profile, self.settings)
         assert_sampling_is_pinned(self.profile, resolution)
         # Both sets, because both are sent. The gate, the nominator and the selector run
@@ -329,7 +369,12 @@ def record_hook_failures(journal: Journal) -> Callable[[str, str, BaseException]
     return report
 
 
-def _engine(deployment: Deployment, deps: IncidentDeps, nodes: Mapping[str, NodeFn]) -> Engine:
+def _engine(
+    deployment: Deployment,
+    deps: IncidentDeps,
+    nodes: Mapping[str, NodeFn],
+    pipeline: ResolvedPipeline | None = None,
+) -> Engine:
     """Build the configured executor over the nodes it is given.
 
     Given rather than built here, so the executor and every mode run the same objects.
@@ -337,12 +382,15 @@ def _engine(deployment: Deployment, deps: IncidentDeps, nodes: Mapping[str, Node
     not being.
     """
     if deployment.settings.pipeline.engine == "sequential":
-        return SequentialEngine(nodes, deps.policy)
-    return LangGraphEngine(build_graph(nodes, deps.policy))
+        return SequentialEngine(nodes, deps.policy, pipeline=pipeline)
+    return LangGraphEngine(build_graph(nodes, deps.policy, pipeline=pipeline), pipeline=pipeline)
 
 
 def _nodes(
-    deployment: Deployment, deps: IncidentDeps, resources: IncidentResources
+    deployment: Deployment,
+    deps: IncidentDeps,
+    resources: IncidentResources,
+    pipeline: ResolvedPipeline | None = None,
 ) -> dict[str, NodeFn]:
     """The graph's roles, with the diagnosing one composed if a second pass is configured.
 
@@ -351,10 +399,23 @@ def _nodes(
     only what they are told and whether they may retrieve. A role that knew it was being
     second-guessed would be a different role in the arm that does it.
     """
-    nodes = {name: make_node(get_role(name), deps) for name in GRAPH_ROLES}
+    nodes = (
+        {
+            stage.name: make_node(pipeline.agents[stage.name].spec, deps, stage=stage.name)
+            for stage in pipeline.workflow.stages
+        }
+        if pipeline is not None
+        else {name: make_node(get_role(name), deps) for name in GRAPH_ROLES}
+    )
     policy = policy_for(deployment.settings.memory.second_pass, deployment.settings.memory)
-    if policy is not None:
-        nodes["rca"] = _second_pass_node(deployment, deps, resources, policy, nodes["rca"])
+    if (
+        policy is not None
+        and "rca" in nodes
+        and (pipeline is None or pipeline.workflow.stage("rca").role == "rca")
+    ):
+        nodes["rca"] = _second_pass_node(
+            deployment, deps, resources, policy, nodes["rca"], pipeline
+        )
     return nodes
 
 
@@ -364,6 +425,7 @@ def _second_pass_node(
     resources: IncidentResources,
     policy: SecondPassPolicy,
     plain: NodeFn,
+    pipeline: ResolvedPipeline | None = None,
 ) -> NodeFn:
     """Run the gated second opinion in place of a first diagnosis.
 
@@ -390,7 +452,7 @@ def _second_pass_node(
             state: IncidentState, *, brief: str | None, retrieval: bool, run_label: str
         ) -> DiagnosisRun:
             rca = make_node(
-                get_role("rca"),
+                pipeline.agents["rca"].spec if pipeline is not None else get_role("rca"),
                 replace(
                     deps,
                     build_context=_context_builder(
@@ -400,6 +462,7 @@ def _second_pass_node(
                         assignment=brief or "",
                         retrieval=retrieval,
                         run_label=run_label,
+                        pipeline=pipeline,
                     ),
                 ),
             )
@@ -498,6 +561,10 @@ def _second_pass_delta(
             ],
         }
     )
+    if "runtime" in state:
+        state["runtime"].artifacts["root_cause"] = (
+            result.chosen.model_dump(mode="json") if result.chosen is not None else None
+        )
     if result.chosen is None:
         delta["error"] = f"rca failed: {result.skipped or 'no diagnosis'}"
     return delta
@@ -511,6 +578,8 @@ def _context_builder(
     assignment: str = "",
     retrieval: bool | None = None,
     run_label: str = "",
+    pipeline: ResolvedPipeline | None = None,
+    definition_override: AgentDefinition | None = None,
 ) -> ContextBuilder:
     """Assemble a role's context from the incident's own resources.
 
@@ -530,6 +599,35 @@ def _context_builder(
     def build(
         spec: RoleSpec, state: IncidentState, handback: HandBack | None, run_id: str
     ) -> RoleContext:
+        runtime = state.setdefault("runtime", RunState())
+        stage = runtime.active_stage or spec.name
+        definition = definition_override or (
+            pipeline.agents.get(stage) if pipeline is not None else None
+        )
+        settings = (
+            definition.settings_for(deployment.settings) if definition else deployment.settings
+        )
+        profile = (definition.profile if definition else None) or deployment.profile
+        sampling = resolve_sampling(profile, settings)
+        assert_sampling_is_pinned(profile, sampling)
+        completion = (
+            deployment.completion_for(profile, settings)
+            if definition is not None
+            and definition.profile is not None
+            and deployment.completion_for is not None
+            else deployment.completion
+        )
+        resumed = pending_resume.pop(stage, None)
+        agent = runtime.agents.get(runtime.active_agent or "") if resumed is not None else None
+        if agent is None:
+            agent = AgentState(
+                id=run_id,
+                definition=definition.name if definition else spec.name,
+                stage=stage,
+                role=spec.name,
+            )
+            runtime.agents[agent.id] = agent
+        runtime.active_agent = agent.id
         journal = Journal(
             deployment.sink,
             session_id=state.get("session_id", ""),
@@ -543,7 +641,7 @@ def _context_builder(
             spec.name,
             state.get("session_id", ""),
             journal,
-            retrieving=retrieving,
+            retrieving=retrieving and settings.memory.enabled,
             withheld=state.get("withheld_record_ids", ()),
         )
 
@@ -556,16 +654,13 @@ def _context_builder(
             else None
         )
 
-        resumed = pending_resume.pop(spec.name, None)
-        return RoleContext(
+        context = RoleContext(
             spec=spec,
             state=state,
             handback=handback,
-            settings=deployment.settings,
-            completion=RecordingCompletion(
-                deployment.completion, journal, deployment.profile, deployment.sampling
-            ),
-            profile=deployment.profile,
+            settings=settings,
+            completion=RecordingCompletion(completion, journal, profile, sampling),
+            profile=profile,
             middleware=MiddlewareStack(
                 [
                     WriteGate(
@@ -577,6 +672,8 @@ def _context_builder(
                     *deployment.hooks,
                 ],
                 on_error=record_hook_failures(journal),
+                run_state=runtime,
+                agent_state=agent,
             ),
             write_lock=deployment.write_lock,
             toolset=build_toolset(
@@ -584,18 +681,25 @@ def _context_builder(
                 tools,
                 extras=deployment.tool_extras,
                 drop=overlay.drop_tools if overlay is not None else frozenset(),
+                names=definition.tool_names if definition is not None else None,
             ),
             tool_context=tools,
             journal=journal,
             run_id=run_id,
             session_id=state.get("session_id", ""),
             memory=tools.memory,
+            run_state=runtime,
+            agent_state=agent,
             overlay=overlay,
             assignment=assignment,
             run_label=run_label,
             resume=resumed,
             resume_stage=resume_stage if resumed is not None else "",
         )
+        if definition is not None:
+            for hook in definition.make_middleware(context):
+                context = replace(context, middleware=context.middleware.with_hook(hook))
+        return context
 
     return build
 
@@ -609,6 +713,8 @@ async def run_incident(
     finalize_run_status: bool = True,
     target_stage: TargetStage = "full",
     withheld_record_ids: Sequence[str] = (),
+    selection: SelectedPipeline | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> IncidentState:
     """Run one incident to a terminal state and record what happened.
 
@@ -624,6 +730,8 @@ async def run_incident(
             caller then finalises it. The lifecycle state is recorded immediately either
             way.
         target_stage: How far to run.
+        selection: A selection already resolved at admission, or None to select here.
+        metadata: Private JSON metadata available to middleware, never injected implicitly.
         withheld_record_ids: Corpus records this incident may not retrieve, unioned with
             the process-wide floor in settings rather than replacing it. An environment
             adapter supplies one per episode; a plain deployment supplies none.
@@ -637,6 +745,23 @@ async def run_incident(
     if target_stage not in ("full", "diagnose"):
         raise ValueError(f"unsupported target_stage: {target_stage!r}")
 
+    assert deployment.pipelines is not None
+    if selection is None:
+        selection = await select_pipeline(
+            deployment.pipelines,
+            alert=alert,
+            metadata=metadata,
+            explicit="diagnose" if target_stage == "diagnose" else None,
+            selectors=deployment.pipeline_selectors,
+        )
+    else:
+        # Do not accept a caller binding from a different deployment.
+        selection = restore_selection(deployment.pipelines, selection.manifest())
+    pipeline = selection.pipeline
+    if target_stage == "diagnose" and not (
+        len(pipeline.workflow.stages) == 1 and pipeline.workflow.stages[0].role == "rca"
+    ):
+        raise ValueError("target_stage='diagnose' requires a one-stage RCA workflow")
     async with incident_context(session_id, alert, deployment) as resources:
         state = initial_state(
             session_id=session_id,
@@ -646,6 +771,12 @@ async def run_incident(
             shared_dir=resources.shared_dir,
             withheld_record_ids=withheld_record_ids,
         )
+        state["runtime"] = RunState(
+            selection=selection.manifest(),
+            metadata=metadata or {},
+            deployment_digest=deployment.runtime_digest,
+        )
+        save_runtime(deployment.storage.sessions, session_id, state["runtime"])
         journal = Journal(
             deployment.sink,
             session_id=session_id,
@@ -662,6 +793,7 @@ async def run_incident(
                 detail=json.dumps(
                     {
                         "schema_version": SCHEMA_VERSION,
+                        "selected_pipeline": selection.manifest(),
                         # Which environment supplied this run's transport, tools and
                         # overlays. The settings say which adapters are enabled; this
                         # says which one was actually bound, and the two differ for an
@@ -682,7 +814,7 @@ async def run_incident(
             policy=RoutingPolicy.from_settings(deployment.settings),
             runs=_RunRecorder(deployment.storage),
             journal=journal,
-            build_context=_context_builder(deployment, resources),
+            build_context=_context_builder(deployment, resources, pipeline=pipeline),
         )
         mode = resolve_mode(target_stage=target_stage, settings=deployment.settings)
         with span(
@@ -706,6 +838,7 @@ async def run_incident(
                 fire_post_hooks=fire_post_hooks,
                 finalize_run_status=finalize_run_status,
                 incident_span=incident_span,
+                pipeline=pipeline,
             )
 
 
@@ -722,17 +855,22 @@ async def _run_mode(
     fire_post_hooks: bool,
     finalize_run_status: bool,
     incident_span: Any,
+    pipeline: ResolvedPipeline | None = None,
 ) -> IncidentState:
     """Run the chosen mode and record what it came to."""
-    nodes = _nodes(deployment, deps, resources)
+    nodes = _nodes(deployment, deps, resources, pipeline)
     try:
-        final_state = await MODES[mode](
-            state,
-            ModeContext(
-                deps=deps,
-                engine=_engine(deployment, deps, nodes),
-                nodes=nodes,
-            ),
+        final_state = (
+            await _engine(deployment, deps, nodes, pipeline).run(state)
+            if pipeline is not None
+            else await MODES[mode](
+                state,
+                ModeContext(
+                    deps=deps,
+                    engine=_engine(deployment, deps, nodes),
+                    nodes=nodes,
+                ),
+            )
         )
     except ApprovalPending as pending:
         # Not an error. Park the incident where it stopped and let the caller unwind
@@ -748,7 +886,11 @@ async def _run_mode(
         )
         raise
 
-    record = resolve_outcome(final_state)
+    record = (
+        pipeline.resolve_outcome(final_state)
+        if pipeline is not None
+        else resolve_outcome(final_state)
+    )
     # The span is opened by the caller and handed down for this. Each role annotates its
     # own with what it submitted; the incident's carried how it started and nothing about
     # how it ended, so a trace showed every incident alike and the one question a trace is
@@ -757,6 +899,7 @@ async def _run_mode(
     if record.lifecycle is not None:
         incident_span.set_attribute("maver.lifecycle", record.lifecycle.value)
     try:
+        save_runtime(deployment.storage.sessions, session_id, final_state["runtime"])
         persist_outcome(
             final_state,
             record,
@@ -769,7 +912,11 @@ async def _run_mode(
         # an artifact once cost a fully graded run here.
         _log.exception("persisting the outcome failed; continuing from memory")
 
-    if fire_post_hooks and target_stage == "full":
+    if (
+        fire_post_hooks
+        and target_stage == "full"
+        and (pipeline is None or pipeline.workflow.post_hooks)
+    ):
         # A diagnosis-only task has no remediation outcome to learn from. Never
         # distil it as a successful incident memory entry.
         await fire_hooks(record.outcome, session_id, workdir=deployment.settings.server.workdir)
@@ -802,6 +949,8 @@ def _park(
         fire_post_hooks: Whether the caller wants the post-incident hooks.
         finalize_run_status: Whether the caller wants the run status closed here.
     """
+    if pending.state.get("runtime") is not None:
+        save_runtime(deployment.storage.sessions, pending.session_id, pending.state["runtime"])
     if pending.run_id:
         deployment.storage.runs.finish_run(
             pending.run_id,
@@ -854,6 +1003,18 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
         # racing on one request are ordered by the request's own single decision rather
         # than by this check.
         return "already_resumed"
+    state = restored_state(checkpoint)
+    runtime = state["runtime"]
+    if runtime.deployment_digest and runtime.deployment_digest != deployment.runtime_digest:
+        raise PipelineChangedError(
+            "deployment behavior changed since admission; restore its original configuration before resuming"
+        )
+    assert deployment.pipelines is not None
+    selected = (
+        restore_selection(deployment.pipelines, runtime.selection) if runtime.selection else None
+    )
+    pipeline = selected.pipeline if selected is not None else None
+    workflow_stage = runtime.active_stage or stage_role(checkpoint.stage)
     sessions.set_run_status(
         checkpoint.session_id,
         RunStatus.RESUMING,
@@ -862,7 +1023,6 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
         awaiting_request_id=request_id,
     )
 
-    state = restored_state(checkpoint)
     alert = dict(state.get("alert") or {})
     # The stage label may name a phase of a role; everything keyed by role needs the
     # role. The gate keeps the full label, which is what its write policy is written in.
@@ -889,7 +1049,18 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
             # finish the run able to retrieve what the first half was denied.
             withheld=state.get("withheld_record_ids", ()),
         )
-        content = await _replay(checkpoint, record, tools, deployment, journal)
+        replay_context = None
+        if pipeline is not None:
+            definition = pipeline.agents[workflow_stage]
+            replay_context = _context_builder(
+                deployment,
+                resources,
+                {workflow_stage: checkpoint.messages},
+                resume_stage=checkpoint.stage,
+                pipeline=pipeline,
+            )(definition.spec, state, None, runtime.active_agent or checkpoint.run_id)
+            tools = replay_context.tool_context
+        content = await _replay(checkpoint, record, tools, deployment, journal, replay_context)
         for event in resume_events(checkpoint, record, result_chars=len(content)):
             journal.record(event)
 
@@ -914,25 +1085,35 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
             runs=_RunRecorder(deployment.storage),
             journal=journal,
             build_context=_context_builder(
-                deployment, resources, {role: transcript}, resume_stage=checkpoint.stage
+                deployment,
+                resources,
+                {workflow_stage: transcript},
+                resume_stage=checkpoint.stage,
+                pipeline=pipeline,
             ),
         )
         # The same composition the first pass ran under. Building the roles a second
         # way here would let a continuation re-enter a diagnosis without the second
         # opinion the arm is defined by, and the run would silently be two arms.
-        nodes = _nodes(deployment, deps, resources)
+        nodes = _nodes(deployment, deps, resources, pipeline)
         try:
             # The shape the incident was running, not the graph by assumption. Always on
             # the sequential executor: the graph executor cannot be entered part-way
             # without a checkpointer, and not having one is the point.
-            final_state = await MODES[checkpoint.mode](
-                state,
-                ModeContext(
-                    deps=deps,
-                    engine=SequentialEngine(nodes, deps.policy),
-                    nodes=nodes,
-                    start=role,
-                ),
+            final_state = (
+                await SequentialEngine(nodes, deps.policy, pipeline=pipeline).run(
+                    state, start=workflow_stage
+                )
+                if pipeline is not None
+                else await MODES[checkpoint.mode](
+                    state,
+                    ModeContext(
+                        deps=deps,
+                        engine=SequentialEngine(nodes, deps.policy),
+                        nodes=nodes,
+                        start=role,
+                    ),
+                )
             )
         except ApprovalPending as pending:
             # A second decision is needed. Re-park and leave the hooks alone: the
@@ -947,8 +1128,13 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
             )
             return "awaiting_human"
 
-        outcome = resolve_outcome(final_state)
+        outcome = (
+            pipeline.resolve_outcome(final_state)
+            if pipeline is not None
+            else resolve_outcome(final_state)
+        )
         try:
+            save_runtime(sessions, checkpoint.session_id, final_state["runtime"])
             persist_outcome(
                 final_state,
                 outcome,
@@ -960,7 +1146,11 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
         # Once, at the end, and only if the caller that parked wanted them. An interim
         # result recorded mid-continuation would be read as terminal, and a driver that
         # owns the run's ending must not have it closed from underneath.
-        if checkpoint.fire_post_hooks and checkpoint.target_stage == "full":
+        if (
+            checkpoint.fire_post_hooks
+            and checkpoint.target_stage == "full"
+            and (pipeline is None or pipeline.workflow.post_hooks)
+        ):
             await fire_hooks(
                 outcome.outcome,
                 checkpoint.session_id,
@@ -976,6 +1166,7 @@ async def _replay(
     tools: ToolContext,
     deployment: Deployment,
     journal: Journal,
+    context: RoleContext | None = None,
 ) -> str:
     """Produce the result of the call the incident was paused on.
 
@@ -989,7 +1180,11 @@ async def _replay(
     if record.status != "approved":
         return denial_result(record)
 
-    toolset = build_toolset(stage_role(checkpoint.stage), tools, extras=deployment.tool_extras)
+    toolset = (
+        context.toolset
+        if context is not None
+        else build_toolset(stage_role(checkpoint.stage), tools, extras=deployment.tool_extras)
+    )
     bound = toolset.dispatch.get(checkpoint.tool_name)
     if bound is None:
         # Approved, but the tool is not available in this configuration any more.
@@ -1003,17 +1198,21 @@ async def _replay(
             content=str(await bound(**request.arguments)),
         )
 
-    stack = MiddlewareStack(
-        [
-            WriteGate(
-                authorities=deployment.authorities,
-                settings=deployment.settings.authority,
-                tools=deployment.settings.tools,
-                journal=journal,
-            ),
-            *deployment.hooks,
-        ],
-        on_error=record_hook_failures(journal),
+    stack = (
+        context.middleware
+        if context is not None
+        else MiddlewareStack(
+            [
+                WriteGate(
+                    authorities=deployment.authorities,
+                    settings=deployment.settings.authority,
+                    tools=deployment.settings.tools,
+                    journal=journal,
+                ),
+                *deployment.hooks,
+            ],
+            on_error=record_hook_failures(journal),
+        )
     )
     # The grant is what the operator approved, read from the request they were shown;
     # the call is what the checkpoint says to run. Sourcing both from the checkpoint

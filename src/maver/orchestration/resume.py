@@ -34,6 +34,7 @@ from maver.contracts.artifacts import (
 )
 from maver.contracts.events import PolicyDecisionEvent, ToolCallEvent
 from maver.contracts.lifecycle import RunStatus
+from maver.contracts.runtime import RunState
 from maver.contracts.state import IncidentState, TargetStage
 from maver.memory.ports import ApprovalRecord, ApprovalStore, SessionRecord, SessionStore
 from maver.middleware.authority import ApprovalPending
@@ -296,6 +297,7 @@ def restored_state(checkpoint: ApprovalCheckpoint) -> IncidentState:
         The state, with the counters as they stood rather than reset.
     """
     state = dict(checkpoint.state)
+    state["runtime"] = RunState.model_validate(state.get("runtime") or {})
     for slot, models in _SLOTS.items():
         state[slot] = _rehydrate(state.get(slot), models)
     state["remediation_retries"] = checkpoint.remediation_retries
@@ -323,6 +325,7 @@ def stored_state(record: SessionRecord, *, target_stage: TargetStage = "full") -
         The state, as far as it was written down.
     """
     state: dict[str, Any] = {
+        "runtime": RunState.model_validate(record.runtime or {}),
         "session_id": record.session_id,
         "alert": dict(record.alert),
         "target_stage": target_stage,

@@ -106,16 +106,18 @@ class IncidentDeps:
     build_context: ContextBuilder
 
 
-def make_node(spec: RoleSpec, deps: IncidentDeps) -> NodeFn:
+def make_node(spec: RoleSpec, deps: IncidentDeps, *, stage: str | None = None) -> NodeFn:
     """Build the graph node for one role.
 
     Args:
         spec: The role this node runs.
         deps: The incident's shared resources.
+        stage: Workflow identity, separate from the canonical authority role.
 
     Returns:
         An async function the graph can call with the state.
     """
+    stage_name = stage or spec.name
 
     async def node(state: IncidentState) -> StateDelta:
         delta: dict[str, Any] = {}
@@ -143,10 +145,19 @@ def make_node(spec: RoleSpec, deps: IncidentDeps) -> NodeFn:
             delta.update(RetryBudget.of(state, deps.policy).spend_recheck().to_state())
             state = _merged(state, delta)
 
+        runtime = state.get("runtime")
+        if runtime is not None:
+            # Routing may clear superseded artifacts before this invocation starts.
+            for slot in ("root_cause", "plan", "execution_result", "verify_result"):
+                if slot in state:
+                    value = state.get(slot)
+                    runtime.artifacts[slot] = (
+                        value.model_dump(mode="json") if value is not None else None
+                    )
         run_ids = state.get("run_ids") or []
         previous = run_ids[-1] if run_ids else None
         run_id = deps.runs.start(
-            session_id=state.get("session_id", ""), role=spec.name, after=previous
+            session_id=state.get("session_id", ""), role=stage_name, after=previous
         )
         deps.journal.record(StageEvent(stage=spec.name, event="entered"))
 
@@ -167,6 +178,8 @@ def make_node(spec: RoleSpec, deps: IncidentDeps) -> NodeFn:
             # the run row stays open for the resume to close. The state and the run are
             # attached here because this is the layer that has them: the gate sees one
             # call and the loop sees one transcript.
+            if context.agent_state is not None:
+                context.agent_state.messages = list(pending.messages)
             pending.state = dict(state)
             pending.run_id = run_id
             raise
@@ -228,8 +241,14 @@ def _merge(
         "trace_summaries": [*state.get("trace_summaries", []), summary.model_dump(mode="json")],
         "run_ids": [*state.get("run_ids", []), run_id],
     }
+    if context.agent_state is not None:
+        context.agent_state.messages = list(outcome.transcript)
     if spec.state_slot is not None:
         delta[spec.state_slot] = artifact
+        if context.run_state is not None:
+            context.run_state.artifacts[spec.state_slot] = (
+                artifact.model_dump(mode="json") if artifact is not None else None
+            )
 
     if artifact is None and spec.failure_sets_error:
         # Only the roles that declare it. Verification deliberately does not: a check
@@ -253,6 +272,15 @@ def _merge(
         # runs the diagnosing role twice, where both rows said only `rca`.
         metadata={
             **outcome.metadata,
+            **(
+                {
+                    "agent_instance": context.agent_state.id,
+                    "agent_definition": context.agent_state.definition,
+                    "workflow_stage": context.agent_state.stage,
+                }
+                if context.agent_state is not None
+                else {}
+            ),
             "tools_withheld": dict(context.toolset.dropped),
             **({"run_label": context.run_label} if context.run_label else {}),
         },
@@ -277,4 +305,12 @@ def _merge(
 
     # The role's own keys last, so a role can add state the wrapper does not know about.
     delta.update(outcome.delta)
+    if context.run_state is not None:
+        for slot in ("root_cause", "plan", "execution_result", "verify_result"):
+            value = delta.get(slot)
+            if slot in delta:
+                context.run_state.artifacts[slot] = (
+                    value.model_dump(mode="json") if value is not None else None
+                )
+        delta["runtime"] = context.run_state
     return delta

@@ -33,6 +33,7 @@ from maver.api.hitl import router as hitl_router
 from maver.api.incidents import router as incidents_router
 from maver.audit.journal import EventSink
 from maver.audit.store_sink import StoreSink
+from maver.configuration import Configuration, load_configuration
 from maver.llm.client import LLMClient
 from maver.memory.factory import build_storage
 from maver.memory.ports import ApprovalStore
@@ -76,7 +77,7 @@ API_PREFIX = "/api/v1"
 a Kubernetes probe should not have to know the API's version."""
 
 
-def validate_deployment(settings: Settings) -> None:
+def validate_deployment(settings: Settings) -> Configuration:
     """Refuse a configuration this process cannot serve, before it serves anything.
 
     The one place these checks live, so that ``maver config check`` answers for the
@@ -110,7 +111,9 @@ def validate_deployment(settings: Settings) -> None:
     validate_registry(descriptions=load_descriptions(), allowlists=ROLE_TOOLSETS)
     validate_roles(override_dir=settings.prompts.override_dir)
     policy_for(settings.memory.second_pass, settings.memory)
+    configuration = load_configuration(settings)
     build_storage(settings).close()
+    return configuration
 
 
 def build_deployment(settings: Settings) -> Deployment:
@@ -131,7 +134,7 @@ def build_deployment(settings: Settings) -> Deployment:
             composition.
         ValueError: When the configured storage backend is not installed.
     """
-    validate_deployment(settings)
+    configuration = validate_deployment(settings)
     # Asked here so that a host with no usable filesystem sandbox says so in the pod's
     # log at startup, rather than at the first tool call of the first incident.
     if settings.tools.fs_sandbox:
@@ -179,6 +182,9 @@ def build_deployment(settings: Settings) -> Deployment:
         completion=LLMClient(profile, settings),
         profile=profile,
         transport_for=transport_for,
+        pipelines=configuration.pipelines,
+        pipeline_selectors=configuration.selectors,
+        completion_for=LLMClient,
         authorities=_authorities(settings, storage.approvals),
         # Not the discarding default. Every model call, tool call, submission and
         # authority decision is meant to reach the ordered per-incident log, and a run

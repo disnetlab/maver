@@ -216,4 +216,4 @@ def test_the_context_is_narrow_by_design() -> None:
     interlocks all span turns; a hook seeing one turn cannot implement them correctly.
     """
     fields = set(TurnContext.__slots__)
-    assert fields == {"role", "session_id", "turn", "caller", "scratch"}
+    assert fields == {"role", "session_id", "turn", "caller", "scratch", "run_state", "agent_state"}

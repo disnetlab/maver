@@ -60,11 +60,13 @@ def build_toolset(
     capabilities: Sequence[str] | None = None,
     extras: Sequence[AdapterTool] = (),
     drop: frozenset[str] = frozenset(),
+    names: Sequence[str] | None = None,
 ) -> ResolvedToolset:
     """Resolve a role's tools against this run's environment and configuration.
 
     Args:
         role: The role being run.
+        names: An explicitly configured ordered allowlist, or the canonical default.
         ctx: The run's context, bound into every dispatch.
         descriptions: The description catalogue. Defaults to the shipped one.
         capabilities: What the transport serves. Defaults to asking the bound transport.
@@ -84,7 +86,7 @@ def build_toolset(
             collides with a registered name. A silent override would make the audit
             record say one thing and mean another.
     """
-    names = ROLE_TOOLSETS.get(role)
+    names = ROLE_TOOLSETS.get(role) if names is None else names
     if names is None:
         raise ToolRegistryError(f"no toolset defined for role {role!r}")
 

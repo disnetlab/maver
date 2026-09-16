@@ -9,6 +9,28 @@ published comparisons, which are single-variable only while the schema does not 
 with the configuration. The procedure is in STYLE_GUIDE.md, "Typed artifacts are
 frozen".
 
+## Customisable agents and workflows
+
+Python agent subclasses now expose typed settings to final named YAML agents.
+Python workflows bind these agents through YAML, with explicit per-incident pipeline
+selection, optional selector middleware, and a deployment default. Shared private
+state, scoped prompt additions and separate per-invocation conversations survive
+approval checkpoints. See [the customisation guide](docs/customisation.md).
+
+Session storage layout 4 adds a private runtime JSON column to SQLite/PostgreSQL;
+existing data migrates forward on open. An approved incident refuses continuation
+if its pinned composition or effective behaviour changed. Historical checkpoints
+without this metadata retain the legacy continuation path.
+
+### Schema version 2: audit extension
+
+`InterventionEvent` accepts `control="middleware_context"` and `action="injected"`
+so explicitly contributed context is recorded verbatim. Older strict event readers
+must be updated for these new values. Submission schemas, shipped model prompts,
+tool descriptions and frozen experiment arm files are unchanged; this event-only
+addition does not invalidate published model-input comparisons. Configuring new
+agent behaviour defines a new experimental condition and requires its own evidence.
+
 ## Breaking changes
 
 ### MAVER naming

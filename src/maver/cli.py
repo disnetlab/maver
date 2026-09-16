@@ -26,6 +26,8 @@ from maver import __version__
 from maver.adapters.registry import available_adapters
 from maver.api.app import enabled_adapters, validate_deployment
 from maver.api.hitl import request_payload
+from maver.api.incidents import IncidentRequest
+from maver.configuration import Configuration, load_configuration
 from maver.memory.corpus import MalformedRecord, import_records, parse_records
 from maver.memory.factory import build_storage
 from maver.memory.ports import ApprovalStatus, ApprovalStore
@@ -45,9 +47,11 @@ approvals_app = typer.Typer(
     help="Review and decide the writes waiting on a person.", no_args_is_help=True
 )
 memory_app = typer.Typer(help="Load and inspect the experience corpus.", no_args_is_help=True)
+incidents_app = typer.Typer(help="Submit incidents to a running deployment.", no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(approvals_app, name="approvals")
 app.add_typer(memory_app, name="memory")
+app.add_typer(incidents_app, name="incidents")
 
 UrlOption = Annotated[
     str | None,
@@ -132,6 +136,70 @@ def serve(
     )
 
 
+@incidents_app.command("start")
+def incidents_start(
+    alert: Annotated[Path, typer.Argument(help="JSON file containing the alert.")],
+    pipeline: Annotated[
+        str | None,
+        typer.Option("--pipeline", help="Configured pipeline; overrides selection middleware."),
+    ] = None,
+    metadata: Annotated[
+        Path | None,
+        typer.Option(
+            "--metadata", help="JSON file of private run metadata, separate from the alert."
+        ),
+    ] = None,
+    target_stage: Annotated[
+        str, typer.Option("--target-stage", help="How far to run: full, diagnose, or rca.")
+    ] = "full",
+    url: Annotated[
+        str, typer.Option("--url", help="The running MAVER deployment.")
+    ] = "http://127.0.0.1:8080",
+) -> None:
+    """Submit an incident and print its acceptance receipt.
+
+    Args:
+        alert: File containing the model-visible incident input.
+        pipeline: An explicit configured workflow, or the deployment's selector/default.
+        metadata: Private run context, never merged into the alert.
+        target_stage: How far the workflow should run.
+        url: The running deployment to submit to.
+    """
+    body: dict[str, Any] = {"alert": _json_object(alert), "target_stage": target_stage}
+    if pipeline is not None:
+        body["pipeline"] = pipeline
+    if metadata is not None:
+        body["metadata"] = _json_object(metadata)
+    try:
+        IncidentRequest.model_validate(body)
+    except ValidationError as exc:
+        for error in exc.errors():
+            typer.echo(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}", err=True)
+        raise typer.Exit(code=2) from exc
+    try:
+        receipt = _api(url, "POST", "/incidents", json=body)
+    except httpx.HTTPStatusError as exc:
+        typer.echo(_detail(exc.response), err=True)
+        raise typer.Exit(code=1) from exc
+    except httpx.RequestError as exc:
+        typer.echo(f"could not reach MAVER: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(receipt, indent=2, sort_keys=True))
+
+
+def _json_object(path: Path) -> dict[str, Any]:
+    """Read one object without echoing private content in a parsing error."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as exc:
+        typer.echo(f"{path}: could not read a JSON object", err=True)
+        raise typer.Exit(code=2) from exc
+    if not isinstance(data, dict):
+        typer.echo(f"{path}: expected a JSON object", err=True)
+        raise typer.Exit(code=2)
+    return data
+
+
 @config_app.command("show")
 def config_show(as_json: JsonOption = False) -> None:
     """Print the resolved configuration, with secrets masked.
@@ -141,11 +209,16 @@ def config_show(as_json: JsonOption = False) -> None:
     """
     settings = _resolved()
     snapshot = settings.snapshot()
+    if settings.customisation is not None:
+        snapshot["customisation"] = _configuration(settings).manifest()
     if as_json:
         typer.echo(json.dumps(snapshot, indent=2, sort_keys=True))
         return
     for name, value in sorted(_flatten(snapshot["settings"]).items()):
         typer.echo(f"{name} = {value}")
+    if "customisation" in snapshot:
+        typer.echo("configured agents and pipelines:")
+        typer.echo(json.dumps(snapshot["customisation"], indent=2, sort_keys=True))
     if snapshot["arm_digest"]:
         typer.echo(f"arm digest: {snapshot['arm_digest']}")
     for legacy, modern in sorted(legacy_names_in_use().items()):
@@ -179,6 +252,22 @@ def config_check() -> None:
     for path, (declared, actual) in sorted(overridden.items()):
         typer.echo(f"arm override: {path} = {actual} (arm {settings.arm} resolves {declared})")
     typer.echo("ok")
+
+
+@config_app.command("pipelines")
+def config_pipelines(as_json: JsonOption = False) -> None:
+    """List configured pipeline names and the deployment default.
+
+    Args:
+        as_json: Print the complete resolved, redacted composition manifest.
+    """
+    configuration = _configuration(_resolved())
+    if as_json:
+        typer.echo(json.dumps(configuration.manifest(), indent=2, sort_keys=True))
+        return
+    for name, pipeline in sorted(configuration.pipelines.pipelines.items()):
+        default = " (default)" if name == configuration.pipelines.default else ""
+        typer.echo(f"{name}{default}: {pipeline.workflow.name}")
 
 
 @config_app.command("adapters")
@@ -412,6 +501,15 @@ def _detail(response: httpx.Response) -> str:
     except ValueError:
         detail = None
     return str(detail or f"{response.status_code} {response.reason_phrase}")
+
+
+def _configuration(settings: Settings) -> Configuration:
+    """Resolve user definitions with the same concise refusal as config check."""
+    try:
+        return load_configuration(settings)
+    except (OSError, RoleRegistryError, RuntimeError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
 
 
 def _resolved() -> Settings:

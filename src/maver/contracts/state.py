@@ -18,6 +18,7 @@ from maver.contracts.artifacts import (
     SingleResult,
     VerifyResult,
 )
+from maver.contracts.runtime import RunState
 
 __all__ = ["IncidentState", "TargetStage"]
 
@@ -35,6 +36,9 @@ class IncidentState(TypedDict, total=False):
     Every key is optional because the graph populates them progressively and each
     node returns the merged state.
     """
+
+    runtime: RunState
+    """Private shared state and isolated per-invocation conversations."""
 
     # Inputs.
     session_id: str

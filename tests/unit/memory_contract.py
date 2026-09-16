@@ -340,6 +340,38 @@ class MemoryStoreContract:
         assert again.run_status == RunStatus.CANCELLED.value
         assert again.ended_at == ended.ended_at
 
+    def test_private_runtime_survives_status_changes_and_a_restart(
+        self, reopen: Callable[[], Any]
+    ) -> None:
+        runtime = {
+            "selection": {"name": "database_recovery", "source": "explicit"},
+            "metadata": {"tenant": "private-tenant"},
+            "agents": {"rca-1": {"messages": [{"role": "user", "content": "first"}]}},
+        }
+        with closing(reopen()) as store:
+            session = store.create_session({"alertname": "HighErrorRate"})
+            store.set_runtime(session.session_id, runtime)
+            store.set_run_status(
+                session.session_id,
+                RunStatus.AWAITING_HUMAN,
+                checkpoint={"request": "r1"},
+                awaiting_request_id="r1",
+            )
+            store.set_run_status(session.session_id, RunStatus.RUNNING)
+        with closing(reopen()) as store:
+            record = store.get_session(session.session_id)
+            assert record is not None
+            assert record.runtime == runtime
+            assert record.alert == {"alertname": "HighErrorRate"}
+            assert record.checkpoint is None
+            assert record.notes is None
+            record.runtime["metadata"]["tenant"] = "changed-only-in-memory"
+            assert store.get_session(session.session_id).runtime == runtime
+            store.set_runtime(session.session_id, {"selection": {"name": "replacement"}})
+            assert store.get_session(session.session_id).runtime == {
+                "selection": {"name": "replacement"}
+            }
+
     # ApprovalStore --------------------------------------------------------------
 
     def test_an_approval_round_trips(self, store: OperationalStore) -> None:

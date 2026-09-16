@@ -1,0 +1,30 @@
+# Run offline: uv run python examples/customisation.py
+# For a real deployment, register the Python implementations in maver/custom.py.
+agents:
+  database:
+    implementation: database
+    config:
+      schema_names: [orders, customers]
+      # The offline model only submits. A real deployment explicitly lists its tools.
+      tools: [submit_root_cause]
+      limits:
+        max_turns: 3
+      memory:
+        enabled: false
+      middleware:
+        - name: operator_note
+          config:
+            note: Check the database before deciding whether the symptom is secondary.
+
+pipelines:
+  database_review:
+    implementation: database_review
+    agents:
+      investigate: database
+      review: database
+  database_single:
+    implementation: diagnose
+    agents:
+      rca: database
+
+default_pipeline: database_single

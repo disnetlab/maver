@@ -87,6 +87,8 @@ class SessionRecord:
     """
     distilled: bool = False
     notes: str | None = None
+    runtime: dict[str, Any] = field(default_factory=dict)
+    """Private pipeline state, isolated from model-visible artifacts and alert input."""
 
 
 @dataclass
@@ -249,6 +251,15 @@ class SessionStore(Protocol):
 
         Returns:
             The record, or None when it does not exist.
+        """
+        ...
+
+    def set_runtime(self, session_id: str, runtime: dict[str, Any]) -> None:
+        """Replace the private run state without changing alert, artifacts or status.
+
+        Args:
+            session_id: The incident whose state is saved.
+            runtime: JSON-safe selection, metadata and isolated agent state.
         """
         ...
 

@@ -1,8 +1,8 @@
 # MAVER
 
 **M**ulti-**A**gent **V**erification and **E**xperience-informed **R**ecovery: a memory-augmented multi-agent
-pipeline that diagnoses and repairs live microservice incidents using a privately
-served open-weight language model.
+recovery framework whose default pipeline diagnoses and repairs live microservice
+incidents using a privately served open-weight language model.
 
 An alert enters over HTTP. A read-only diagnosing role investigates cluster state,
 metrics, logs and traces and emits a typed `RootCause`. A planning role turns that
@@ -104,6 +104,26 @@ stops the process rather than being ignored. `uv run maver config show` prints t
 resolved configuration with secrets masked; `configs/arms/` holds the experiment
 configurations, each declaring what it holds constant.
 
+## Customising your deployment
+
+Clone and adapt the repository for your environment. Python agent subclasses define
+supported behaviour; YAML configures complete named agents and binds them to
+Python-defined workflows. Set `MAVER_CUSTOMISATION` to your YAML file, and register
+local implementations in `src/maver/custom.py`.
+
+Agents can inherit model, prompt, tool, middleware, memory and execution settings,
+with typed schemas rejecting unsupported options. Each invocation has its own
+conversation and private state inside one shared pipeline-run state. Middleware can
+add explicitly scoped prompt context without exposing run metadata automatically.
+
+A request selects a configured pipeline, optional selector middleware can choose when
+no explicit name is supplied, and the deployment supplies a default. Approval resumes
+retain the selected composition. Customisation requires no separately packaged plugin.
+
+See [the customisation guide](docs/customisation.md), or run the complete offline
+example with `uv run python examples/customisation.py`. It exercises agent inheritance,
+YAML binding, a custom two-stage workflow, middleware and isolated conversations.
+
 ## Layout
 
 ```
@@ -111,7 +131,11 @@ src/maver/
   contracts/     the typed artifacts, incident state and audit events
   settings/      nested settings, model profiles, arm files
   llm/           the provider client, with sampling pinned and asserted
-  roles/         the bounded model/tool loop and the roles that run in it
+  agents/        inheritable Python implementations and validated named definitions
+  pipelines/     Python workflow definitions, YAML bindings and admission selection
+  roles/         the bounded model/tool loop and the existing role implementations
+  custom.py      local registration of agents, middleware, workflows and selectors
+  configuration.py  the optional MAVER_CUSTOMISATION YAML loader
   middleware/    the hook protocol, and the write gate and approval authority
   tools/         the registry, the capability modules, and the transports
   memory/        ports, ranking, lifecycle, projections, backends
@@ -122,7 +146,7 @@ src/maver/
 
 configs/         model profiles, experiment arms, adapter settings
 deploy/          the container image, and Kubernetes manifests with two overlays
-examples/        one alert payload and the shortest script that drives an incident
+examples/        alert payloads, HTTP client, and an offline customisation example
 scripts/         what an evaluation host runs outside this package
 tests/           unit, contract and integration suites
 ```

@@ -104,6 +104,15 @@ class Settings(SettingsGroup):
         description="Where arm files live. Baked into the image alongside the profiles.",
     )
 
+    customisation: Path | None = setting(
+        None,
+        f"{ENV_PREFIX}CUSTOMISATION",
+        description=(
+            "Optional YAML file configuring named agents, pipelines and the default pipeline. "
+            "Python implementations are registered in maver/custom.py."
+        ),
+    )
+
     pipeline: PipelineSettings = Field(default_factory=PipelineSettings)
     model: ModelSettings = Field(default_factory=ModelSettings)
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)

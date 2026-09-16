@@ -19,7 +19,7 @@ from the layers above.
 ```
 api  cli  adapters
         |
-   orchestration
+ orchestration   pipelines   agents
         |
   roles    secondpass
         |
@@ -52,11 +52,11 @@ If you find yourself wanting `if benchmark == ...` anywhere under `src/maver/` o
 
 ## 2. Tools and authority
 
-- **No new tool without a per-role allowlist entry.** A tool that exists but is
-  unreachable from any role is dead code; a tool reachable from every role is a
-  security hole. Adding a tool touches the registry, `descriptions.yaml`, and the
-  allowlist in the same commit. Import-time validation fails the process if the
-  registry and the descriptions disagree.
+- **No new tool without an explicit per-agent tool selection.** Shipped roles retain
+  their ordered default allowlists; configured agents can supply their own ordered
+  lists. Register a new tool and its description together, and name which agents may
+  use it. YAML selection never changes its canonical authority role or deployment
+  write policy. Startup validation rejects unknown tools and incompatible submissions.
 - **Only Execution writes.** This is enforced twice on purpose: by the approval gate,
   which refuses a write from a stage the tool's policy does not name, and again inside
   the tool by a stage check of its own, because a gate that was misconfigured or absent
@@ -74,8 +74,9 @@ If you find yourself wanting `if benchmark == ...` anywhere under `src/maver/` o
 ## 3. Typed artifacts are frozen
 
 Roles exchange structured artifacts, never transcripts. Planning receives a
-`RootCause`, not the diagnostic conversation. Conversation stays in per-role message
-lists and in the audit store.
+`RootCause`, not the diagnostic conversation. Conversation stays in per-invocation agent state and in the audit store. Legacy
+per-role message lists remain a compatibility projection; they are not shared context
+for a different agent instance.
 
 **The artifact schemas are held constant across every experiment configuration.** The
 comparison between configurations is only single-variable if the submission schema
@@ -160,6 +161,29 @@ that catches its own exception and calls `handler(request)` anyway.
   or `maver config show`.
 - Environment variables override YAML, so a Kubernetes ConfigMap remains the
   deployment control surface.
+
+### Agent and workflow customisation
+
+- Python owns agent behaviour and workflow topology. YAML selects registered code and
+  fills typed schemas; it never imports arbitrary modules or evaluates expressions.
+- Extend an agent by subclassing its implementation and configuration schema. Each
+  invocation gets a new implementation and middleware instances. Persist counters and
+  trigger state in `AgentState.middleware` or `RunState.middleware`, not class fields.
+- Canonical authority roles, workflow stage names, configured agent names and running
+  instance IDs are distinct. Reusing a definition in two stages never shares a transcript.
+- `RunState.metadata` and agent metadata are private. Prompt additions declare a
+  recipient and lifetime. Custom shared artifacts live in `RunState.artifacts`.
+- Select a pipeline once at admission and persist its resolved composition. Approval
+  checkpoints restore it; they do not rerun selectors or substitute a new default.
+- Local Python is trusted deployment code, not sandboxed third-party code. Mandatory
+  runtime authority, budget and persistence mechanisms remain outside optional hooks.
+- Keep the measured default behaviour intact. New components require explicit
+  configuration and provenance. Bump implementation versions when Python behaviour
+  changes so a saved approval cannot silently resume under different code.
+
+Workflow definitions may reuse the pure routing and outcome policies in
+`orchestration/`; they do not import the runner or construct deployment resources.
+`configuration.py` and `custom.py` assemble local registrations for the runtime.
 
 ## 7. Sampling is pinned as a set
 

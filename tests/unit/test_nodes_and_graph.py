@@ -39,6 +39,8 @@ def deps(recorder: Recorder, sink: ListSink) -> IncidentDeps:
             run_id=run_id,
             toolset=ResolvedToolset(definitions=(), dispatch={}),
             run_label="",
+            run_state=None,
+            agent_state=None,
         )
 
     return IncidentDeps(

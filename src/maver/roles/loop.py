@@ -18,7 +18,7 @@ import inspect
 import logging
 import textwrap
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from maver.adapters.base import SubmitGuard
@@ -283,6 +283,11 @@ async def run_until_submit(
         transcript=list(messages),
         tool_calls_made=sum(1 for message in messages if message.get("role") == "tool"),
     )
+    if stack.agent_state is not None:
+        stack.agent_state.messages = state.transcript
+        # Pydantic validates by copying: keep the live transcript after validation.
+        state.transcript = stack.agent_state.messages
+    scratch: dict[str, Any] = {}
     opening = list(messages)
     submit_only = [t for t in tools if t.name == submit_tool]
     repeats = RepeatedCallTracker(limits)
@@ -432,7 +437,15 @@ async def run_until_submit(
                 return finish("max_turns_exceeded", reason="max_turns_exceeded")
             state.normal_turns_used += 1
 
-        ctx = TurnContext(role=role, session_id=session_id, turn=turn_index + 1, caller=role)
+        ctx = TurnContext(
+            role=role,
+            session_id=session_id,
+            turn=turn_index + 1,
+            caller=role,
+            run_state=stack.run_state,
+            agent_state=stack.agent_state,
+            scratch=scratch,
+        )
         rescue_ctx = state.rescue
         request = ModelRequest(
             system=system,
@@ -448,11 +461,29 @@ async def run_until_submit(
             lite_reasoning=rescue_turn,
         )
         request = stack.before_model(ctx, request)
+        additions = (
+            stack.run_state.context_for(stack.agent_state)
+            if stack.run_state is not None and stack.agent_state is not None
+            else ()
+        )
+        if additions:
+            context = [{"role": "user", "content": item.text} for item in additions]
+            request = replace(request, messages=(*request.messages, *context))
+            log.record(
+                InterventionEvent(
+                    control="middleware_context",
+                    action="injected",
+                    detail=", ".join(f"{a.source}:{a.id}" for a in additions),
+                    context=context,
+                )
+            )
 
         async def call(req: ModelRequest, _caller: str = role) -> ModelResponse:
             return await model.complete(req, caller=_caller)
 
         response = await stack.run_model(ctx, request, call)
+        if stack.run_state is not None and stack.agent_state is not None:
+            stack.run_state.delivered(stack.agent_state, additions)
 
         correction = stack.after_model(ctx, response)
         if correction is not None:

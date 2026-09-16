@@ -23,6 +23,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, runtime_checkable
 
+from maver.contracts.runtime import AgentState, RunState
 from maver.llm.types import Message, ModelRequest, ModelResponse, ToolResult
 
 __all__ = [
@@ -57,6 +58,8 @@ class TurnContext:
     turn: int
     caller: str
     """What will be recorded as the issuer of any model call in this turn."""
+    run_state: RunState | None = None
+    agent_state: AgentState | None = None
     scratch: dict[str, Any] = field(default_factory=dict)
     """Per-run space a hook may use for its own state. Not persisted."""
 
@@ -236,14 +239,20 @@ class MiddlewareStack:
         hooks: Sequence[AgentHook] = (),
         *,
         on_error: Callable[[str, str, BaseException], None] | None = None,
+        run_state: RunState | None = None,
+        agent_state: AgentState | None = None,
     ) -> None:
         """Build a stack.
 
         Args:
             hooks: The hooks, outermost first.
+            run_state: Durable incident state for hooks; never added to prompts implicitly.
+            agent_state: This invocation's isolated conversation and middleware state.
             on_error: Notified when a hook raises. Receives the hook name, the phase,
                 and the exception. Defaults to logging.
         """
+        self.run_state = run_state
+        self.agent_state = agent_state
         self.hooks = list(hooks)
         self._on_error = on_error or self._log_error
         for hook in self.hooks:
@@ -371,7 +380,12 @@ class MiddlewareStack:
         Returns:
             A new stack. This one is unchanged.
         """
-        return MiddlewareStack([*self.hooks, hook], on_error=self._on_error)
+        return MiddlewareStack(
+            [*self.hooks, hook],
+            on_error=self._on_error,
+            run_state=self.run_state,
+            agent_state=self.agent_state,
+        )
 
 
 def replace_request(request: ModelRequest, **changes: Any) -> ModelRequest:
