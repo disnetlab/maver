@@ -7,8 +7,8 @@ handed the store an empty start time, one backend accepted it and the other refu
 and the refusal released the environment with nothing submitted — which grades as an
 agent that never answered.
 
-    docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=kira postgres:17-alpine
-    POSTGRES_TEST_DSN=postgresql://postgres:kira@127.0.0.1:55432/postgres \\
+    docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=maver postgres:17-alpine
+    POSTGRES_TEST_DSN=postgresql://postgres:maver@127.0.0.1:55432/postgres \\
         uv run pytest -m integration tests/integration/test_incident_on_postgres.py
 """
 
@@ -20,13 +20,13 @@ from typing import Any
 
 import pytest
 
-from kira.audit.journal import ListSink
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.memory.factory import build_storage
-from kira.orchestration.runner import Deployment, run_incident
-from kira.settings.groups import MemorySettings, ServerSettings, VerifySettings
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
+from maver.audit.journal import ListSink
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.memory.factory import build_storage
+from maver.orchestration.runner import Deployment, run_incident
+from maver.settings.groups import MemorySettings, ServerSettings, VerifySettings
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
 
 pytestmark = pytest.mark.integration
 
@@ -104,7 +104,7 @@ class FakeModel:
 
 @pytest.mark.skipif(not DSN, reason="set POSTGRES_TEST_DSN to run this")
 async def test_an_incident_runs_end_to_end_on_postgres(tmp_path: pathlib.Path) -> None:
-    schema = f"kira_e2e_{uuid.uuid4().hex[:8]}"
+    schema = f"maver_e2e_{uuid.uuid4().hex[:8]}"
     settings = Settings(
         server=ServerSettings(workdir=tmp_path),
         memory=MemorySettings(

@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from kira.contracts import ExecutionResult, Plan, RootCause, VerifyResult
+from maver.contracts import ExecutionResult, Plan, RootCause, VerifyResult
 
 
 def _root_cause(**overrides: Any) -> dict[str, Any]:

@@ -1,0 +1,73 @@
+"""Configuration: nested settings groups, model profiles, and arm files.
+
+Environment variables win over file-based sources so that a ConfigMap remains the
+deployment control surface. Secrets are typed so they never reach a log or a config
+dump. Every group's fields also answer to the flat names the research prototype used,
+so existing evaluation run scripts keep working unchanged.
+"""
+
+from maver.settings.arms import Arm, arm_digest, load_arm
+from maver.settings.authority import AuthorityRule, AuthoritySettings
+from maver.settings.base import ENV_PREFIX, SettingsGroup, group_config, setting
+from maver.settings.groups import (
+    IntakeSettings,
+    KafkaSettings,
+    MemorySettings,
+    ModelSettings,
+    ObservabilitySettings,
+    PipelineSettings,
+    RuntimeSettings,
+    SamplingOverrides,
+    SecondPassSettings,
+    ServerSettings,
+    ToolSettings,
+    TransportSettings,
+    VerifySettings,
+)
+from maver.settings.profiles import ModelProfile, SamplingSet, load_profile
+from maver.settings.root import (
+    ArmOverrides,
+    Settings,
+    arm_overrides,
+    get_settings,
+    legacy_names_in_use,
+    load_settings,
+    reset_settings,
+    resolved_arm,
+)
+
+__all__ = [
+    "ENV_PREFIX",
+    "Arm",
+    "ArmOverrides",
+    "AuthorityRule",
+    "AuthoritySettings",
+    "IntakeSettings",
+    "KafkaSettings",
+    "MemorySettings",
+    "ModelProfile",
+    "ModelSettings",
+    "ObservabilitySettings",
+    "PipelineSettings",
+    "RuntimeSettings",
+    "SamplingOverrides",
+    "SamplingSet",
+    "SecondPassSettings",
+    "ServerSettings",
+    "Settings",
+    "SettingsGroup",
+    "ToolSettings",
+    "TransportSettings",
+    "VerifySettings",
+    "arm_digest",
+    "arm_overrides",
+    "get_settings",
+    "group_config",
+    "legacy_names_in_use",
+    "load_arm",
+    "load_profile",
+    "load_settings",
+    "reset_settings",
+    "resolved_arm",
+    "setting",
+]

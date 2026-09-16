@@ -13,15 +13,15 @@ from typing import Any
 
 import pytest
 
-from kira.audit.journal import Journal
-from kira.settings.groups import ToolSettings
-from kira.tools import host
-from kira.tools.context import ToolContext
-from kira.tools.errors import call_timed_out, format_exit_result, timed_out, tool_error
-from kira.tools.host import ssh_exec
-from kira.tools.logs import get_logs
-from kira.tools.metrics import get_metrics
-from kira.tools.workspace import SessionWorkspace
+from maver.audit.journal import Journal
+from maver.settings.groups import ToolSettings
+from maver.tools import host
+from maver.tools.context import ToolContext
+from maver.tools.errors import call_timed_out, format_exit_result, timed_out, tool_error
+from maver.tools.host import ssh_exec
+from maver.tools.logs import get_logs
+from maver.tools.metrics import get_metrics
+from maver.tools.workspace import SessionWorkspace
 
 
 class FakeTransport:

@@ -3,7 +3,7 @@
 `evidence_text` and `lesson_text` are at once what is indexed and what a later incident's
 model reads, so their exact wording is a held-constant input to every published retrieval
 measurement. The expectations are a golden file produced by importing the prototype's own
-`build_memory_projections` and calling it, never by recording Kira's output: a fixture
+`build_memory_projections` and calling it, never by recording MAVER's output: a fixture
 generated from the code under test asserts nothing.
 `test_the_golden_file_came_from_the_prototype` re-derives it by running the prototype's
 renderer, frozen under `tests/fixtures/prototype`, so the file cannot quietly drift into
@@ -21,8 +21,8 @@ from typing import Any
 import pytest
 from prototype_tree import prototype_root
 
-from kira.contracts import LearningResult
-from kira.memory.projections import build_projections
+from maver.contracts import LearningResult
+from maver.memory.projections import build_projections
 
 FIXTURE = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "prototype_projections.json"
 GOLDEN: dict[str, dict[str, Any]] = json.loads(FIXTURE.read_text(encoding="utf-8"))["expected"]
@@ -189,8 +189,8 @@ MARKER = "INCIDENT-BOUND (this incident only — not an answer for yours):"
 def test_projections_are_byte_identical_except_the_marker(name: str) -> None:
     """Every label, separator and template is corpus text and model-facing text at once.
 
-    The one deliberate difference is the INCIDENT-BOUND marker, which Kira emits on
-    every lesson. Removing it from Kira's output must restore the prototype's exactly:
+    The one deliberate difference is the INCIDENT-BOUND marker, which MAVER emits on
+    every lesson. Removing it from MAVER's output must restore the prototype's exactly:
     the change is one added line, not a reworded lesson.
     """
     got = render(BY_NAME[name])

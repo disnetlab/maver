@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from kira.prompts.loader import (
+from maver.prompts.loader import (
     PromptError,
     compose_role_prompt,
     markers,
@@ -15,8 +15,8 @@ from kira.prompts.loader import (
     read_override,
     render,
 )
-from kira.roles.registry import RoleRegistryError, validate_roles
-from kira.settings.root import load_settings, reset_settings
+from maver.roles.registry import RoleRegistryError, validate_roles
+from maver.settings.root import load_settings, reset_settings
 
 SHIPPED_ROLES = ["rca", "planning", "execution"]
 
@@ -92,7 +92,7 @@ class TestAssets:
         """The prototype refused this and the three readers layered above still do; the
         one they funnel through lost it. It is reachable through the roles entry point,
         where a third party's RoleSpec.prompt would be read into a system prompt."""
-        with pytest.raises(PromptError, match=r"escapes kira\.prompts"):
+        with pytest.raises(PromptError, match=r"escapes maver\.prompts"):
             read_asset("../../../pyproject.toml")
 
     def test_an_asset_ships_in_another_package_and_is_read_the_same_way(
@@ -105,21 +105,21 @@ class TestAssets:
         the same two-way strict render — a renamed marker fails loudly instead of
         shipping a literal `{{TASK_TYPE}}` to the model.
         """
-        package = tmp_path / "kira_asset_anchor_probe"
+        package = tmp_path / "maver_asset_anchor_probe"
         package.mkdir()
         (package / "__init__.py").write_text("", encoding="utf-8")
         (package / "contract.txt").write_text("Answer the {{TASK_TYPE}} task.\n", encoding="utf-8")
         monkeypatch.syspath_prepend(str(tmp_path))
         importlib.invalidate_caches()
 
-        anchor = "kira_asset_anchor_probe"
+        anchor = "maver_asset_anchor_probe"
         template = read_asset("contract.txt", package=anchor)
 
         assert template == "Answer the {{TASK_TYPE}} task."
         assert render(template, {"TASK_TYPE": "detection"}) == "Answer the detection task."
         with pytest.raises(PromptError, match="no value supplied"):
             render(template, {})
-        with pytest.raises(PromptError, match="escapes kira_asset_anchor_probe"):
+        with pytest.raises(PromptError, match="escapes maver_asset_anchor_probe"):
             read_asset("../pyproject.toml", package=anchor)
 
     def test_an_override_is_read_from_outside_the_package(self, tmp_path: Path) -> None:
@@ -223,7 +223,7 @@ def test_the_kubectl_block_map_mirrors_the_prototype(role: str, expected: str) -
     mentions the rollback tool and permits one bounded rollout wait, and substituting
     the execution block would move the baseline the pipeline is measured against.
     """
-    from kira.prompts.loader import _KUBECTL_BLOCK  # noqa: PLC0415
+    from maver.prompts.loader import _KUBECTL_BLOCK  # noqa: PLC0415
 
     assert _KUBECTL_BLOCK[role] == expected
 
@@ -263,7 +263,7 @@ def test_a_replaced_prompt_reaches_the_run_that_used_it(
     override = tmp_path / "prompts" / "roles" / "rca.txt"
     override.write_text("## Goal\n\nDo it my way.\n\n{{KUBECTL_GUIDANCE}}\n", encoding="utf-8")
 
-    monkeypatch.setenv("KIRA_PROMPTS__OVERRIDE_DIR", "~/prompts")
+    monkeypatch.setenv("MAVER_PROMPTS__OVERRIDE_DIR", "~/prompts")
     reset_settings()
     settings = load_settings()
 
@@ -316,6 +316,6 @@ def test_the_proxy_route_block_map_mirrors_the_archive(role: str, expected: str)
     Giving it a Planning-specific block here would change a prompt the published
     measurements were taken under.
     """
-    from kira.prompts.loader import _KUBECTL_PROXY_BLOCK  # noqa: PLC0415
+    from maver.prompts.loader import _KUBECTL_PROXY_BLOCK  # noqa: PLC0415
 
     assert _KUBECTL_PROXY_BLOCK[role] == expected

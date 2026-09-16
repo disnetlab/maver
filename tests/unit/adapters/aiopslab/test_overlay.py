@@ -13,13 +13,13 @@ from typing import Any
 
 import pytest
 
-from kira.adapters.aiopslab.config import AiopsLabConfig
-from kira.adapters.aiopslab.overlay import role_overlay
-from kira.audit.journal import Journal, ListSink
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.roles.loop import run_until_submit
-from kira.roles.policy import LoopLimits
-from kira.settings.groups import RuntimeSettings
+from maver.adapters.aiopslab.config import AiopsLabConfig
+from maver.adapters.aiopslab.overlay import role_overlay
+from maver.audit.journal import Journal, ListSink
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.roles.loop import run_until_submit
+from maver.roles.policy import LoopLimits
+from maver.settings.groups import RuntimeSettings
 
 NAMESPACE = "test-hotel-reservation"
 BOUNDARY = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)

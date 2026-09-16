@@ -11,17 +11,17 @@ import json
 import pathlib
 from typing import Any
 
-from kira.audit.journal import Journal, ListSink
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.middleware.base import MiddlewareStack
-from kira.roles import single
-from kira.roles.base import RoleContext
-from kira.settings.groups import MemorySettings, PipelineSettings, ToolSettings
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
-from kira.tools.context import ToolContext
-from kira.tools.toolsets import build_toolset
-from kira.tools.workspace import SessionWorkspace
+from maver.audit.journal import Journal, ListSink
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.middleware.base import MiddlewareStack
+from maver.roles import single
+from maver.roles.base import RoleContext
+from maver.settings.groups import MemorySettings, PipelineSettings, ToolSettings
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
+from maver.tools.context import ToolContext
+from maver.tools.toolsets import build_toolset
+from maver.tools.workspace import SessionWorkspace
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 

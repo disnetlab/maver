@@ -8,11 +8,11 @@ from collections.abc import Iterator
 
 import pytest
 
-from kira.contracts.artifacts import ExecutionResult, RootCause, VerifyResult
-from kira.contracts.lifecycle import LifecycleState, RunStatus
-from kira.contracts.state import IncidentState
-from kira.memory.backends.sqlite import SqliteStore
-from kira.orchestration.outcomes import Outcome, persist_outcome, resolve_outcome
+from maver.contracts.artifacts import ExecutionResult, RootCause, VerifyResult
+from maver.contracts.lifecycle import LifecycleState, RunStatus
+from maver.contracts.state import IncidentState
+from maver.memory.backends.sqlite import SqliteStore
+from maver.orchestration.outcomes import Outcome, persist_outcome, resolve_outcome
 
 
 def root_cause(**kw) -> RootCause:

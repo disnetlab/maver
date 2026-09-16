@@ -16,9 +16,9 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: kira-namespace-read
+  name: maver-namespace-read
   labels:
-    app.kubernetes.io/name: kira
+    app.kubernetes.io/name: maver
 rules:
   - apiGroups: [""]
     resources:

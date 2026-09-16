@@ -60,15 +60,15 @@ jobs:
       postgres:
         image: postgres:17-alpine
         env:
-          POSTGRES_USER: kira
-          POSTGRES_PASSWORD: kira
-          POSTGRES_DB: kira
+          POSTGRES_USER: maver
+          POSTGRES_PASSWORD: maver
+          POSTGRES_DB: maver
         ports:
           - 5432:5432
         # The job starts as soon as the container does, which is before the server
         # accepts connections. Without this the first test races the database.
         options: >-
-          --health-cmd "pg_isready -U kira -d kira"
+          --health-cmd "pg_isready -U maver -d maver"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -83,4 +83,4 @@ jobs:
       - run: uv sync --all-extras --locked
       - run: make test-postgres
         env:
-          POSTGRES_TEST_DSN: postgresql://kira:kira@localhost:5432/kira
+          POSTGRES_TEST_DSN: postgresql://maver:maver@localhost:5432/maver

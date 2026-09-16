@@ -6,11 +6,11 @@ import sys
 
 import pytest
 
-from kira.memory.factory import build_storage
-from kira.memory.ports import SessionMemory
-from kira.memory.ranking import Bm25Ranker
-from kira.settings.groups import MemorySettings, ServerSettings
-from kira.settings.root import Settings
+from maver.memory.factory import build_storage
+from maver.memory.ports import SessionMemory
+from maver.memory.ranking import Bm25Ranker
+from maver.settings.groups import MemorySettings, ServerSettings
+from maver.settings.root import Settings
 
 
 def a_record(session_id: str, evidence: str) -> SessionMemory:
@@ -80,12 +80,12 @@ def test_the_candidate_pool_reaches_the_backend_and_an_outgrown_one_says_so(
         finally:
             stack.close()
 
-    with caplog.at_level(logging.WARNING, logger="kira.memory.retrieval"):
+    with caplog.at_level(logging.WARNING, logger="maver.memory.retrieval"):
         assert "newest" not in search_with(3)
     assert "raise memory.candidate_pool" in caplog.text
 
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="kira.memory.retrieval"):
+    with caplog.at_level(logging.WARNING, logger="maver.memory.retrieval"):
         assert search_with(10)[0] == "newest"
     assert "raise memory.candidate_pool" not in caplog.text
 
@@ -100,7 +100,7 @@ def test_an_unavailable_backend_fails_at_startup_and_says_what_to_install(
     installed, and the failure being pinned is the one an install without it gets.
     """
     monkeypatch.setitem(sys.modules, "psycopg", None)
-    monkeypatch.delitem(sys.modules, "kira.memory.backends.postgres", raising=False)
+    monkeypatch.delitem(sys.modules, "maver.memory.backends.postgres", raising=False)
 
-    with pytest.raises(ValueError, match=r"kira\[postgres\]"):
+    with pytest.raises(ValueError, match=r"maver\[postgres\]"):
         build_storage(settings_for(tmp_path, backend="postgres", postgres_dsn="postgresql://x/y"))

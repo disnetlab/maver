@@ -13,11 +13,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from kira.audit.journal import Journal
-from kira.tools.context import ToolContext
-from kira.tools.scope import IncidentScope
-from kira.tools.traces import get_operations, get_services, get_traces
-from kira.tools.workspace import SessionWorkspace
+from maver.audit.journal import Journal
+from maver.tools.context import ToolContext
+from maver.tools.scope import IncidentScope
+from maver.tools.traces import get_operations, get_services, get_traces
+from maver.tools.workspace import SessionWorkspace
 
 _GLOBAL_CATALOGUE = json.dumps(["frontend", "other-app-checkout"])
 """What the shared backend answers with: one of this namespace's services, and one that

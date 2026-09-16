@@ -17,11 +17,11 @@ distilled by an earlier system.
 ## Loading an archived corpus
 
 A memory arm can only be re-run against the corpus it was measured on, and that corpus
-lives in the prototype's PostgreSQL table rather than in a Kira store. `kira memory import`
+lives in the prototype's PostgreSQL table rather than in a MAVER store. `maver memory import`
 reads it from a file:
 
 ```bash
-kira memory import corpus.jsonl --corpus so_gate_corpus_35b
+maver memory import corpus.jsonl --corpus so_gate_corpus_35b
 ```
 
 The records go in through the same port the distilling pass writes through, so both
@@ -37,7 +37,7 @@ under `<workdir>/memory/`, and a scoped set of rows on PostgreSQL — so the run
 these records has to be configured for the same name:
 
 ```bash
-KIRA_MEMORY__CORPUS_ID=so_gate_corpus_35b   # legacy: MEMORY_EXPERIMENT_ID
+MAVER_MEMORY__CORPUS_ID=so_gate_corpus_35b   # legacy: MEMORY_EXPERIMENT_ID
 ```
 
 ### The file
@@ -145,7 +145,7 @@ out, and they compose:
 - Name the records per problem in a file, which is what the archive did.
 
 ```bash
-KIRA_ADAPTERS__SREGYM__EXCLUSION_MAP=/etc/kira/exclusions.tsv
+MAVER_ADAPTERS__SREGYM__EXCLUSION_MAP=/etc/maver/exclusions.tsv
 ```
 
 One row per problem: the problem id, a tab, and a comma-separated list of the session ids

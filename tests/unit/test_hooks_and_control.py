@@ -7,17 +7,17 @@ from typing import Any
 
 import pytest
 
-from kira.contracts.lifecycle import RunStatus
-from kira.memory.factory import build_storage
-from kira.memory.ports import ApprovalRecord
-from kira.orchestration import hooks, jobs
-from kira.orchestration.control import RunRegistry
-from kira.orchestration.hooks import PostIncidentHook, fire_hooks, register_hook
-from kira.orchestration.outcomes import Outcome
-from kira.orchestration.runner import Deployment
-from kira.settings.groups import MemorySettings, ServerSettings
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
+from maver.contracts.lifecycle import RunStatus
+from maver.memory.factory import build_storage
+from maver.memory.ports import ApprovalRecord
+from maver.orchestration import hooks, jobs
+from maver.orchestration.control import RunRegistry
+from maver.orchestration.hooks import PostIncidentHook, fire_hooks, register_hook
+from maver.orchestration.outcomes import Outcome
+from maver.orchestration.runner import Deployment
+from maver.settings.groups import MemorySettings, ServerSettings
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 

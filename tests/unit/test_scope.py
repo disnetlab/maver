@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from kira.tools.scope import IncidentScope
+from maver.tools.scope import IncidentScope
 
 
 @pytest.mark.parametrize(

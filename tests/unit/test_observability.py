@@ -6,14 +6,14 @@ from typing import Any
 
 import pytest
 
-from kira.audit.journal import AuditEvent, Journal, ListSink
-from kira.llm.client import LLMClient, prompt_digest
-from kira.llm.sampling import resolve_sampling
-from kira.llm.types import ModelRequest, ModelResponse, Usage
-from kira.observability.tracing import span
-from kira.observability.usage import RecordingCompletion
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
+from maver.audit.journal import AuditEvent, Journal, ListSink
+from maver.llm.client import LLMClient, prompt_digest
+from maver.llm.sampling import resolve_sampling
+from maver.llm.types import ModelRequest, ModelResponse, Usage
+from maver.observability.tracing import span
+from maver.observability.usage import RecordingCompletion
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 RESOLVED = resolve_sampling(PROFILE, Settings())
@@ -143,7 +143,7 @@ async def test_one_event_per_completed_call_not_per_attempt() -> None:
 def test_a_span_survives_an_unconfigured_deployment() -> None:
     """Instrumentation is unconditional and only export is configured, so a deployment
     with no collector runs the same code path rather than a quieter one."""
-    with span("kira.test", {"a": 1, "dropped": None}) as current:
+    with span("maver.test", {"a": 1, "dropped": None}) as current:
         assert current is not None
 
 
@@ -278,7 +278,7 @@ async def test_a_retried_call_records_what_the_caller_waited(
     the last attempt's duration while the failure path took the whole call. Anyone
     summing the column over an incident lost every retried attempt, and lost most of it
     exactly where the endpoint was worst."""
-    monkeypatch.setattr("kira.llm.client._backoff", lambda *_: 0.0)
+    monkeypatch.setattr("maver.llm.client._backoff", lambda *_: 0.0)
     attempts = 0
 
     async def provider(**kwargs: Any) -> Any:

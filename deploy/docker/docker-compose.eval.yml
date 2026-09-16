@@ -13,13 +13,13 @@
 # of the harness's contract and none of them may drift — `k8s-agent:local` is what the
 # harness's own rebuild step tags, `k8s-agent-sregym` is the container it POSTs to, and
 # 127.0.0.1:8080 is where it looks for it. The tag says `k8s-agent` in a repository
-# called kira for that reason alone.
+# called maver for that reason alone.
 #
 # A deploy that only restarts the service grades stale code, because compose never
 # recreates a container it did not just build: --force-recreate above is the rule, and
 # `curl -fsS 127.0.0.1:8080/healthz | jq -r .revision` is how it is checked.
 services:
-  kira-eval:
+  maver-eval:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
@@ -39,7 +39,7 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     env_file:
-      - kira.env
+      - maver.env
     read_only: true
     tmpfs:
       - /tmp
@@ -52,15 +52,15 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      KIRA_INTAKE__ADAPTERS: sregym
-      KIRA_ADAPTERS__SREGYM__CONDUCTOR_BASE_URL: http://host.docker.internal:8000
-      KIRA_ADAPTERS__SREGYM__MCP_BASE_URL: http://host.docker.internal:9954
+      MAVER_INTAKE__ADAPTERS: sregym
+      MAVER_ADAPTERS__SREGYM__CONDUCTOR_BASE_URL: http://host.docker.internal:8000
+      MAVER_ADAPTERS__SREGYM__MCP_BASE_URL: http://host.docker.internal:9954
       # kubectl runs locally against the harness's filtering proxy rather than through
       # the MCP server, and `scripts/sregym-mcp-port-forward.sh` binds that forward on
       # the docker bridge as well as on loopback for exactly this container.
-      KIRA_ADAPTERS__SREGYM__KUBECTL_PROXY_URL: http://host.docker.internal:16444
+      MAVER_ADAPTERS__SREGYM__KUBECTL_PROXY_URL: http://host.docker.internal:16444
       # Unattended: nobody is waiting to approve a write during a sweep.
-      KIRA_AUTHORITY__MODE: auto
+      MAVER_AUTHORITY__MODE: auto
       # And therefore not a production deployment. The settings layer refuses
       # environment=production with authority=auto, and the image bakes `production` in,
       # so without this line the container exits at startup on that invariant and the
@@ -68,9 +68,9 @@ services:
       # dropped from the image, because the refusal is the safety property doing its job:
       # a benchmark host declares that it is not production, and that declaration lands
       # in every run's configuration snapshot beside the authority it ran under.
-      KIRA_SERVER__ENVIRONMENT: local
+      MAVER_SERVER__ENVIRONMENT: local
     volumes:
-      - kira-eval-workspace:/workspace
+      - maver-eval-workspace:/workspace
     healthcheck:
       test: ["CMD", "python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=4).status == 200 else 1)"]
       interval: 30s
@@ -79,4 +79,5 @@ services:
       retries: 3
 
 volumes:
-  kira-eval-workspace:
+  maver-eval-workspace:
+    name: "${MAVER_EVAL_WORKSPACE_VOLUME:-docker_kira-eval-workspace}"

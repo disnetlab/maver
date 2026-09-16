@@ -5,17 +5,17 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: kira-config
-  namespace: kira
+  name: maver-config
+  namespace: maver
 data:
-  KIRA_TRANSPORT__PROMETHEUS_URL: null
-  KIRA_TRANSPORT__LOKI_URL: null
-  KIRA_TRANSPORT__JAEGER_URL: null
-  KIRA_OBSERVABILITY__OTLP_ENDPOINT: null
-  KIRA_OBSERVABILITY__LOG_LEVEL: "DEBUG"
+  MAVER_TRANSPORT__PROMETHEUS_URL: null
+  MAVER_TRANSPORT__LOKI_URL: null
+  MAVER_TRANSPORT__JAEGER_URL: null
+  MAVER_OBSERVABILITY__OTLP_ENDPOINT: null
+  MAVER_OBSERVABILITY__LOG_LEVEL: "DEBUG"
   # The image sets production, which hides the OpenAPI docs. Locally they are the
   # cheapest way to see what the API actually accepts.
-  KIRA_SERVER__ENVIRONMENT: "local"
+  MAVER_SERVER__ENVIRONMENT: "local"
   # Memory stays on, so the local path exercises the same retrieval the measurements
   # ran on, but nothing distils in the background of a five-minute demonstration.
-  KIRA_MEMORY__LEARNING_ENABLED: "false"
+  MAVER_MEMORY__LEARNING_ENABLED: "false"

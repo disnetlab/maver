@@ -3,15 +3,15 @@ import pathlib
 
 import pytest
 
-import kira.contracts.artifacts as artifacts
-from kira.tools.registry import (
+import maver.contracts.artifacts as artifacts
+from maver.tools.registry import (
     ToolRegistryError,
     ToolSpec,
     definition_for,
     description_for,
     validate_registry,
 )
-from kira.tools.schema import RATIONALE_ARG, normalise_schema, with_rationale
+from maver.tools.schema import RATIONALE_ARG, normalise_schema, with_rationale
 
 SCHEMAS = json.loads(
     (

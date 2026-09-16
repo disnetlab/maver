@@ -5,8 +5,8 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: kira
-  namespace: kira
+  name: maver
+  namespace: maver
 spec:
   template:
     spec:

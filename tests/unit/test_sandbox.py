@@ -8,7 +8,7 @@ install, not on the environment Python has to read its own configuration from.
 import sys
 from pathlib import Path
 
-from kira.tools import sandbox
+from maver.tools import sandbox
 
 
 def test_the_sandbox_grants_the_environment_python_starts_in(tmp_path: Path) -> None:

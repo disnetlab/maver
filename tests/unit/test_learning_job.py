@@ -4,18 +4,18 @@ import json
 import pathlib
 from typing import Any
 
-from kira.audit.journal import ListSink
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.memory.factory import build_storage
-from kira.memory.ports import AgentRunRecord
-from kira.orchestration.bootstrap import register_post_incident_hooks
-from kira.orchestration.hooks import clear_hooks, registered_hooks
-from kira.orchestration.learning import build_packet, run_learning
-from kira.orchestration.outcomes import Outcome
-from kira.orchestration.runner import Deployment
-from kira.settings.groups import MemorySettings, ServerSettings
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
+from maver.audit.journal import ListSink
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.memory.factory import build_storage
+from maver.memory.ports import AgentRunRecord
+from maver.orchestration.bootstrap import register_post_incident_hooks
+from maver.orchestration.hooks import clear_hooks, registered_hooks
+from maver.orchestration.learning import build_packet, run_learning
+from maver.orchestration.outcomes import Outcome
+from maver.orchestration.runner import Deployment
+from maver.settings.groups import MemorySettings, ServerSettings
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 ALERT = {"alertname": "HighErrorRate", "namespace": "shop"}

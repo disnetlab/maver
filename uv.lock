@@ -1468,7 +1468,7 @@ wheels = [
 ]
 
 [[package]]
-name = "kira"
+name = "maver"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -1543,7 +1543,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "httpx-sse", marker = "extra == 'sregym'", specifier = ">=0.4" },
-    { name = "kira", extras = ["postgres", "vector", "kafka", "sregym"], marker = "extra == 'all'" },
+    { name = "maver", extras = ["postgres", "vector", "kafka", "sregym"], marker = "extra == 'all'" },
     { name = "kubernetes", specifier = ">=31.0" },
     { name = "langgraph", specifier = ">=1.0" },
     { name = "litellm", specifier = ">=1.70" },

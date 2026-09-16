@@ -12,21 +12,21 @@ from typing import Any
 
 import pytest
 
-from kira.audit.journal import Journal, ListSink
-from kira.contracts.artifacts import ExecutionResult, Plan, RootCause
-from kira.contracts.events import InterventionEvent
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.middleware.base import MiddlewareStack
-from kira.prompts.loader import markers, read_runtime, render
-from kira.roles import verify
-from kira.roles.base import RoleContext
-from kira.roles.health_gate import HealthGate
-from kira.settings.groups import MemorySettings, PipelineSettings, VerifySettings
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
-from kira.tools.context import ToolContext
-from kira.tools.toolsets import build_toolset
-from kira.tools.workspace import SessionWorkspace
+from maver.audit.journal import Journal, ListSink
+from maver.contracts.artifacts import ExecutionResult, Plan, RootCause
+from maver.contracts.events import InterventionEvent
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.middleware.base import MiddlewareStack
+from maver.prompts.loader import markers, read_runtime, render
+from maver.roles import verify
+from maver.roles.base import RoleContext
+from maver.roles.health_gate import HealthGate
+from maver.settings.groups import MemorySettings, PipelineSettings, VerifySettings
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
+from maver.tools.context import ToolContext
+from maver.tools.toolsets import build_toolset
+from maver.tools.workspace import SessionWorkspace
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 

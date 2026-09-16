@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from kira.contracts import AuditEvent, ModelCallEvent, PolicyDecisionEvent
+from maver.contracts import AuditEvent, ModelCallEvent, PolicyDecisionEvent
 
 WHEN = datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
 

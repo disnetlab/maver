@@ -12,7 +12,7 @@ and a test is the only thing that keeps a simplification from drifting into a bu
 
 import pytest
 
-from kira.memory.lexemes import STOPWORDS, lexemes
+from maver.memory.lexemes import STOPWORDS, lexemes
 
 
 @pytest.mark.parametrize(

@@ -15,7 +15,7 @@ import sys
 _DRIVER = (
     pathlib.Path(__file__).resolve().parents[1]
     / "src"
-    / "kira"
+    / "maver"
     / "adapters"
     / "sregym"
     / "driver.py"
@@ -24,7 +24,7 @@ _DRIVER = (
 
 def _load() -> object:
     """Load the driver module from its file."""
-    spec = importlib.util.spec_from_file_location("kira_sregym_driver", _DRIVER)
+    spec = importlib.util.spec_from_file_location("maver_sregym_driver", _DRIVER)
     if spec is None or spec.loader is None:
         raise SystemExit(f"cannot load the episode driver from {_DRIVER}")
     module = importlib.util.module_from_spec(spec)

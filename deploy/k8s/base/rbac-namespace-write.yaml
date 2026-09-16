@@ -27,9 +27,9 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: kira-namespace-write
+  name: maver-namespace-write
   labels:
-    app.kubernetes.io/name: kira
+    app.kubernetes.io/name: maver
 rules:
   # Workloads: patch a template, roll it out, scale it, replace it.
   - apiGroups: ["apps"]

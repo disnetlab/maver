@@ -20,23 +20,23 @@ from typing import Any
 import pytest
 from fastapi import APIRouter
 
-from kira.adapters.base import AdapterTool, EpisodeContext, ExternalFeedback, SubmissionRecord
-from kira.adapters.registry import adapter, clear_adapters
-from kira.audit.journal import ListSink
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.memory.factory import build_storage
-from kira.middleware.human_approval import authorities
-from kira.orchestration.episode import EpisodeStart, open_episode, run_episode
-from kira.orchestration.inflight import drop_episode
-from kira.orchestration.jobs import bind_deployment, resume_approval, unbind_deployment
-from kira.orchestration.runner import Deployment
-from kira.settings.authority import AuthoritySettings
-from kira.settings.groups import MemorySettings, PipelineSettings, ServerSettings, VerifySettings
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
-from kira.tools.context import ToolContext
-from kira.tools.policy import always_writes
-from kira.tools.registry import ToolSpec
+from maver.adapters.base import AdapterTool, EpisodeContext, ExternalFeedback, SubmissionRecord
+from maver.adapters.registry import adapter, clear_adapters
+from maver.audit.journal import ListSink
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.memory.factory import build_storage
+from maver.middleware.human_approval import authorities
+from maver.orchestration.episode import EpisodeStart, open_episode, run_episode
+from maver.orchestration.inflight import drop_episode
+from maver.orchestration.jobs import bind_deployment, resume_approval, unbind_deployment
+from maver.orchestration.runner import Deployment
+from maver.settings.authority import AuthoritySettings
+from maver.settings.groups import MemorySettings, PipelineSettings, ServerSettings, VerifySettings
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
+from maver.tools.context import ToolContext
+from maver.tools.policy import always_writes
+from maver.tools.registry import ToolSpec
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 

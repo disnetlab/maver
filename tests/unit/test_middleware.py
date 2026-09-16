@@ -2,8 +2,8 @@
 
 import pytest
 
-from kira.llm.types import ModelRequest, ModelResponse, ToolResult, Usage
-from kira.middleware import (
+from maver.llm.types import ModelRequest, ModelResponse, ToolResult, Usage
+from maver.middleware import (
     Correction,
     MiddlewareStack,
     ModelHandler,

@@ -17,27 +17,27 @@ import httpx
 import pytest
 import yaml
 
-from kira.api.app import _drain, create_app, validate_deployment
-from kira.api.deps import Service
-from kira.api.incidents import fingerprint, run_incident_task
-from kira.audit.journal import ListSink
-from kira.contracts.lifecycle import RunStatus
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.memory.factory import build_storage
-from kira.middleware.human_approval import authorities
-from kira.orchestration import scheduler
-from kira.orchestration.jobs import resume_approval
-from kira.orchestration.runner import Deployment, resume_after_decision
-from kira.roles import registry as role_registry
-from kira.roles.registry import registered_roles
-from kira.settings.authority import AuthoritySettings
-from kira.settings.groups import MemorySettings, PipelineSettings, ServerSettings, VerifySettings
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
-from kira.tools import allowlists
-from kira.tools import policy as tool_policy
-from kira.tools import registry as tool_registry
-from kira.tools.registry import registered
+from maver.api.app import _drain, create_app, validate_deployment
+from maver.api.deps import Service
+from maver.api.incidents import fingerprint, run_incident_task
+from maver.audit.journal import ListSink
+from maver.contracts.lifecycle import RunStatus
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.memory.factory import build_storage
+from maver.middleware.human_approval import authorities
+from maver.orchestration import scheduler
+from maver.orchestration.jobs import resume_approval
+from maver.orchestration.runner import Deployment, resume_after_decision
+from maver.roles import registry as role_registry
+from maver.roles.registry import registered_roles
+from maver.settings.authority import AuthoritySettings
+from maver.settings.groups import MemorySettings, PipelineSettings, ServerSettings, VerifySettings
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
+from maver.tools import allowlists
+from maver.tools import policy as tool_policy
+from maver.tools import registry as tool_registry
+from maver.tools.registry import registered
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 
@@ -147,7 +147,7 @@ def deployment(tmp_path: pathlib.Path, *, mode: str = "prompt") -> Deployment:
 
 def client(app: Any) -> httpx.AsyncClient:
     """Speak to the application in this event loop, so its tasks are ours to await."""
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://kira")
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://maver")
 
 
 async def settle(service: Service) -> None:
@@ -189,7 +189,7 @@ async def test_the_rca_wire_value_still_means_the_diagnosis_only_run(
     async def record(alert: dict[str, Any], session_id: str, deploy: Deployment, **kw: Any) -> Any:
         stages.append(kw["target_stage"])
 
-    monkeypatch.setattr("kira.api.incidents.run_incident", record)
+    monkeypatch.setattr("maver.api.incidents.run_incident", record)
     deploy = deployment(tmp_path)
     app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
 
@@ -213,7 +213,7 @@ async def test_a_crashed_incident_is_left_terminal(
     async def crash(*args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("the transport is gone")
 
-    monkeypatch.setattr("kira.api.incidents.run_incident", crash)
+    monkeypatch.setattr("maver.api.incidents.run_incident", crash)
     deploy = deployment(tmp_path)
     app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
 
@@ -240,7 +240,7 @@ async def test_a_cancelled_incident_re_raises_and_still_unregisters(
     async def cancelled(*args: Any, **kwargs: Any) -> Any:
         raise asyncio.CancelledError
 
-    monkeypatch.setattr("kira.api.incidents.run_incident", cancelled)
+    monkeypatch.setattr("maver.api.incidents.run_incident", cancelled)
     deploy = deployment(tmp_path)
     app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
     service: Service = app.state.service
@@ -659,10 +659,10 @@ async def test_polling_an_incident_does_not_stall_the_incident(tmp_path: pathlib
 # --- the extension seams pyproject advertises ---------------------------------------
 
 _PLUGIN_ROLE = """
-from kira.contracts.artifacts import RootCause
-from kira.roles.base import RoleSpec
-from kira.roles.registry import role
-from kira.tools.allowlists import ROLE_TOOLSETS
+from maver.contracts.artifacts import RootCause
+from maver.roles.base import RoleSpec
+from maver.roles.registry import role
+from maver.tools.allowlists import ROLE_TOOLSETS
 
 
 async def _run(ctx):
@@ -683,9 +683,9 @@ role(
 """
 
 _PLUGIN_TOOL = """
-from kira.tools.allowlists import ROLE_TOOLSETS
-from kira.tools.policy import read_only
-from kira.tools.registry import tool
+from maver.tools.allowlists import ROLE_TOOLSETS
+from maver.tools.policy import read_only
+from maver.tools.registry import tool
 
 
 @tool(
@@ -726,9 +726,9 @@ def _install_plugin(
     site = tmp_path / "site"
     site.mkdir()
     (site / f"{module}.py").write_text(source, encoding="utf-8")
-    dist = site / "kira_demo-0.1.dist-info"
+    dist = site / "maver_demo-0.1.dist-info"
     dist.mkdir()
-    (dist / "METADATA").write_text("Metadata-Version: 2.1\nName: kira-demo\nVersion: 0.1\n")
+    (dist / "METADATA").write_text("Metadata-Version: 2.1\nName: maver-demo\nVersion: 0.1\n")
     (dist / "entry_points.txt").write_text(f"[{group}]\ndemo = {module}\n", encoding="utf-8")
     monkeypatch.syspath_prepend(str(site))
     importlib.invalidate_caches()
@@ -737,8 +737,8 @@ def _install_plugin(
 @pytest.mark.parametrize(
     ("group", "module", "source", "registered_as"),
     [
-        ("kira.roles", "kira_demo_role", _PLUGIN_ROLE, "demo_plugin_role"),
-        ("kira.tools", "kira_demo_tool", _PLUGIN_TOOL, "third_party_probe"),
+        ("maver.roles", "maver_demo_role", _PLUGIN_ROLE, "demo_plugin_role"),
+        ("maver.tools", "maver_demo_tool", _PLUGIN_TOOL, "third_party_probe"),
     ],
     ids=["roles", "tools"],
 )
@@ -758,8 +758,8 @@ def test_a_plugin_distribution_is_loaded_at_the_composition_root(
     the entry point the adopter had declared.
     """
     _install_plugin(tmp_path, monkeypatch, module, source, group)
-    monkeypatch.setenv("KIRA_SERVER__WORKDIR", str(tmp_path / "workspace"))
+    monkeypatch.setenv("MAVER_SERVER__WORKDIR", str(tmp_path / "workspace"))
 
     validate_deployment(Settings())
 
-    assert registered_as in (registered_roles() if group == "kira.roles" else registered())
+    assert registered_as in (registered_roles() if group == "maver.roles" else registered())

@@ -17,9 +17,9 @@ import pathlib
 import re
 from typing import get_args
 
-from kira.settings.root import Settings
+from maver.settings.root import Settings
 
-SRC = pathlib.Path(__file__).resolve().parents[2] / "src" / "kira"
+SRC = pathlib.Path(__file__).resolve().parents[2] / "src" / "maver"
 
 READ_GENERICALLY = {
     # Dumped whole by SamplingOverrides.active(), which is the point: an override is

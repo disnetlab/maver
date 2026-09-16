@@ -8,16 +8,16 @@ The reason this file exists is that a manifest is only checked when someone appl
 and by then the failure is a crash loop on somebody else's cluster. Three shapes of that
 are pinned here, each of which had happened:
 
-* A ``KIRA_``-prefixed key the settings model does not recognise is a startup failure by
+* A ``MAVER_``-prefixed key the settings model does not recognise is a startup failure by
   design, so a stale ConfigMap key does not run with a silent default, it refuses to
   start. The overlay is therefore validated by *building the settings*, not by matching
   names: a value the validators refuse — a production overlay that also approves its own
   cluster writes — fails here rather than at the first pod.
 * A probe on a path the API does not serve restarts a healthy pod forever. The paths are
-  compared with the routes ``kira.api.health`` actually declares.
+  compared with the routes ``maver.api.health`` actually declares.
 * RBAC that forbids a verb the kubectl tool can issue surfaces mid-incident as a
   Forbidden the model reads as a fault to work around. Both sides of that comparison are
-  derived — the verbs and resource kinds from ``kira.tools.kubernetes``, the grants from
+  derived — the verbs and resource kinds from ``maver.tools.kubernetes``, the grants from
   the YAML — so a verb or kind added to the tool fails this file until somebody decides
   what it costs in RBAC.
 """
@@ -35,10 +35,10 @@ from urllib.parse import urlparse
 import pytest
 import yaml
 
-from kira.api.health import router as health_router
-from kira.settings import Settings
-from kira.settings.root import unknown_prefixed_names
-from kira.tools.kubernetes import (
+from maver.api.health import router as health_router
+from maver.settings import Settings
+from maver.settings.root import unknown_prefixed_names
+from maver.tools.kubernetes import (
     _KINDS,
     _READ_VERBS,
     _RESOURCE_ALIASES,
@@ -111,7 +111,7 @@ def _dockerfile_env() -> dict[str, str]:
     """Read the prefixed settings the runtime image bakes in.
 
     Derived from the Dockerfile rather than restated, because these are half of what the
-    pod actually resolves: ``KIRA_SERVER__ENVIRONMENT=production`` lives here, and it is
+    pod actually resolves: ``MAVER_SERVER__ENVIRONMENT=production`` lives here, and it is
     what makes an overlay that also sets ``authority.mode=auto`` refuse to start.
     """
     lines = (DOCKER / "Dockerfile").read_text().splitlines()
@@ -134,7 +134,7 @@ def _dockerfile_env() -> dict[str, str]:
             if "=" not in token:
                 continue
             name, _, value = token.partition("=")
-            if name.startswith("KIRA_"):
+            if name.startswith("MAVER_"):
                 found[name] = value.strip('"').replace("${REVISION}", "0000000")
     return found
 
@@ -172,7 +172,7 @@ def _compose_env(filename: str) -> dict[str, str]:
     service = next(iter(yaml.safe_load((DOCKER / filename).read_text())["services"].values()))
     env = dict(_dockerfile_env())
     for name in service.get("env_file", []) or []:
-        # kira.env is the operator's own copy and is gitignored; the example beside it is
+        # maver.env is the operator's own copy and is gitignored; the example beside it is
         # what this repository ships and therefore what can be checked.
         example = DOCKER / f"{name}.example"
         for line in example.read_text().splitlines():
@@ -198,9 +198,9 @@ def build_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         monkeypatch.chdir(tmp_path)  # no developer's .env underneath the assertion
         for name, value in env.items():
             monkeypatch.setenv(name, value)
-        monkeypatch.setenv("KIRA_SERVER__WORKDIR", str(tmp_path / "workspace"))
-        monkeypatch.setenv("KIRA_MODEL__PROFILE_DIR", str(REPO / "configs" / "models"))
-        monkeypatch.setenv("KIRA_ARM_DIR", str(REPO / "configs" / "arms"))
+        monkeypatch.setenv("MAVER_SERVER__WORKDIR", str(tmp_path / "workspace"))
+        monkeypatch.setenv("MAVER_MODEL__PROFILE_DIR", str(REPO / "configs" / "models"))
+        monkeypatch.setenv("MAVER_ARM_DIR", str(REPO / "configs" / "arms"))
         return Settings()
 
     return build
@@ -218,7 +218,7 @@ def test_every_rendered_key_is_a_setting(overlay: str) -> None:
     below is the one ``load_settings`` runs, against the rendered environment.
     """
     env = _pod_env(overlay)
-    assert [name for name in env if name.startswith("KIRA_")], "no prefixed keys rendered"
+    assert [name for name in env if name.startswith("MAVER_")], "no prefixed keys rendered"
     assert unknown_prefixed_names(env) == []
 
 
@@ -243,8 +243,8 @@ def test_production_overlay_does_not_approve_its_own_writes() -> None:
     the base happens to set.
     """
     env = _pod_env("production")
-    assert env["KIRA_SERVER__ENVIRONMENT"] == "production"
-    assert env["KIRA_AUTHORITY__MODE"] != "auto"
+    assert env["MAVER_SERVER__ENVIRONMENT"] == "production"
+    assert env["MAVER_AUTHORITY__MODE"] != "auto"
 
 
 def test_production_keeps_every_base_configmap_key() -> None:
@@ -262,10 +262,10 @@ def test_local_overlay_unsets_the_telemetry_it_has_none_of() -> None:
     """A removed endpoint withdraws its tools; a wrong one fails at the first call."""
     rendered = _one(_render("local"), "ConfigMap")["data"]
     for name in (
-        "KIRA_TRANSPORT__PROMETHEUS_URL",
-        "KIRA_TRANSPORT__LOKI_URL",
-        "KIRA_TRANSPORT__JAEGER_URL",
-        "KIRA_OBSERVABILITY__OTLP_ENDPOINT",
+        "MAVER_TRANSPORT__PROMETHEUS_URL",
+        "MAVER_TRANSPORT__LOKI_URL",
+        "MAVER_TRANSPORT__JAEGER_URL",
+        "MAVER_OBSERVABILITY__OTLP_ENDPOINT",
     ):
         assert name not in rendered, f"{name} survived the local overlay's null"
 
@@ -286,7 +286,7 @@ def test_compose_services_start_on_their_example_environment(filename, build_set
 def test_eval_compose_keeps_the_harness_contract() -> None:
     """Three names the evaluation harness hard-codes, and one port it polls."""
     service = yaml.safe_load((DOCKER / "docker-compose.eval.yml").read_text())["services"][
-        "kira-eval"
+        "maver-eval"
     ]
     assert service["image"] == "k8s-agent:local"
     assert service["container_name"] == "k8s-agent-sregym"
@@ -386,7 +386,7 @@ message the model can read.
 """
 
 # One kubectl verb to the RBAC verbs issuing it needs. Keyed off the tool's own verb
-# tables, so a verb added to kira.tools.kubernetes without a decision about what it costs
+# tables, so a verb added to maver.tools.kubernetes without a decision about what it costs
 # in RBAC fails the check below rather than surfacing as a Forbidden mid-incident.
 VERB_RBAC: dict[str, frozenset[str]] = {
     # reads
@@ -482,7 +482,7 @@ def test_every_kind_the_tool_names_is_granted_or_decided(kind: str) -> None:
 def test_the_read_roles_carry_every_verb_a_read_needs() -> None:
     """get, list and watch, derived from the read verbs the tool can issue."""
     needed = frozenset().union(*(VERB_RBAC[verb] for verb in _READ_VERBS))
-    for role in ("kira-cluster-read", "kira-namespace-read"):
+    for role in ("maver-cluster-read", "maver-namespace-read"):
         rules = _grants()[role]
         # The metrics API serves no watch, and kubectl top does not ask for one.
         core = {key: verbs for key, verbs in rules.items() if key[0] != "metrics.k8s.io"}
@@ -501,7 +501,7 @@ def test_the_write_role_carries_every_verb_a_write_needs() -> None:
     needed = frozenset().union(
         *(VERB_RBAC[verb] for verb in set(_WRITE_VERBS) - NODE_SCOPED_WRITES)
     )
-    rules = _grants()["kira-namespace-write"]
+    rules = _grants()["maver-namespace-write"]
     mutating = {key: verbs for key, verbs in rules.items() if "create" in verbs}
     assert mutating, "the write role mutates nothing"
     for key, verbs in mutating.items():

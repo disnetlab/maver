@@ -10,8 +10,8 @@ A checkpoint is stored as JSON and read back as a validated model with ``extra="
 so it is exactly the kind of thing that survives a round trip on one backend and not the
 other, and it is only ever read on a path that runs minutes or hours after the write.
 
-    docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=kira postgres:17-alpine
-    POSTGRES_TEST_DSN=postgresql://postgres:kira@127.0.0.1:55432/postgres \\
+    docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=maver postgres:17-alpine
+    POSTGRES_TEST_DSN=postgresql://postgres:maver@127.0.0.1:55432/postgres \\
         uv run pytest -m integration tests/integration/test_approval_on_postgres.py
 """
 
@@ -23,16 +23,16 @@ from typing import Any
 
 import pytest
 
-from kira.audit.journal import ListSink
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.memory.factory import build_storage
-from kira.middleware.authority import ApprovalPending
-from kira.middleware.human_approval import authorities
-from kira.orchestration.runner import Deployment, resume_after_decision, run_incident
-from kira.settings.authority import AuthoritySettings
-from kira.settings.groups import MemorySettings, ServerSettings, VerifySettings
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
+from maver.audit.journal import ListSink
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.memory.factory import build_storage
+from maver.middleware.authority import ApprovalPending
+from maver.middleware.human_approval import authorities
+from maver.orchestration.runner import Deployment, resume_after_decision, run_incident
+from maver.settings.authority import AuthoritySettings
+from maver.settings.groups import MemorySettings, ServerSettings, VerifySettings
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
 
 pytestmark = pytest.mark.integration
 
@@ -123,7 +123,7 @@ class FakeModel:
 
 @pytest.mark.skipif(not DSN, reason="set POSTGRES_TEST_DSN to run this")
 async def test_an_incident_parks_and_resumes_on_postgres(tmp_path: pathlib.Path) -> None:
-    schema = f"kira_hitl_{uuid.uuid4().hex[:8]}"
+    schema = f"maver_hitl_{uuid.uuid4().hex[:8]}"
     settings = Settings(
         server=ServerSettings(workdir=tmp_path),
         memory=MemorySettings(

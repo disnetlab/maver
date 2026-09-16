@@ -1,6 +1,6 @@
-# Kira
+# MAVER
 
-**K**ubernetes **I**ncident **R**ecovery **A**gent: a memory-augmented multi-agent
+**M**ulti-**A**gent **V**erification and **E**xperience-informed **R**ecovery: a memory-augmented multi-agent
 pipeline that diagnoses and repairs live microservice incidents using a privately
 served open-weight language model.
 
@@ -19,8 +19,8 @@ No telemetry leaves the cluster. The model runs on your own infrastructure.
 uv sync --all-extras
 make check                       # lint, types, and the whole test suite
 make test-parity                 # only the checks that pin the published numbers
-uv run kira config check         # validate the configuration a server would start on
-uv run kira serve                # listen on 0.0.0.0:8080
+uv run maver config check         # validate the configuration a server would start on
+uv run maver serve                # listen on 0.0.0.0:8080
 python examples/run_incident.py examples/alerts/high-error-rate.json
 ```
 
@@ -89,15 +89,25 @@ deployment guidance is the shipped NetworkPolicy and no ingress.
 
 ## Configuration
 
-Every setting is a field on a nested model, and an unrecognised `KIRA_`-prefixed name
-stops the process rather than being ignored. `uv run kira config show` prints the
+The package and command are now `maver`, and settings use the `MAVER_` prefix.
+Existing `KIRA_` setting names remain aliases; `MAVER_` wins when both are set.
+The PostgreSQL schema still defaults to `kira_memory` so the rename opens existing
+data. Narrow compatibility imports restore previously scheduled approval and learning
+jobs into the MAVER runtime. Compose keeps the old physical workspace-volume names by default; set
+`MAVER_WORKSPACE_VOLUME` or `MAVER_EVAL_WORKSPACE_VOLUME` when the previous deployment
+used a custom Compose project name. Kubernetes adopters should retain their existing
+namespace and PVC bindings in their overlay when upgrading. The repository address
+has not changed, and historical experiment configurations retain their original bytes.
+
+Every setting is a field on a nested model, and an unrecognised `MAVER_`-prefixed name
+stops the process rather than being ignored. `uv run maver config show` prints the
 resolved configuration with secrets masked; `configs/arms/` holds the experiment
 configurations, each declaring what it holds constant.
 
 ## Layout
 
 ```
-src/kira/
+src/maver/
   contracts/     the typed artifacts, incident state and audit events
   settings/      nested settings, model profiles, arm files
   llm/           the provider client, with sampling pinned and asserted
@@ -131,7 +141,7 @@ sandbox shell runs a real kubectl against a credential-free endpoint the harness
 which is the route every measured run took. The MCP kubectl tools are hidden by default,
 so the model reaches the cluster from the shell and telemetry still arrives over MCP.
 `docs/adapters/sregym.md` covers that route's settings, loading an archived corpus with
-`kira memory import`, and the leave-one-out map an imported corpus needs.
+`maver memory import`, and the leave-one-out map an imported corpus needs.
 
 Two environment adapters ship, and the difference between them is instructive. Under
 SREGym the harness starts the agent and hands it a problem. Under AIOpsLab the direction
@@ -160,7 +170,7 @@ named so an adopter can judge the risk themselves.
   identity.
 - **Single tenant.** `memory.corpus_id` partitions the retrieval corpus, but nothing
   authenticates the caller who chose it. It is a research partition, not a security
-  boundary; the supported deployment is one Kira per tenant.
+  boundary; the supported deployment is one MAVER per tenant.
 - **No rate limiting** beyond the intake concurrency bound. A burst of alerts is queued,
   not throttled. The turn budgets, the generation cap and the repeat breaker bound what
   one incident can consume, not what a client can ask for.
@@ -188,7 +198,7 @@ named so an adopter can judge the risk themselves.
   shown is an input to the result; the startup log says so.
 - Retrieval is one retriever across both backends by construction, and the normalisation
   both index and query with is a documented approximation of PostgreSQL's text parser,
-  not a copy of it. `src/kira/memory/lexemes.py` states what it reproduces and what it
+  not a copy of it. `src/maver/memory/lexemes.py` states what it reproduces and what it
   does not, measured against a live server.
 - The store layout is versioned. A build that opens a store written by a later build
   refuses it and names both versions rather than writing past columns it does not know.

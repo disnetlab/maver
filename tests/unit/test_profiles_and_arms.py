@@ -5,21 +5,21 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from kira.audit.journal import Journal, ListSink
-from kira.llm.sampling import (
+from maver.audit.journal import Journal, ListSink
+from maver.llm.sampling import (
     SamplingResolution,
     resolve_sampling,
     sampling_digest,
     split_sampling,
 )
-from kira.memory.factory import build_storage
-from kira.settings.arms import compare_constants, deep_merge, load_arm
-from kira.settings.profiles import ModelProfile, load_profile
-from kira.settings.root import Settings, load_settings, reset_settings
-from kira.tools.allowlists import RETRIEVAL_TOOLS
-from kira.tools.context import ToolContext
-from kira.tools.toolsets import build_toolset
-from kira.tools.workspace import SessionWorkspace
+from maver.memory.factory import build_storage
+from maver.settings.arms import compare_constants, deep_merge, load_arm
+from maver.settings.profiles import ModelProfile, load_profile
+from maver.settings.root import Settings, load_settings, reset_settings
+from maver.tools.allowlists import RETRIEVAL_TOOLS
+from maver.tools.context import ToolContext
+from maver.tools.toolsets import build_toolset
+from maver.tools.workspace import SessionWorkspace
 
 MODELS = Path("configs/models")
 ARMS = Path("configs/arms")
@@ -178,7 +178,7 @@ class TestShippedArms:
         assert "auto_snapshot" in load_arm(name, ARMS).settings.get("pipeline", {})
 
     def test_the_arms_that_retrieve_pin_the_relevance_floor(self) -> None:
-        """Kira floors a hit at 0.5 of its lexical score per query token; the prototype
+        """MAVER floors a hit at 0.5 of its lexical score per query token; the prototype
         shipped that floor off and no campaign set it. An arm inheriting the default
         would be served fewer precedents than the cells it reproduces, and the dose is
         what its memory result is divided by."""
@@ -349,7 +349,7 @@ def test_the_auxiliary_set_turns_thinking_off(name: str) -> None:
     `secondpass/select.py` says thinking must be off for the selector, that the reason is
     a measured failure rather than a preference — with thinking on, the model spent the
     budget reasoning and every selector call in one rerun parsed to empty and fell back to
-    the first opinion — and that in Kira this is a property of the auxiliary sampling set.
+    the first opinion — and that in MAVER this is a property of the auxiliary sampling set.
     The function deriving that set kept the reasoning knobs, and justified keeping them.
 
     Inert on the profiles every campaign used, which set neither knob; live on any profile
@@ -383,8 +383,8 @@ def test_the_gated_arm_gives_no_role_a_retrieval_tool(
     was tested; the combination that makes the arm what it is was not, and it is the claim
     the arm's whole result is read against.
     """
-    monkeypatch.setenv("KIRA_ARM", "ma-s")
-    monkeypatch.setenv("KIRA_SERVER__WORKDIR", str(tmp_path))
+    monkeypatch.setenv("MAVER_ARM", "ma-s")
+    monkeypatch.setenv("MAVER_SERVER__WORKDIR", str(tmp_path))
     reset_settings()
     settings = load_settings()
 
@@ -429,11 +429,11 @@ def test_the_profile_an_arm_names_is_the_profile_it_runs(
         "model_profile: qwen3.8-27b\n"
         "registered: {date: '2026-09-03', campaign: c, hypothesis: h}\n"
     )
-    monkeypatch.setenv("KIRA_ARM", "other")
-    monkeypatch.setenv("KIRA_ARM_DIR", str(tmp_path))
+    monkeypatch.setenv("MAVER_ARM", "other")
+    monkeypatch.setenv("MAVER_ARM_DIR", str(tmp_path))
     reset_settings()
     assert load_settings().model.profile == "qwen3.8-27b"
 
-    monkeypatch.setenv("KIRA_MODEL__PROFILE", "qwen3.6-35b-a3b")
+    monkeypatch.setenv("MAVER_MODEL__PROFILE", "qwen3.6-35b-a3b")
     reset_settings()
     assert load_settings().model.profile == "qwen3.6-35b-a3b"

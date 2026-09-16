@@ -38,10 +38,13 @@ update-vm.sh
 refactor/
 
 # Compose runtime state: per host, and one of them holds credentials.
-# See deploy/docker/kira.env.example.
-deploy/docker/kira.env
+# See deploy/docker/maver.env.example.
+deploy/docker/maver.env
 deploy/docker/kubeconfig
 
 # Agent worktrees. Untracked would still be linted, and a check on main must not
 # depend on what another worktree is mid-edit on.
 .claude/
+
+# Existing host configuration during the MAVER rename.
+deploy/docker/kira.env

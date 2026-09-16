@@ -29,10 +29,10 @@ from transport_contract import (
     ToolTransportContract,
 )
 
-from kira.adapters.sregym.transport import McpTransport
-from kira.tools.kubectl_proxy import ProxyRoute
+from maver.adapters.sregym.transport import McpTransport
+from maver.tools.kubectl_proxy import ProxyRoute
 
-SEAM = "kira.adapters.sregym.transport"
+SEAM = "maver.adapters.sregym.transport"
 
 # Never resolves, so the unreachable fixture does not depend on whether the host running
 # the suite happens to have kubectl on it.

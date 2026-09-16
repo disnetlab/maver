@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from kira.contracts.parsing import (
+from maver.contracts.parsing import (
     cites_request_path,
     decode_container,
     is_blank_reason,

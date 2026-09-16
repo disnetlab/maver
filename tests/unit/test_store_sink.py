@@ -18,13 +18,13 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-from kira.audit.journal import Journal, SequenceRegistry
-from kira.audit.store_sink import StoreSink
-from kira.contracts.events import AuditEvent, StageEvent, ToolCallEvent
-from kira.memory.factory import build_storage
-from kira.memory.ports import AgentRunEventDraft, AgentRunEventRecord, AgentRunRecord
-from kira.settings.groups import ServerSettings
-from kira.settings.root import Settings
+from maver.audit.journal import Journal, SequenceRegistry
+from maver.audit.store_sink import StoreSink
+from maver.contracts.events import AuditEvent, StageEvent, ToolCallEvent
+from maver.memory.factory import build_storage
+from maver.memory.ports import AgentRunEventDraft, AgentRunEventRecord, AgentRunRecord
+from maver.settings.groups import ServerSettings
+from maver.settings.root import Settings
 
 STALLED = 2.0
 """How long a store stays unresponsive. Long enough that waiting on it is unmistakable.

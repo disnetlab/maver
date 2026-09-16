@@ -41,9 +41,9 @@ POSTGRES_TESTS = tests/unit/test_postgres_backend.py \
 test-postgres:  ## Run the suites needing a live PostgreSQL (set POSTGRES_TEST_DSN)
 	@test -n "$(POSTGRES_TEST_DSN)" || { \
 	  echo "POSTGRES_TEST_DSN is unset. These tests would skip, and a skipped check reports green."; \
-	  echo "  docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=kira -e POSTGRES_USER=kira \\"; \
-	  echo "      -e POSTGRES_DB=kira postgres:17-alpine"; \
-	  echo "  make test-postgres POSTGRES_TEST_DSN=postgresql://kira:kira@127.0.0.1:55432/kira"; \
+	  echo "  docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=maver -e POSTGRES_USER=maver \\"; \
+	  echo "      -e POSTGRES_DB=maver postgres:17-alpine"; \
+	  echo "  make test-postgres POSTGRES_TEST_DSN=postgresql://maver:maver@127.0.0.1:55432/maver"; \
 	  exit 1; }
 	POSTGRES_TEST_DSN=$(POSTGRES_TEST_DSN) \
 	  uv run pytest -m integration --no-skips $(POSTGRES_TESTS) $(PYTEST_FLAGS)
@@ -67,7 +67,7 @@ lock:  ## Refresh uv.lock and the exported requirements.txt
 # Deferred with `=` rather than `:=`, so that `make check` does not pay for a version
 # lookup and a git call it has no use for.
 BASE_IMAGE = $(shell cat deploy/docker/base-image.txt)
-VERSION    = $(shell uv run kira --version)
+VERSION    = $(shell uv run maver --version)
 REVISION   = $(shell git rev-parse HEAD)
 
 image:  ## Build the runtime image
@@ -76,8 +76,8 @@ image:  ## Build the runtime image
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg REVISION=$(REVISION) \
 	  -f deploy/docker/Dockerfile \
-	  -t ghcr.io/evenodderguy/kira:$(VERSION) \
-	  -t kira:local .
+	  -t ghcr.io/evenodderguy/maver:$(VERSION) \
+	  -t maver:local .
 
 # The same Dockerfile with the sregym extra. k8s-agent:local is an interoperability
 # alias for the evaluation harness, which tags that name itself, and nothing else.
@@ -88,7 +88,7 @@ image-eval:  ## Build the evaluation image
 	  --build-arg REVISION=$(REVISION) \
 	  --build-arg EXTRAS=sregym \
 	  -f deploy/docker/Dockerfile \
-	  -t ghcr.io/evenodderguy/kira-sregym:$(VERSION) \
+	  -t ghcr.io/evenodderguy/maver-sregym:$(VERSION) \
 	  -t k8s-agent:local .
 
 # Compose cannot run git, so the revision the image records has to be handed to it.

@@ -13,7 +13,7 @@ namespace, so an overlay is where a deployment becomes a deployment.
 
 **Apply an overlay with `-k`, never a file inside it with `-f`.** The files under
 `overlays/` are patches rather than manifests. `kubectl apply -f overlays/*/configmap-patch.yaml`
-replaces `kira-config` with only the keys that patch names and silently drops every other
+replaces `maver-config` with only the keys that patch names and silently drops every other
 one. Settings default conservatively, so the pod comes back up with the alert consumer
 disabled, the memory store off, and no error anywhere saying so. The prototype lost a run
 to exactly this.
@@ -31,11 +31,11 @@ when the profile changes.
 
 | File | What it is |
 |---|---|
-| `namespace.yaml` | the `kira` namespace, labelled for the restricted Pod Security Standard |
+| `namespace.yaml` | the `maver` namespace, labelled for the restricted Pod Security Standard |
 | `serviceaccount.yaml` | the identity every rule below is granted to |
-| `rbac-cluster-read.yaml` | `kira-cluster-read` and the one binding that is cluster-wide. Reads only |
-| `rbac-namespace-read.yaml` | `kira-namespace-read`. A ClusterRole, deliberately unbound |
-| `rbac-namespace-write.yaml` | `kira-namespace-write`. A ClusterRole, deliberately unbound |
+| `rbac-cluster-read.yaml` | `maver-cluster-read` and the one binding that is cluster-wide. Reads only |
+| `rbac-namespace-read.yaml` | `maver-namespace-read`. A ClusterRole, deliberately unbound |
+| `rbac-namespace-write.yaml` | `maver-namespace-write`. A ClusterRole, deliberately unbound |
 | `configmap.yaml` | the fifteen-odd settings a deployment actually sets |
 | `pvc.yaml` | 10Gi ReadWriteOnce at `/workspace` |
 | `deployment.yaml` | one replica, `Recreate`, three probes, a read-only root filesystem |
@@ -65,7 +65,7 @@ fault-injection namespace.
 
 Reads are broad, writes are narrow, and the split is enforced twice: by RBAC here, and by
 the approval gate in the process, which holds every cluster write until a person decides
-it unless `KIRA_AUTHORITY__MODE` says otherwise.
+it unless `MAVER_AUTHORITY__MODE` says otherwise.
 
 Cluster-wide, the agent can read nodes, persistent volumes, storage classes, volume
 attachments, priority classes, ingress classes and node metrics, and can `get` a single
@@ -82,7 +82,7 @@ objects, evict a pod, and run `kubectl exec`.
 
 The roles are derived from what the kubectl tool can actually issue rather than assembled
 by hand: `tests/unit/test_deploy.py` reads the verb and resource vocabulary out of
-`kira.tools.kubernetes` and fails if a kind the tool knows is neither granted below nor
+`maver.tools.kubernetes` and fails if a kind the tool knows is neither granted below nor
 listed as a decision. Six things are decisions:
 
 - **Secrets**, read or write. `overlays/production/rbac-secrets-write.yaml` is the opt-in
@@ -110,14 +110,14 @@ This is tracked and not yet fixed. The API that lists pending writes and approve
 served on the same port as everything else, and anything that can reach port 8080 can
 approve a cluster write. Until authentication lands the containment is the NetworkPolicy:
 
-- ingress on 8080 only from namespaces labelled `kira.dev/operator=true`;
+- ingress on 8080 only from namespaces labelled `maver.dev/operator=true`;
 - no `Ingress` object, in this repository or in your cluster;
 - `kubectl port-forward` for an operator, which the API server proxies through the
   kubelet and which therefore keeps working under the policy.
 
 ```bash
-kubectl label namespace <your-operator-namespace> kira.dev/operator=true
-kubectl -n kira port-forward svc/kira 8080:80
+kubectl label namespace <your-operator-namespace> maver.dev/operator=true
+kubectl -n maver port-forward svc/maver 8080:80
 ```
 
 The `local` overlay removes the policy, because kind ships no controller to enforce it
@@ -131,10 +131,10 @@ kubectl kustomize deploy/k8s/overlays/production | kubeconform -strict -summary
 ```
 
 `tests/unit/test_deploy.py` is the check that runs in CI. It renders both overlays with
-`kubectl kustomize`, validates every rendered `KIRA_`-prefixed key against the settings
+`kubectl kustomize`, validates every rendered `MAVER_`-prefixed key against the settings
 model, builds `Settings` from the rendered environment so a value the validators refuse
 fails here rather than in a crash loop, checks the probe paths against the routes
-`kira.api.health` actually declares, and compares the RBAC verbs with the tool's own.
+`maver.api.health` actually declares, and compares the RBAC verbs with the tool's own.
 
 **`kubectl apply --dry-run=client` is not an offline check**, which is worth knowing
 before you point it at a cluster you did not mean to touch. It still performs API
@@ -145,3 +145,11 @@ command.
 
 The rendered production ConfigMap must contain every key the base ConfigMap has. An
 overlay that drops one is the first trap above, happening quietly; the test asserts it.
+
+## Upgrading from Kira
+
+MAVER's base manifests use new namespace and resource names. Stop the old deployment
+before starting MAVER against the same managed applications. Retain the existing
+namespace and PVC in an upgrade overlay, or migrate the workspace first; applying the
+new base alone creates separate resources and does not migrate data or stop Kira.
+The default PostgreSQL schema remains `kira_memory` so existing records stay available.

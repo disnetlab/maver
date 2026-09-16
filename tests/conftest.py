@@ -10,9 +10,9 @@ from collections.abc import Generator, Iterator
 
 import pytest
 
-from kira.adapters import registry as adapter_registry_module
-from kira.adapters.registry import load_entry_point_adapters
-from kira.settings.root import known_env_names, reset_settings
+from maver.adapters import registry as adapter_registry_module
+from maver.adapters.registry import load_entry_point_adapters
+from maver.settings.root import known_env_names, reset_settings
 
 
 @pytest.fixture(autouse=True)
@@ -20,7 +20,7 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Remove every variable the settings model would read."""
     known = known_env_names()
     for name in list(os.environ):
-        if name.startswith("KIRA_") or name in known:
+        if name.startswith(("MAVER_", "KIRA_")) or name in known:
             monkeypatch.delenv(name, raising=False)
     # A developer's .env at the repo root must not steer the suite either.
     monkeypatch.chdir(os.environ.get("PYTEST_TMP_CWD", os.getcwd()))

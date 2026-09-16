@@ -17,15 +17,15 @@ import pytest
 import respx
 from pydantic import ValidationError
 
-from kira.audit.journal import Journal
-from kira.settings.groups import TransportSettings
-from kira.tools.context import ToolContext
-from kira.tools.errors import call_timed_out
-from kira.tools.kubernetes import exec_kubectl_cmd_safely
-from kira.tools.metrics import _parse_alerts, partition_incident_alerts
-from kira.tools.toolsets import build_toolset
-from kira.tools.transport.direct import DirectTransport
-from kira.tools.workspace import SessionWorkspace
+from maver.audit.journal import Journal
+from maver.settings.groups import TransportSettings
+from maver.tools.context import ToolContext
+from maver.tools.errors import call_timed_out
+from maver.tools.kubernetes import exec_kubectl_cmd_safely
+from maver.tools.metrics import _parse_alerts, partition_incident_alerts
+from maver.tools.toolsets import build_toolset
+from maver.tools.transport.direct import DirectTransport
+from maver.tools.workspace import SessionWorkspace
 
 PROMETHEUS = "http://prometheus.test"
 LOKI = "http://loki.test"

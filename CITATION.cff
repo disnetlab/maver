@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: "Kira: a memory-augmented multi-agent system for microservice incident recovery"
+title: "MAVER: A Multi-Agent Framework for Verification and Experience-Informed Recovery of Microservices"
 message: "If you use this software, please cite it using these metadata."
 type: software
 authors:
@@ -10,7 +10,7 @@ repository-code: "https://github.com/evenodderguy/kira"
 license: MIT
 version: 0.1.0
 abstract: >-
-  Kira diagnoses and repairs live Kubernetes microservice incidents with a pipeline of
+  MAVER diagnoses and repairs live Kubernetes microservice incidents with a pipeline of
   typed roles driven by a privately served open-weight language model. Diagnosis and
   planning are read-only; a single execution role holds every write-capable tool and
   applies its plan under a check-and-set discipline behind a stage-aware approval gate.

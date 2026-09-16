@@ -1,6 +1,6 @@
 """Lifecycle states and the packet handed to an offline learning pass."""
 
-from kira.contracts import LearningPacket, LifecycleState, RunStatus
+from maver.contracts import LearningPacket, LifecycleState, RunStatus
 
 
 def test_the_published_lifecycle_states_all_exist() -> None:

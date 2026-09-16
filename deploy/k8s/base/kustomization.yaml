@@ -4,7 +4,7 @@
 # it would overwrite a real Secret with them.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: kira
+namespace: maver
 resources:
   - namespace.yaml
   - serviceaccount.yaml
@@ -18,5 +18,5 @@ resources:
   - networkpolicy.yaml
   - poddisruptionbudget.yaml
 images:
-  - name: ghcr.io/evenodderguy/kira
+  - name: ghcr.io/evenodderguy/maver
     newTag: "0.1.0"

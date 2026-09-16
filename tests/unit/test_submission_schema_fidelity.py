@@ -23,7 +23,7 @@ import pathlib
 import pytest
 from pydantic import BaseModel
 
-from kira.contracts import (
+from maver.contracts import (
     ExecutionResult,
     LearningResult,
     Plan,

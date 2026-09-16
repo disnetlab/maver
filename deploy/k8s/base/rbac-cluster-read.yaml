@@ -3,9 +3,9 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: kira-cluster-read
+  name: maver-cluster-read
   labels:
-    app.kubernetes.io/name: kira
+    app.kubernetes.io/name: maver
 rules:
   # Node and volume state, which no namespaced read can reach. A pending pod whose node
   # is unschedulable and a pod stuck on an unbound volume both look like an application
@@ -46,14 +46,14 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: kira-cluster-read
+  name: maver-cluster-read
   labels:
-    app.kubernetes.io/name: kira
+    app.kubernetes.io/name: maver
 subjects:
   - kind: ServiceAccount
-    name: kira
-    namespace: kira
+    name: maver
+    namespace: maver
 roleRef:
   kind: ClusterRole
-  name: kira-cluster-read
+  name: maver-cluster-read
   apiGroup: rbac.authorization.k8s.io

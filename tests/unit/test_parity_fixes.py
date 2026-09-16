@@ -8,13 +8,13 @@ import dataclasses
 
 import pytest
 
-from kira.contracts.artifacts import RootCause
-from kira.llm.client import serialise_assistant
-from kira.llm.types import ModelResponse, ToolCall, Usage
-from kira.roles.base import RoleContext
-from kira.roles.policy import repair_submission
-from kira.roles.trace_summary import build_trace_summary
-from kira.tools.context import NullEvidencePolicy, redact
+from maver.contracts.artifacts import RootCause
+from maver.llm.client import serialise_assistant
+from maver.llm.types import ModelResponse, ToolCall, Usage
+from maver.roles.base import RoleContext
+from maver.roles.policy import repair_submission
+from maver.roles.trace_summary import build_trace_summary
+from maver.tools.context import NullEvidencePolicy, redact
 
 pytestmark = pytest.mark.parity
 """Prototype-pinned throughout: see the module docstring for where the data came from."""

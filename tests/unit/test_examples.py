@@ -9,9 +9,9 @@ import pathlib
 
 import pytest
 
-from kira.api.incidents import IncidentRequest
-from kira.roles.prompting import visible_alert
-from kira.tools.scope import IncidentScope
+from maver.api.incidents import IncidentRequest
+from maver.roles.prompting import visible_alert
+from maver.tools.scope import IncidentScope
 
 EXAMPLES = pathlib.Path(__file__).resolve().parents[2] / "examples" / "alerts"
 

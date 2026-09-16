@@ -11,20 +11,20 @@ import pathlib
 from collections import Counter
 from typing import Any
 
-from kira.audit.journal import ListSink
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.memory.factory import build_storage
-from kira.memory.ports import SessionMemory
-from kira.orchestration.runner import Deployment, run_incident
-from kira.settings.groups import (
+from maver.audit.journal import ListSink
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.memory.factory import build_storage
+from maver.memory.ports import SessionMemory
+from maver.orchestration.runner import Deployment, run_incident
+from maver.settings.groups import (
     MemorySettings,
     PipelineSettings,
     SecondPassSettings,
     ServerSettings,
     VerifySettings,
 )
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 ALERT = {"alertname": "HighErrorRate", "namespace": "shop"}

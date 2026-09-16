@@ -3,17 +3,17 @@ import pathlib
 
 import pytest
 
-from kira.audit.journal import Journal, ListSink
-from kira.contracts.artifacts import RootCause, VerifyResult
-from kira.contracts.events import StageEvent
-from kira.contracts.state import IncidentState
-from kira.orchestration.engine import STEP_LIMIT
-from kira.orchestration.nodes import IncidentDeps, make_node
-from kira.orchestration.routing import RoutingPolicy
-from kira.roles.base import RoleOutcome, RoleSpec
-from kira.tools.toolsets import ResolvedToolset
+from maver.audit.journal import Journal, ListSink
+from maver.contracts.artifacts import RootCause, VerifyResult
+from maver.contracts.events import StageEvent
+from maver.contracts.state import IncidentState
+from maver.orchestration.engine import STEP_LIMIT
+from maver.orchestration.nodes import IncidentDeps, make_node
+from maver.orchestration.routing import RoutingPolicy
+from maver.roles.base import RoleOutcome, RoleSpec
+from maver.tools.toolsets import ResolvedToolset
 
-SRC = pathlib.Path(__file__).resolve().parents[2] / "src" / "kira"
+SRC = pathlib.Path(__file__).resolve().parents[2] / "src" / "maver"
 POLICY = RoutingPolicy(verify_enabled=True, remediation_retries=2, inconclusive_retries=1)
 
 

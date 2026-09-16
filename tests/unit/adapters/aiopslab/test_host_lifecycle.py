@@ -18,9 +18,9 @@ from typing import Any
 
 import pytest
 
-from kira.adapters.aiopslab.host import lifecycle as lifecycle_module
-from kira.adapters.aiopslab.host import main as main_module
-from kira.adapters.aiopslab.host.lifecycle import (
+from maver.adapters.aiopslab.host import lifecycle as lifecycle_module
+from maver.adapters.aiopslab.host import main as main_module
+from maver.adapters.aiopslab.host.lifecycle import (
     AIOpsLabAgentAdapter,
     instrument_observation_window,
     kubernetes_namespace,

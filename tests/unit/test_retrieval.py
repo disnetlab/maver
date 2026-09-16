@@ -4,11 +4,11 @@ from collections.abc import Sequence
 
 import pytest
 
-from kira.memory import bm25, ranking
-from kira.memory.ports import SearchScope, SessionMemory
-from kira.memory.ranking import Bm25Ranker
-from kira.memory.retrieval import Retriever
-from kira.settings.groups import MemorySettings
+from maver.memory import bm25, ranking
+from maver.memory.ports import SearchScope, SessionMemory
+from maver.memory.ranking import Bm25Ranker
+from maver.memory.retrieval import Retriever
+from maver.settings.groups import MemorySettings
 
 FIXTURE = json.loads(
     (pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "prototype_bm25.json").read_text(

@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from kira.adapters.aiopslab.host.mapping import (
+from maver.adapters.aiopslab.host.mapping import (
     _analysis_from_root_cause,
     _is_terminal_record,
     build_alert,
@@ -39,7 +39,7 @@ def test_alert_carries_the_task_contract_and_no_problem_id() -> None:
 def test_alert_leaves_the_connectivity_contract_to_the_agent_side() -> None:
     """The credential-holding half no longer carries Verify's entry-point table.
 
-    The prototype attached it here, keyed by namespace. In Kira it is adapter
+    The prototype attached it here, keyed by namespace. In MAVER it is adapter
     configuration on the agent side, so nothing under `host/` needs to know which
     Service a benchmark application is fronted by.
     """

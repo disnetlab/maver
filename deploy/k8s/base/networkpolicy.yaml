@@ -10,14 +10,14 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: kira
-  namespace: kira
+  name: maver
+  namespace: maver
   labels:
-    app.kubernetes.io/name: kira
+    app.kubernetes.io/name: maver
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: kira
+      app.kubernetes.io/name: maver
   policyTypes:
     - Ingress
     - Egress
@@ -28,7 +28,7 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels:
-              kira.dev/operator: "true"
+              maver.dev/operator: "true"
       ports:
         - protocol: TCP
           port: 8080

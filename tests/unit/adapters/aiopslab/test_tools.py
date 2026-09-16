@@ -10,14 +10,14 @@ from typing import Any
 
 import pytest
 
-from kira.adapters.aiopslab.config import AiopsLabConfig
-from kira.adapters.aiopslab.tools import adapter_tools
-from kira.audit.journal import Journal
-from kira.settings.groups import ToolSettings
-from kira.tools.context import ToolContext
-from kira.tools.policy import ActionClass, policy_for
-from kira.tools.registry import description_for
-from kira.tools.workspace import SessionWorkspace
+from maver.adapters.aiopslab.config import AiopsLabConfig
+from maver.adapters.aiopslab.tools import adapter_tools
+from maver.audit.journal import Journal
+from maver.settings.groups import ToolSettings
+from maver.tools.context import ToolContext
+from maver.tools.policy import ActionClass, policy_for
+from maver.tools.registry import description_for
+from maver.tools.workspace import SessionWorkspace
 
 CONFIG = AiopsLabConfig()
 

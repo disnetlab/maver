@@ -13,10 +13,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from kira.audit.journal import Journal
-from kira.roles.health_gate import HealthGate, sweep_namespace_health
-from kira.tools.context import ToolContext
-from kira.tools.workspace import SessionWorkspace
+from maver.audit.journal import Journal
+from maver.roles.health_gate import HealthGate, sweep_namespace_health
+from maver.tools.context import ToolContext
+from maver.tools.workspace import SessionWorkspace
 
 
 class FakeCluster:

@@ -14,8 +14,8 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from kira.adapters.aiopslab.host import bridge as bridge_module
-from kira.adapters.aiopslab.host.bridge import BridgeBackend, serve_bridge
+from maver.adapters.aiopslab.host import bridge as bridge_module
+from maver.adapters.aiopslab.host.bridge import BridgeBackend, serve_bridge
 
 NAMESPACE = "test-hotel-reservation"
 

@@ -17,31 +17,31 @@ import httpx
 import pytest
 import respx
 
-from kira.audit.journal import ListSink, SequenceRegistry
-from kira.contracts.lifecycle import RunStatus
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.memory.factory import build_storage
-from kira.memory.ports import ApprovalRecord
-from kira.middleware.authority import ActionRequest, ApprovalPending
-from kira.middleware.human_approval import approval_granted, authorities, take_grant
-from kira.orchestration import jobs
-from kira.orchestration.resume import (
+from maver.audit.journal import ListSink, SequenceRegistry
+from maver.contracts.lifecycle import RunStatus
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.memory.factory import build_storage
+from maver.memory.ports import ApprovalRecord
+from maver.middleware.authority import ActionRequest, ApprovalPending
+from maver.middleware.human_approval import approval_granted, authorities, take_grant
+from maver.orchestration import jobs
+from maver.orchestration.resume import (
     ApprovalCheckpoint,
     denial_result,
     load_checkpoint,
     restored_state,
 )
-from kira.orchestration.runner import Deployment, resume_after_decision, run_incident
-from kira.settings.authority import AuthorityRule, AuthoritySettings
-from kira.settings.groups import (
+from maver.orchestration.runner import Deployment, resume_after_decision, run_incident
+from maver.settings.authority import AuthorityRule, AuthoritySettings
+from maver.settings.groups import (
     MemorySettings,
     PipelineSettings,
     ServerSettings,
     VerifySettings,
 )
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
-from kira.tools.policy import ActionClass
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
+from maver.tools.policy import ActionClass
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 

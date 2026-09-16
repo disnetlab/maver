@@ -6,18 +6,18 @@ repository, so every file the parity checks read is frozen under
 default on purpose: on a clone with no prototype on disk the comparisons still run,
 rather than skipping and reporting a green suite that checked nothing.
 
-Setting ``KIRA_PROTOTYPE_ROOT`` to a prototype checkout compares against that instead.
+Setting ``MAVER_PROTOTYPE_ROOT`` to a prototype checkout compares against that instead.
 That is the author's cross-check — it is how the frozen copy is shown to still match
 its source, and how a refreeze is verified — not the path a reviewer runs.
 
 The name is scrubbed from the environment by the ``clean_env`` fixture like every other
-``KIRA_``-prefixed variable, so it is read here at import time, before any test runs.
+``MAVER_``-prefixed variable, so it is read here at import time, before any test runs.
 """
 
 import os
 from pathlib import Path
 
-ENV_NAME = "KIRA_PROTOTYPE_ROOT"
+ENV_NAME = "MAVER_PROTOTYPE_ROOT"
 
 FROZEN = Path(__file__).resolve().parents[1] / "fixtures" / "prototype"
 """The frozen copy: exactly the files the parity checks read, and nothing besides."""
@@ -30,11 +30,11 @@ def prototype_root() -> Path:
     """Resolve the tree the parity checks read.
 
     Returns:
-        The checkout named by ``KIRA_PROTOTYPE_ROOT`` when it exists, and the frozen
+        The checkout named by ``MAVER_PROTOTYPE_ROOT`` when it exists, and the frozen
         copy otherwise. A name that points nowhere falls back rather than failing: a
         stale export in a shell should not turn the comparisons off.
     """
-    named = os.environ.get(ENV_NAME)
+    named = os.environ.get(ENV_NAME, os.environ.get("KIRA_PROTOTYPE_ROOT"))
     if named and Path(named).is_dir():
         return Path(named)
     return FROZEN

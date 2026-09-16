@@ -13,10 +13,10 @@ from collections.abc import Sequence
 
 import pytest
 
-from kira.adapters.base import EpisodeContext
-from kira.adapters.sregym import SREGymAdapter, SregymConfig
-from kira.adapters.sregym.exclusions import load_exclusion_map
-from kira.settings.root import load_settings
+from maver.adapters.base import EpisodeContext
+from maver.adapters.sregym import SREGymAdapter, SregymConfig
+from maver.adapters.sregym.exclusions import load_exclusion_map
+from maver.settings.root import load_settings
 
 PROBLEM = "k8s_target_port-misconfig"
 
@@ -90,7 +90,7 @@ def test_a_problem_the_map_does_not_name_warns_and_withholds_what_it_can(
     corpus = Corpus(["distilled-1"])
     ctx = EpisodeContext(namespace="shop", external_key="a_problem_nobody_listed")
 
-    with caplog.at_level(logging.WARNING, logger="kira.adapters.sregym"):
+    with caplog.at_level(logging.WARNING, logger="maver.adapters.sregym"):
         withheld = _adapter(_map(tmp_path)).withheld_records(ctx, corpus)
 
     assert list(withheld) == ["distilled-1"]
@@ -101,7 +101,7 @@ def test_no_map_is_the_derived_set_and_no_warning(caplog: pytest.LogCaptureFixtu
     """The map is opt-in: a deployment whose records carry their own labels needs none."""
     corpus = Corpus(["distilled-1"])
 
-    with caplog.at_level(logging.WARNING, logger="kira.adapters.sregym"):
+    with caplog.at_level(logging.WARNING, logger="maver.adapters.sregym"):
         withheld = _adapter(None).withheld_records(
             EpisodeContext(namespace="shop", external_key=PROBLEM), corpus
         )
@@ -143,6 +143,6 @@ def test_the_map_is_named_by_the_deployment_environment(
 ) -> None:
     """The adapter slice is untyped in the core, so the name is checked nowhere else."""
     path = _map(tmp_path)
-    monkeypatch.setenv("KIRA_ADAPTERS__SREGYM__EXCLUSION_MAP", str(path))
+    monkeypatch.setenv("MAVER_ADAPTERS__SREGYM__EXCLUSION_MAP", str(path))
 
     assert SregymConfig.resolve(load_settings(), env={}).exclusion_map == path

@@ -1,6 +1,6 @@
 # The AIOpsLab adapter
 
-Kira runs its own pipeline against [AIOpsLab](https://github.com/microsoft/AIOpsLab)
+MAVER runs its own pipeline against [AIOpsLab](https://github.com/microsoft/AIOpsLab)
 without putting AIOpsLab's admin kubeconfig inside the agent container.
 
 **This adapter has not yet been run against a live AIOpsLab host from this repository.**
@@ -17,15 +17,15 @@ orchestrator pulls exactly one action back out of it — an action the driver pr
 posting a blinded incident to the **agent** over HTTP and waiting for the whole pipeline
 to finish.
 
-| | Driver (`src/kira/adapters/aiopslab/host/`) | Agent (the container) |
+| | Driver (`src/maver/adapters/aiopslab/host/`) | Agent (the container) |
 |---|---|---|
 | Runs in | AIOpsLab's Poetry environment, loaded by path | its own image |
 | Holds | the cluster-admin kubeconfig, the problem id, the bridge | a bearer token and nothing else |
-| Imports | the standard library only, plus `aiopslab` | Kira |
+| Imports | the standard library only, plus `aiopslab` | MAVER |
 | Reaches the cluster by | `kubectl`, directly | one `POST /v1/action` to the bridge |
 
 The driver half's standard-library-only rule is enforced by an AST test. It is not
-tidiness: an import of `kira` there crashes on a benchmark host part-way through a sweep,
+tidiness: an import of `maver` there crashes on a benchmark host part-way through a sweep,
 where nothing in this repository is installed.
 
 ## Ownership boundary
@@ -57,8 +57,8 @@ read-only.
 ## Start the agent
 
 ```bash
-make image                                            # builds kira:local
-KIRA_MODEL_ENDPOINT=http://vllm.internal:8000/v1 \
+make image                                            # builds maver:local
+MAVER_MODEL_ENDPOINT=http://vllm.internal:8000/v1 \
   sudo -E scripts/aiopslab/deploy-agent.sh
 ```
 
@@ -73,10 +73,10 @@ read-only at `/run/secrets/aiopslab-bridge-token`. It waits for `/healthz` and t
 
 | Variable | Default | What it selects |
 |---|---|---|
-| `KIRA_MODEL_ENDPOINT` | *required* | the private model endpoint |
+| `MAVER_MODEL_ENDPOINT` | *required* | the private model endpoint |
 | `AIOPSLAB_ARM` | `ma-v` | an arm file in `configs/arms/`, baked into the image |
 | `AIOPSLAB_MODEL_PROFILE` | `qwen3.6-35b-a3b` | a profile in `configs/models/` |
-| `AIOPSLAB_AGENT_IMAGE` | `kira:local` | the image `make image` tags |
+| `AIOPSLAB_AGENT_IMAGE` | `maver:local` | the image `make image` tags |
 | `AIOPSLAB_AGENT_DATA_DIR` | `/var/lib/aiopslab/agent-workspace` | the workspace volume |
 | `AIOPSLAB_AGENT_CONFIG_DIR` | `/var/lib/aiopslab/agent-config` | the token and environment file |
 
@@ -91,16 +91,16 @@ What the script writes into the environment file, which is also what a hand-writ
 
 | Name | Value | Why |
 |---|---|---|
-| `KIRA_INTAKE__ADAPTERS` | `aiopslab` | binds the adapter for the run |
-| `KIRA_ADAPTERS__AIOPSLAB__ENABLED` | `true` | makes the bridge credential mandatory rather than optional |
-| `KIRA_ADAPTERS__AIOPSLAB__BRIDGE_URL` | `http://127.0.0.1:1819` | where the driver serves the bridge |
-| `KIRA_ADAPTERS__AIOPSLAB__BRIDGE_TOKEN_FILE` | `/run/secrets/aiopslab-bridge-token` | a file, so the token is not in `docker inspect` |
-| `KIRA_ADAPTERS__AIOPSLAB__BRIDGE_TIMEOUT_S` | `180` | one bridge action's bound; the shipped default is 120 |
-| `KIRA_AUTHORITY__MODE` | `auto` | nobody is waiting to approve a write during a sweep |
-| `KIRA_SERVER__ENVIRONMENT` | `local` | `production` plus `auto` is refused at startup, and a benchmark host is not production |
-| `KIRA_SERVER__HOST` | `127.0.0.1` | with `--network host` there is no published-port boundary, and the API has no authentication |
+| `MAVER_INTAKE__ADAPTERS` | `aiopslab` | binds the adapter for the run |
+| `MAVER_ADAPTERS__AIOPSLAB__ENABLED` | `true` | makes the bridge credential mandatory rather than optional |
+| `MAVER_ADAPTERS__AIOPSLAB__BRIDGE_URL` | `http://127.0.0.1:1819` | where the driver serves the bridge |
+| `MAVER_ADAPTERS__AIOPSLAB__BRIDGE_TOKEN_FILE` | `/run/secrets/aiopslab-bridge-token` | a file, so the token is not in `docker inspect` |
+| `MAVER_ADAPTERS__AIOPSLAB__BRIDGE_TIMEOUT_S` | `180` | one bridge action's bound; the shipped default is 120 |
+| `MAVER_AUTHORITY__MODE` | `auto` | nobody is waiting to approve a write during a sweep |
+| `MAVER_SERVER__ENVIRONMENT` | `local` | `production` plus `auto` is refused at startup, and a benchmark host is not production |
+| `MAVER_SERVER__HOST` | `127.0.0.1` | with `--network host` there is no published-port boundary, and the API has no authentication |
 
-`KIRA_ADAPTERS__AIOPSLAB__BRIDGE_TOKEN` sets the token inline instead of by file. The
+`MAVER_ADAPTERS__AIOPSLAB__BRIDGE_TOKEN` sets the token inline instead of by file. The
 prototype's own names — `AIOPSLAB_BRIDGE_URL`, `AIOPSLAB_BRIDGE_TOKEN`,
 `AIOPSLAB_BRIDGE_TOKEN_FILE`, `AIOPSLAB_BRIDGE_TIMEOUT_SECONDS` — still work as legacy
 aliases, and each one that decides a value says so in the log and in the run's
@@ -108,9 +108,9 @@ configuration snapshot.
 
 Do not carry the prototype's `agent.env` across wholesale. It set
 `RCA_AUTO_SNAPSHOT_ENABLED=false` under a name the prototype never read, so every archived
-AIOpsLab run had the RCA configuration snapshot on; Kira honours that name as an alias,
+AIOpsLab run had the RCA configuration snapshot on; MAVER honours that name as an alias,
 which would switch the snapshot off and make a new sweep incomparable with the archive.
-The deploy script names `KIRA_PIPELINE__AUTO_SNAPSHOT=true` for that reason.
+The deploy script names `MAVER_PIPELINE__AUTO_SNAPSHOT=true` for that reason.
 
 ## Run one problem
 
@@ -120,10 +120,10 @@ importing it by package name, so this project does not have to be installed ther
 
 ```bash
 cd /var/lib/aiopslab/src/AIOpsLab
-poetry run python /path/to/kira/scripts/aiopslab-driver.py run \
+poetry run python /path/to/maver/scripts/aiopslab-driver.py run \
   --problem noop_detection_hotel_reservation-1 \
   --bridge-token-file /var/lib/aiopslab/agent-config/bridge-token \
-  --results-dir /var/lib/aiopslab/results/kira/noop_detection_hotel_reservation-1
+  --results-dir /var/lib/aiopslab/results/maver/noop_detection_hotel_reservation-1
 ```
 
 It prints the AIOpsLab session, the agent's incident id, the submitted action and the
@@ -132,7 +132,7 @@ harness's outcome, and exits 1 on any refusal the sweep should record.
 Before paying for a deployment, check the host:
 
 ```bash
-poetry run python /path/to/kira/scripts/aiopslab-driver.py doctor \
+poetry run python /path/to/maver/scripts/aiopslab-driver.py doctor \
   --bridge-token-file /var/lib/aiopslab/agent-config/bridge-token
 ```
 
@@ -143,7 +143,7 @@ has failed on a host at some point looking like something else.
 ## Run a sweep
 
 ```bash
-poetry run python /path/to/kira/scripts/aiopslab-driver.py sweep \
+poetry run python /path/to/maver/scripts/aiopslab-driver.py sweep \
   --sweep-dir /var/lib/aiopslab/results/sweeps/qwen36-ma-v-20260907 \
   --bridge-token-file /var/lib/aiopslab/agent-config/bridge-token
 ```
@@ -176,7 +176,7 @@ Detached, with a watcher on the side:
 
 ```bash
 tmux new-session -d -s aiopslab-sweep "cd /var/lib/aiopslab/src/AIOpsLab && \
-  poetry run python /path/to/kira/scripts/aiopslab-driver.py sweep \
+  poetry run python /path/to/maver/scripts/aiopslab-driver.py sweep \
   --sweep-dir /var/lib/aiopslab/results/sweeps/qwen36-ma-v-20260907 \
   --bridge-token-file /var/lib/aiopslab/agent-config/bridge-token 2>&1 | \
   tee -a /var/lib/aiopslab/results/sweeps/qwen36-ma-v-20260907/console.log"
@@ -205,7 +205,7 @@ two arms.
   sweep.log                       the sweep's own log
   results/<problem>/
     <AIOpsLab's own result JSON>  the graded outcome; the sweep reads it and nothing else
-    kira-submission.json          what was asked of the agent, and what was submitted
+    maver-submission.json          what was asked of the agent, and what was submitted
     bridge.log                    one JSON line per cluster action, from the host side
 ```
 
@@ -231,7 +231,7 @@ and the duration. Not the arguments or the output, which are large and are alrea
 agent's audit log; the point is a record independent of the process being audited. The
 prototype discarded this entirely.
 
-`kira-submission.json` holds the alert as posted, the terminal incident record, the
+`maver-submission.json` holds the alert as posted, the terminal incident record, the
 encoded answer, and — for the analysis task — the answer's provenance: `source` is
 `model`, `normalized` or `fallback`, and `rule` names the hand-written rule when one
 overrode the model's classification. **An analysis accuracy reported without that split

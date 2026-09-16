@@ -2,13 +2,13 @@ import pathlib
 
 import pytest
 
-from kira.audit.journal import Journal, ListSink
-from kira.audit.store_sink import StoreSink
-from kira.contracts.events import PolicyDecisionEvent, ToolCallEvent
-from kira.llm.types import ToolResult
-from kira.memory.factory import build_storage
-from kira.memory.ports import AgentRunRecord
-from kira.middleware.authority import (
+from maver.audit.journal import Journal, ListSink
+from maver.audit.store_sink import StoreSink
+from maver.contracts.events import PolicyDecisionEvent, ToolCallEvent
+from maver.llm.types import ToolResult
+from maver.memory.factory import build_storage
+from maver.memory.ports import AgentRunRecord
+from maver.middleware.authority import (
     ActionRequest,
     ApprovalPending,
     Authority,
@@ -16,13 +16,13 @@ from kira.middleware.authority import (
     Decision,
     DenyAll,
 )
-from kira.middleware.base import ToolRequest
-from kira.middleware.write_gate import WriteGate
-from kira.settings.authority import AuthorityRule, AuthoritySettings
-from kira.settings.groups import ServerSettings, ToolSettings
-from kira.settings.root import Settings
-from kira.tools import kubernetes  # noqa: F401 - registers the kubectl policy
-from kira.tools.policy import policy_for
+from maver.middleware.base import ToolRequest
+from maver.middleware.write_gate import WriteGate
+from maver.settings.authority import AuthorityRule, AuthoritySettings
+from maver.settings.groups import ServerSettings, ToolSettings
+from maver.settings.root import Settings
+from maver.tools import kubernetes  # noqa: F401 - registers the kubectl policy
+from maver.tools.policy import policy_for
 
 DISPATCHED = "dispatched"
 

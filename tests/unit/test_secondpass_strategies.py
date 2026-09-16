@@ -13,11 +13,11 @@ from typing import Any, cast
 
 import pytest
 
-from kira.audit.journal import Journal, ListSink
-from kira.contracts.artifacts import RootCause
-from kira.contracts.state import IncidentState
-from kira.memory.ports import SearchHit, SearchScope
-from kira.secondpass import (
+from maver.audit.journal import Journal, ListSink
+from maver.contracts.artifacts import RootCause
+from maver.contracts.state import IncidentState
+from maver.memory.ports import SearchHit, SearchScope
+from maver.secondpass import (
     ALLOWED_FAMILIES,
     NOMINATED_ASSIGNMENT,
     QUALITY_GATED_PRECEDENT,
@@ -41,11 +41,11 @@ from kira.secondpass import (
     render_precedents,
     validate_nomination,
 )
-from kira.secondpass.strategies import _COMPOSITIONS
-from kira.settings.groups import MemorySettings, SecondPassSettings
-from kira.settings.profiles import load_profile
+from maver.secondpass.strategies import _COMPOSITIONS
+from maver.settings.groups import MemorySettings, SecondPassSettings
+from maver.settings.profiles import load_profile
 
-PROMPTS = pathlib.Path(__file__).resolve().parents[2] / "src" / "kira" / "prompts" / "secondpass"
+PROMPTS = pathlib.Path(__file__).resolve().parents[2] / "src" / "maver" / "prompts" / "secondpass"
 SAMPLING = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models")).sampling
 
 # SHA-256 of each asset as it was carried over from the prototype on branch

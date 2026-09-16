@@ -17,15 +17,15 @@ import json
 import pathlib
 from typing import Any
 
-from kira.adapters.base import RoleOverlay
-from kira.audit.journal import ListSink
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.memory.factory import build_storage
-from kira.orchestration.runner import Deployment, run_incident
-from kira.roles.policy import control
-from kira.settings.groups import MemorySettings, PipelineSettings, ServerSettings, VerifySettings
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
+from maver.adapters.base import RoleOverlay
+from maver.audit.journal import ListSink
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.memory.factory import build_storage
+from maver.orchestration.runner import Deployment, run_incident
+from maver.roles.policy import control
+from maver.settings.groups import MemorySettings, PipelineSettings, ServerSettings, VerifySettings
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 

@@ -16,12 +16,12 @@ import httpx
 import pytest
 import respx
 
-from kira.adapters.aiopslab.transport import AiopsLabTransport
-from kira.audit.journal import Journal
-from kira.tools.context import ToolContext
-from kira.tools.metrics import _parse_alerts
-from kira.tools.toolsets import build_toolset
-from kira.tools.workspace import SessionWorkspace
+from maver.adapters.aiopslab.transport import AiopsLabTransport
+from maver.audit.journal import Journal
+from maver.tools.context import ToolContext
+from maver.tools.metrics import _parse_alerts
+from maver.tools.toolsets import build_toolset
+from maver.tools.workspace import SessionWorkspace
 
 BRIDGE = "http://127.0.0.1:18099"
 ACTION = f"{BRIDGE}/v1/action"
@@ -66,7 +66,7 @@ async def test_an_action_is_one_post_carrying_the_body_the_bridge_dispatches_on(
     request = sent(bridge)
     assert str(request.url) == ACTION
     assert request.headers["Authorization"] == f"Bearer {TOKEN}"
-    assert request.headers["X-Kira-Session"] == SESSION
+    assert request.headers["X-MAVER-Session"] == SESSION
     assert json.loads(request.content) == {
         "server": "prometheus",
         "tool": "get_metrics",
@@ -82,7 +82,7 @@ async def test_a_session_the_adapter_has_not_bound_yet_sends_no_correlation_head
     """An empty header is worse than none: it joins the bridge's log to nothing."""
     await transport().query_alerts()
 
-    assert "X-Kira-Session" not in sent(bridge).headers
+    assert "X-MAVER-Session" not in sent(bridge).headers
 
 
 async def test_kubectl_arrives_as_the_whole_command_line_it_was_tokenised_from(

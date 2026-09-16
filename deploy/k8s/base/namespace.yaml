@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: kira
+  name: maver
   labels:
-    app.kubernetes.io/name: kira
+    app.kubernetes.io/name: maver
     # The pod runs unprivileged, as uid 1000, with a read-only root filesystem and no
     # capabilities. Enforcing the restricted standard here means a future edit that
     # loosens the pod's security context is rejected at admission rather than deployed.

@@ -4,13 +4,13 @@ import pathlib
 
 import pytest
 
-from kira.audit.journal import Journal, ListSink
-from kira.contracts.events import InterventionEvent, SubmissionEvent, ToolCallEvent
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, ToolResult, ToolSpec, Usage
-from kira.middleware.authority import ApprovalPending
-from kira.middleware.base import MiddlewareStack, ToolHandler, ToolRequest
-from kira.roles.loop import run_until_submit
-from kira.roles.policy import (
+from maver.audit.journal import Journal, ListSink
+from maver.contracts.events import InterventionEvent, SubmissionEvent, ToolCallEvent
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, ToolResult, ToolSpec, Usage
+from maver.middleware.authority import ApprovalPending
+from maver.middleware.base import MiddlewareStack, ToolHandler, ToolRequest
+from maver.roles.loop import run_until_submit
+from maver.roles.policy import (
     LoopLimits,
     compact_rescue_context,
     control,
@@ -19,12 +19,12 @@ from kira.roles.policy import (
     no_tool_nudge_message,
     repeat_breaker_message,
 )
-from kira.settings.groups import PipelineSettings, RuntimeSettings
-from kira.tools.context import ToolContext
-from kira.tools.errors import call_failed
-from kira.tools.execution import _run
-from kira.tools.registry import ToolOutput
-from kira.tools.workspace import SessionWorkspace
+from maver.settings.groups import PipelineSettings, RuntimeSettings
+from maver.tools.context import ToolContext
+from maver.tools.errors import call_failed
+from maver.tools.execution import _run
+from maver.tools.registry import ToolOutput
+from maver.tools.workspace import SessionWorkspace
 
 FIXTURE = (
     pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "prototype_control_messages.json"

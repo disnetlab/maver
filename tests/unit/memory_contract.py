@@ -34,10 +34,10 @@ from typing import Any, Protocol
 
 import pytest
 
-from kira.contracts.lifecycle import LifecycleState, RunStatus
-from kira.memory.backends.schema import STORE_SCHEMA_VERSION, StoreSchemaTooNew
-from kira.memory.lifecycle import IllegalTransition
-from kira.memory.ports import (
+from maver.contracts.lifecycle import LifecycleState, RunStatus
+from maver.memory.backends.schema import STORE_SCHEMA_VERSION, StoreSchemaTooNew
+from maver.memory.lifecycle import IllegalTransition
+from maver.memory.ports import (
     AgentRunEventDraft,
     AgentRunRecord,
     ApprovalRecord,
@@ -47,8 +47,8 @@ from kira.memory.ports import (
     SessionStore,
     TextSearch,
 )
-from kira.memory.ranking import Bm25Ranker
-from kira.memory.retrieval import Retriever
+from maver.memory.ranking import Bm25Ranker
+from maver.memory.retrieval import Retriever
 
 __all__ = [
     "MemoryStoreContract",
@@ -153,7 +153,7 @@ class MemoryStoreContract:
             session = store.create_session({"name": "PodCrashLooping"})
 
         with (
-            caplog.at_level(logging.INFO, logger="kira.memory.backends.schema"),
+            caplog.at_level(logging.INFO, logger="maver.memory.backends.schema"),
             closing(reopen()) as reopened,
         ):
             assert reopened.schema_version == STORE_SCHEMA_VERSION
@@ -627,7 +627,7 @@ class MemoryStoreContract:
     ) -> None:
         """One normaliser, so a backend that skipped it builds a different pool.
 
-        This is the whole reason :mod:`kira.memory.lexemes` exists. Before it, an
+        This is the whole reason :mod:`maver.memory.lexemes` exists. Before it, an
         embedded deployment answered "pod crash" with nothing where the server backend
         answered with the record below, and answered a query of nothing but stopwords
         with the entire corpus where the server answered with none of it.

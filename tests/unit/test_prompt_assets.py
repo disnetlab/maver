@@ -20,7 +20,7 @@ pytestmark = pytest.mark.parity
 """Prototype-pinned throughout: see the module docstring for where the data came from."""
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SHIPPED = REPO_ROOT / "src" / "kira" / "prompts"
+SHIPPED = REPO_ROOT / "src" / "maver" / "prompts"
 
 # An environment adapter ships its own prompts inside its own package, read through the
 # same loader. They are migrated text like every other asset, so they are walked here
@@ -28,7 +28,7 @@ SHIPPED = REPO_ROOT / "src" / "kira" / "prompts"
 # no recorded prototype source would otherwise be the one prompt nothing holds to the
 # migration rule.
 ADAPTER_TREES = {
-    Path("adapters", "aiopslab"): REPO_ROOT / "src" / "kira" / "adapters" / "aiopslab" / "prompts"
+    Path("adapters", "aiopslab"): REPO_ROOT / "src" / "maver" / "adapters" / "aiopslab" / "prompts"
 }
 
 PROTOTYPE = prototype_root() / "agent" / "prompts"
@@ -130,7 +130,7 @@ def _prototype_source(relative: Path) -> Path:
             return PROTOTYPE / "runtime" / "aiopslab" / filename
         case ("secondpass", filename):
             # The blinded selector was borrowed from the counterfactual fork arm, which
-            # Kira drops. Its two prompts are live second-pass code, so they move here
+            # MAVER drops. Its two prompts are live second-pass code, so they move here
             # while the rest of that module dies with the arm.
             if filename.startswith("selector_"):
                 return PROTOTYPE / "runtime" / "counterfactual" / filename

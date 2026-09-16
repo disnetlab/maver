@@ -13,20 +13,20 @@ from typing import Any
 
 import pytest
 
-from kira.audit.journal import Journal, ListSink
-from kira.contracts.artifacts import Plan, RootCause
-from kira.contracts.events import InterventionEvent
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.middleware.base import MiddlewareStack
-from kira.prompts.loader import read_runtime
-from kira.roles import execution
-from kira.roles.base import RoleContext
-from kira.settings.groups import MemorySettings, PipelineSettings
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
-from kira.tools.context import ToolContext
-from kira.tools.toolsets import build_toolset
-from kira.tools.workspace import SessionWorkspace
+from maver.audit.journal import Journal, ListSink
+from maver.contracts.artifacts import Plan, RootCause
+from maver.contracts.events import InterventionEvent
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.middleware.base import MiddlewareStack
+from maver.prompts.loader import read_runtime
+from maver.roles import execution
+from maver.roles.base import RoleContext
+from maver.settings.groups import MemorySettings, PipelineSettings
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
+from maver.tools.context import ToolContext
+from maver.tools.toolsets import build_toolset
+from maver.tools.workspace import SessionWorkspace
 
 PROFILES = {
     name: load_profile(name, pathlib.Path("configs/models"))

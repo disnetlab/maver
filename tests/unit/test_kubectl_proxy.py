@@ -23,8 +23,8 @@ from typing import Any
 import pytest
 from prototype_tree import prototype_root
 
-from kira.tools import kubectl_proxy
-from kira.tools.kubectl_proxy import (
+from maver.tools import kubectl_proxy
+from maver.tools.kubectl_proxy import (
     ProxyRoute,
     apply_proxy_env,
     check_proxy,
@@ -48,7 +48,7 @@ _MESSAGE_RETURNS = {
     "_authorize",
     "_reject_proxy_watch",
     "_reject_interactive_flags",
-    # Kira's, which return the message for one caller to print, so that the `error:`
+    # MAVER's, which return the message for one caller to print, so that the `error:`
     # prefix is added in one place rather than in each of them.
     "_authorisation_refusal",
     "_watch_refusal",
@@ -94,7 +94,7 @@ def _templates(path: pathlib.Path) -> set[str]:
     """Every model-facing string a module builds, as a template.
 
     The ``error:`` prefix is stripped because the prototype wrote it into each string and
-    Kira adds it in one place, which is a difference in where the prefix is added and not
+    MAVER adds it in one place, which is a difference in where the prefix is added and not
     in what the model reads.
     """
     found: set[str | None] = set()
@@ -145,7 +145,7 @@ def shim_env(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> pathlib
     monkeypatch.setenv("KUBECTL_REAL_BINARY", stub_kubectl(tmp_path))
     monkeypatch.setenv("KUBECTL_EXEC_TIMEOUT_SECONDS", "120")
     monkeypatch.setenv("AGENT_STAGE", "execution")
-    monkeypatch.setenv("KIRA_AUTHORITY_MODE", "auto")
+    monkeypatch.setenv("MAVER_AUTHORITY_MODE", "auto")
     return tmp_path
 
 
@@ -231,7 +231,7 @@ def test_a_write_is_refused_where_a_human_approves_writes(
     answers ``prompt`` has said writes are a human's decision, and a route that ignored
     that would be the whole gate's exception.
     """
-    monkeypatch.setenv("KIRA_AUTHORITY_MODE", "prompt")
+    monkeypatch.setenv("MAVER_AUTHORITY_MODE", "prompt")
 
     assert main(["delete", "pod/x", "-n", "shop"]) == 1
     assert capsys.readouterr().err == f"error: {AUTHORITY_REFUSAL.format('prompt')}\n"
@@ -479,11 +479,11 @@ def test_the_sandbox_environment_puts_the_shim_in_front_of_the_real_kubectl(
     assert env["KUBECTL_EXEC_TIMEOUT_SECONDS"] == "120"
     assert env["KUBECTL_REAL_BINARY"] == real
     assert env["AGENT_STAGE"] == "rca"
-    assert env["KIRA_AUTHORITY_MODE"] == "auto"
+    assert env["MAVER_AUTHORITY_MODE"] == "auto"
 
     script = (shim / "kubectl").read_text(encoding="utf-8")
     assert script.startswith("#!/bin/sh\n")
-    assert script.endswith(f'exec {sys.executable} -m kira.tools.kubectl_proxy "$@"\n')
+    assert script.endswith(f'exec {sys.executable} -m maver.tools.kubectl_proxy "$@"\n')
     assert os.access(shim / "kubectl", os.X_OK)
 
 

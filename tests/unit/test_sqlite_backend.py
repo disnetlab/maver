@@ -15,10 +15,10 @@ from collections.abc import Callable, Iterator
 import pytest
 from memory_contract import MemoryStoreContract, OperationalStore, a_record
 
-from kira.memory.backends.schema import STORE_SCHEMA_VERSION
-from kira.memory.backends.sqlite import SqliteRecordIndex, SqliteStore
-from kira.memory.lexemes import lexemes
-from kira.memory.ports import TextSearch
+from maver.memory.backends.schema import STORE_SCHEMA_VERSION
+from maver.memory.backends.sqlite import SqliteRecordIndex, SqliteStore
+from maver.memory.lexemes import lexemes
+from maver.memory.ports import TextSearch
 
 _VERSION_TABLE = """
 CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL);
@@ -42,7 +42,7 @@ class TestSqliteBackend(MemoryStoreContract):
 
     @pytest.fixture
     def database(self, tmp_path: pathlib.Path) -> pathlib.Path:
-        return tmp_path / "kira.db"
+        return tmp_path / "maver.db"
 
     @pytest.fixture
     def reopen(self, database: pathlib.Path) -> Callable[[], SqliteStore]:
@@ -60,7 +60,7 @@ class TestSqliteBackend(MemoryStoreContract):
 
 def test_a_file_database_is_created_and_survives_reopening(tmp_path: pathlib.Path) -> None:
     """The one thing the contract cannot cover, because it runs against ":memory:"."""
-    path = tmp_path / "nested" / "kira.db"
+    path = tmp_path / "nested" / "maver.db"
 
     store = SqliteStore(path)
     session = store.create_session({"name": "PodCrashLooping"})
@@ -235,7 +235,7 @@ def test_an_unstamped_database_in_the_current_shape_is_stamped_and_left_alone(
         conn.commit()
 
     with (
-        caplog.at_level(logging.INFO, logger="kira.memory.backends.schema"),
+        caplog.at_level(logging.INFO, logger="maver.memory.backends.schema"),
         contextlib.closing(SqliteStore(path)) as reopened,
     ):
         assert reopened.schema_version == STORE_SCHEMA_VERSION

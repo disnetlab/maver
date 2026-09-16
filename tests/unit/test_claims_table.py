@@ -67,7 +67,7 @@ def test_every_cited_path_exists(pattern: pathlib.Path) -> None:
 
 
 def test_the_approval_caveat_survives_an_edit() -> None:
-    """The single most overstatable row. Kira ships the mechanism and tests it; no
+    """The single most overstatable row. MAVER ships the mechanism and tests it; no
     measured campaign ever put a request in front of a person, and a table that let
     that sentence be edited away would be claiming otherwise by omission."""
     assert "no request ever reached a person" in PROSE

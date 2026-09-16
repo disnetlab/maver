@@ -21,17 +21,17 @@ import subprocess
 
 import pytest
 
-from kira.audit.journal import Journal, ListSink
-from kira.settings.groups import ToolSettings, TransportSettings
-from kira.tools.context import ToolContext
-from kira.tools.errors import call_failed
-from kira.tools.metrics import _namespace_is_missing
-from kira.tools.scope import IncidentScope
-from kira.tools.snapshot import namespace_snapshot
-from kira.tools.transport.direct import direct_transport
-from kira.tools.workspace import SessionWorkspace
+from maver.audit.journal import Journal, ListSink
+from maver.settings.groups import ToolSettings, TransportSettings
+from maver.tools.context import ToolContext
+from maver.tools.errors import call_failed
+from maver.tools.metrics import _namespace_is_missing
+from maver.tools.scope import IncidentScope
+from maver.tools.snapshot import namespace_snapshot
+from maver.tools.transport.direct import direct_transport
+from maver.tools.workspace import SessionWorkspace
 
-ABSENT = "kira-definitely-not-a-namespace"
+ABSENT = "maver-definitely-not-a-namespace"
 
 _PROBE_TIMEOUT_S = 5
 

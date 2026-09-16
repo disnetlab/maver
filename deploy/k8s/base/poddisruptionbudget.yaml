@@ -5,12 +5,12 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: kira
-  namespace: kira
+  name: maver
+  namespace: maver
   labels:
-    app.kubernetes.io/name: kira
+    app.kubernetes.io/name: maver
 spec:
   minAvailable: 0
   selector:
     matchLabels:
-      app.kubernetes.io/name: kira
+      app.kubernetes.io/name: maver

@@ -9,10 +9,10 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: kira-workspace
-  namespace: kira
+  name: maver-workspace
+  namespace: maver
   labels:
-    app.kubernetes.io/name: kira
+    app.kubernetes.io/name: maver
 spec:
   accessModes:
     - ReadWriteOnce

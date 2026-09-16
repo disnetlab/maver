@@ -8,14 +8,14 @@ from unittest import mock
 import pytest
 from typer.testing import CliRunner
 
-from kira import __version__
-from kira.api.app import build_deployment
-from kira.cli import app
-from kira.memory.factory import build_storage
-from kira.memory.ports import ApprovalRecord
-from kira.roles.registry import RoleRegistryError
-from kira.settings.groups import ServerSettings
-from kira.settings.root import Settings, load_settings
+from maver import __version__
+from maver.api.app import build_deployment
+from maver.cli import app
+from maver.memory.factory import build_storage
+from maver.memory.ports import ApprovalRecord
+from maver.roles.registry import RoleRegistryError
+from maver.settings.groups import ServerSettings
+from maver.settings.root import Settings, load_settings
 
 runner = CliRunner()
 
@@ -44,7 +44,7 @@ def test_the_configured_log_level_reaches_the_root_logger(
     """All four shipped deployment artifacts set this, the local overlay to DEBUG, and
     the server hardcoded INFO: an operator raised the level, restarted the pod and got
     the same output with nothing to say why."""
-    monkeypatch.setenv("KIRA_OBSERVABILITY__LOG_LEVEL", "DEBUG")
+    monkeypatch.setenv("MAVER_OBSERVABILITY__LOG_LEVEL", "DEBUG")
     root = logging.getLogger()
     # basicConfig is a no-op on a root that already has handlers, and the test runner
     # installs one. The server calls it on an untouched interpreter.
@@ -60,7 +60,7 @@ def test_approvals_read_and_decide_the_configured_store(
 ) -> None:
     """The default path is the store rather than the API, because that is the one that
     works from inside the pod with no port open."""
-    monkeypatch.setenv("KIRA_SERVER__WORKDIR", str(tmp_path))
+    monkeypatch.setenv("MAVER_SERVER__WORKDIR", str(tmp_path))
     storage = build_storage(Settings(server=ServerSettings(workdir=tmp_path)))
     storage.approvals.create_request(
         ApprovalRecord(
@@ -94,16 +94,16 @@ def test_approvals_read_and_decide_the_configured_store(
 def _unfilled_marker(tmp_path: pathlib.Path) -> dict[str, str]:
     (tmp_path / "prompts" / "roles").mkdir(parents=True)
     (tmp_path / "prompts" / "roles" / "rca.txt").write_text("{{TYPO_MARKER}}", encoding="utf-8")
-    return {"KIRA_PROMPTS__OVERRIDE_DIR": str(tmp_path / "prompts")}
+    return {"MAVER_PROMPTS__OVERRIDE_DIR": str(tmp_path / "prompts")}
 
 
 BROKEN_DEPLOYMENTS = {
     "an override declaring a marker nothing fills": _unfilled_marker,
-    "a ranker nothing registered": lambda _: {"KIRA_MEMORY__RANKER": "not-a-ranker"},
+    "a ranker nothing registered": lambda _: {"MAVER_MEMORY__RANKER": "not-a-ranker"},
     "a gate and delivery naming no composition": lambda _: {
-        "KIRA_MEMORY__SECOND_PASS__ENABLED": "true",
-        "KIRA_MEMORY__SECOND_PASS__GATE": "always",
-        "KIRA_MEMORY__SECOND_PASS__DELIVERY": "context",
+        "MAVER_MEMORY__SECOND_PASS__ENABLED": "true",
+        "MAVER_MEMORY__SECOND_PASS__GATE": "always",
+        "MAVER_MEMORY__SECOND_PASS__DELIVERY": "context",
     },
 }
 
@@ -116,7 +116,7 @@ def test_config_check_and_serve_share_validation(
     incident does. It ran a subset of what the server runs, so each of these printed ok
     and exit 0 on a configuration that crash-loops the pod, and the composition table was
     resolved inside the graph so it reached only the first incident."""
-    monkeypatch.setenv("KIRA_SERVER__WORKDIR", str(tmp_path / "workspace"))
+    monkeypatch.setenv("MAVER_SERVER__WORKDIR", str(tmp_path / "workspace"))
     for name, value in BROKEN_DEPLOYMENTS[case](tmp_path).items():
         monkeypatch.setenv(name, value)
 

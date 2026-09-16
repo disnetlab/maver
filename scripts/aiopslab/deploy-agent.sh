@@ -6,34 +6,34 @@
 # token for it arrives as a mounted file rather than an environment variable, so it is
 # not in `docker inspect` output or in this process's environment.
 #
-#   make image                                    # builds kira:local
-#   KIRA_MODEL_ENDPOINT=http://vllm.internal:8000/v1 \
+#   make image                                    # builds maver:local
+#   MAVER_MODEL_ENDPOINT=http://vllm.internal:8000/v1 \
 #     scripts/aiopslab/deploy-agent.sh
 #
 # The AIOpsLab adapter needs no packaging extra: its transport speaks HTTP to the bridge
 # with the client library the core already depends on. `make image-eval` is for SREGym.
 set -euo pipefail
 
-IMAGE="${AIOPSLAB_AGENT_IMAGE:-kira:local}"
-CONTAINER="${AIOPSLAB_AGENT_CONTAINER:-kira-aiopslab}"
+IMAGE="${AIOPSLAB_AGENT_IMAGE:-maver:local}"
+CONTAINER="${AIOPSLAB_AGENT_CONTAINER:-maver-aiopslab}"
 DATA_DIR="${AIOPSLAB_AGENT_DATA_DIR:-/var/lib/aiopslab/agent-workspace}"
 CONFIG_DIR="${AIOPSLAB_AGENT_CONFIG_DIR:-/var/lib/aiopslab/agent-config}"
 TOKEN_FILE="${CONFIG_DIR}/bridge-token"
-ENV_FILE="${CONFIG_DIR}/kira.env"
+ENV_FILE="${CONFIG_DIR}/maver.env"
 AGENT_URL="${AIOPSLAB_AGENT_URL:-http://127.0.0.1:8080}"
 # One arm name and one model profile, rather than the prototype's thirty-three flat
 # variables. Both files ship in the image, and the arm is what the run records.
 ARM="${AIOPSLAB_ARM:-ma-v}"
 MODEL_PROFILE="${AIOPSLAB_MODEL_PROFILE:-qwen3.6-35b-a3b}"
-MODEL_ENDPOINT="${KIRA_MODEL_ENDPOINT:-}"
-MODEL_API_KEY="${KIRA_MODEL_API_KEY:-EMPTY}"
+MODEL_ENDPOINT="${MAVER_MODEL_ENDPOINT:-}"
+MODEL_API_KEY="${MAVER_MODEL_API_KEY:-EMPTY}"
 BRIDGE_URL="${AIOPSLAB_BRIDGE_URL:-http://127.0.0.1:1819}"
 BRIDGE_TIMEOUT_S="${AIOPSLAB_BRIDGE_TIMEOUT_S:-180}"
 RUNNER_UID="${SUDO_UID:-$(id -u)}"
 RUNNER_GID="${SUDO_GID:-$(id -g)}"
 
 if [[ -z "${MODEL_ENDPOINT}" ]]; then
-  printf 'set KIRA_MODEL_ENDPOINT to the private model endpoint, e.g. http://vllm.internal:8000/v1\n' >&2
+  printf 'set MAVER_MODEL_ENDPOINT to the private model endpoint, e.g. http://vllm.internal:8000/v1\n' >&2
   exit 2
 fi
 if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
@@ -54,26 +54,26 @@ fi
 chown "${RUNNER_UID}:${RUNNER_GID}" "${TOKEN_FILE}"
 chmod 600 "${TOKEN_FILE}"
 
-TEMP_ENV="$(mktemp "${CONFIG_DIR}/kira.env.XXXXXX")"
+TEMP_ENV="$(mktemp "${CONFIG_DIR}/maver.env.XXXXXX")"
 trap 'rm -f "${TEMP_ENV}"' EXIT
 chmod 600 "${TEMP_ENV}"
 {
   printf '%s\n' \
-    'KIRA_SERVER__WORKDIR=/workspace' \
-    "KIRA_ARM=${ARM}" \
-    "KIRA_MODEL__PROFILE=${MODEL_PROFILE}" \
-    "KIRA_MODEL__ENDPOINT_OVERRIDE=${MODEL_ENDPOINT}" \
-    "KIRA_MODEL__API_KEY=${MODEL_API_KEY}" \
-    'KIRA_INTAKE__ADAPTERS=aiopslab' \
-    'KIRA_ADAPTERS__AIOPSLAB__ENABLED=true' \
-    "KIRA_ADAPTERS__AIOPSLAB__BRIDGE_URL=${BRIDGE_URL}" \
-    'KIRA_ADAPTERS__AIOPSLAB__BRIDGE_TOKEN_FILE=/run/secrets/aiopslab-bridge-token' \
-    "KIRA_ADAPTERS__AIOPSLAB__BRIDGE_TIMEOUT_S=${BRIDGE_TIMEOUT_S}" \
-    'KIRA_PIPELINE__AUTO_SNAPSHOT=true' \
-    'KIRA_OBSERVABILITY__LOG_LEVEL=INFO' \
-    'KIRA_AUTHORITY__MODE=auto' \
-    'KIRA_SERVER__ENVIRONMENT=local' \
-    'KIRA_SERVER__HOST=127.0.0.1'
+    'MAVER_SERVER__WORKDIR=/workspace' \
+    "MAVER_ARM=${ARM}" \
+    "MAVER_MODEL__PROFILE=${MODEL_PROFILE}" \
+    "MAVER_MODEL__ENDPOINT_OVERRIDE=${MODEL_ENDPOINT}" \
+    "MAVER_MODEL__API_KEY=${MODEL_API_KEY}" \
+    'MAVER_INTAKE__ADAPTERS=aiopslab' \
+    'MAVER_ADAPTERS__AIOPSLAB__ENABLED=true' \
+    "MAVER_ADAPTERS__AIOPSLAB__BRIDGE_URL=${BRIDGE_URL}" \
+    'MAVER_ADAPTERS__AIOPSLAB__BRIDGE_TOKEN_FILE=/run/secrets/aiopslab-bridge-token' \
+    "MAVER_ADAPTERS__AIOPSLAB__BRIDGE_TIMEOUT_S=${BRIDGE_TIMEOUT_S}" \
+    'MAVER_PIPELINE__AUTO_SNAPSHOT=true' \
+    'MAVER_OBSERVABILITY__LOG_LEVEL=INFO' \
+    'MAVER_AUTHORITY__MODE=auto' \
+    'MAVER_SERVER__ENVIRONMENT=local' \
+    'MAVER_SERVER__HOST=127.0.0.1'
 } > "${TEMP_ENV}"
 install -m 600 -o "${RUNNER_UID}" -g "${RUNNER_GID}" "${TEMP_ENV}" "${ENV_FILE}"
 # The last three lines above belong together. Nobody is waiting to approve a write during
@@ -85,7 +85,7 @@ install -m 600 -o "${RUNNER_UID}" -g "${RUNNER_GID}" "${TEMP_ENV}" "${ENV_FILE}"
 #
 # The snapshot is named although it is the default. The prototype's deploy script asked
 # for it to be off under a name the prototype never read, so every archived AIOpsLab run
-# had it on; Kira honours that old name, so an agent.env inherited from the prototype
+# had it on; MAVER honours that old name, so an agent.env inherited from the prototype
 # would now switch it off and the runs would stop being comparable. Naming the canonical
 # setting here is what keeps an inherited alias from deciding.
 

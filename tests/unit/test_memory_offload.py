@@ -15,10 +15,10 @@ never come, so the call fails on its own clock instead of hanging the suite.
 import asyncio
 from typing import Any
 
-from kira.audit.journal import Journal, ListSink
-from kira.memory.ports import SessionRecord
-from kira.tools.context import ToolContext
-from kira.tools.memory import memory_search, open_memory, session_trace_summary
+from maver.audit.journal import Journal, ListSink
+from maver.memory.ports import SessionRecord
+from maver.tools.context import ToolContext
+from maver.tools.memory import memory_search, open_memory, session_trace_summary
 
 STALLED = 2.0
 """Seconds to wait for the loop before calling it stalled. Paid only when it is."""

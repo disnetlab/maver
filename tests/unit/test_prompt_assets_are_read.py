@@ -16,7 +16,7 @@ import ast
 import pathlib
 import re
 
-SRC = pathlib.Path(__file__).resolve().parents[2] / "src" / "kira"
+SRC = pathlib.Path(__file__).resolve().parents[2] / "src" / "maver"
 PROMPTS = SRC / "prompts"
 LOADER = PROMPTS / "loader.py"
 

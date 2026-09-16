@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 #
-# Kira's runtime image.
+# MAVER's runtime image.
 #
 #   uv-stage      the pinned uv binary
 #   kubectl-stage downloads and checksums kubectl, so curl never enters the runtime
@@ -66,16 +66,16 @@ FROM ${BASE_IMAGE} AS runtime
 
 ARG VERSION=0.0.0+dev
 ARG REVISION=unknown
-LABEL org.opencontainers.image.title="Kira" \
-      org.opencontainers.image.description="Kubernetes Incident Recovery Agent" \
+LABEL org.opencontainers.image.title="MAVER" \
+      org.opencontainers.image.description="Multi-Agent Verification and Experience-informed Recovery" \
       org.opencontainers.image.source="https://github.com/evenodderguy/kira" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}"
 
 RUN set -eux; \
-    groupadd --gid 1000 kira; \
-    useradd --uid 1000 --gid 1000 --create-home --home-dir /home/kira --shell /usr/sbin/nologin kira; \
+    groupadd --gid 1000 maver; \
+    useradd --uid 1000 --gid 1000 --create-home --home-dir /home/maver --shell /usr/sbin/nologin maver; \
     install -d -o 1000 -g 1000 /workspace
 
 COPY --from=kubectl-stage /out-kubectl /usr/local/bin/kubectl
@@ -85,18 +85,18 @@ COPY --from=builder --chown=1000:1000 /src/configs /app/configs
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    KIRA_SERVER__HOST=0.0.0.0 \
-    KIRA_SERVER__PORT=8080 \
-    KIRA_SERVER__WORKDIR=/workspace \
-    KIRA_SERVER__ENVIRONMENT=production \
-    KIRA_MODEL__PROFILE_DIR=/app/configs/models
+    MAVER_SERVER__HOST=0.0.0.0 \
+    MAVER_SERVER__PORT=8080 \
+    MAVER_SERVER__WORKDIR=/workspace \
+    MAVER_SERVER__ENVIRONMENT=production \
+    MAVER_MODEL__PROFILE_DIR=/app/configs/models
 
 # The label's own value, where the running process can read it: /healthz reports it, so
 # a deploy can assert that the container answering is the one it just built rather than
 # a stale container nobody recreated. Threaded through a second time because a label is
 # metadata about the image and not something the process inside it can see.
 ARG REVISION
-ENV KIRA_REVISION=${REVISION}
+ENV MAVER_REVISION=${REVISION}
 
 WORKDIR /app
 USER 1000:1000
@@ -113,4 +113,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
 # that wants to be explicit about this must set both `command` and `args`: Kubernetes
 # maps `args` alone onto an empty entrypoint, and the container would try to exec
 # "serve".
-CMD ["kira", "serve"]
+CMD ["maver", "serve"]

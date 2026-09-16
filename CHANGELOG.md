@@ -1,6 +1,6 @@
 # Changelog
 
-Schema changes and model-facing text. `SCHEMA_VERSION` in `src/kira/contracts/__init__.py` versions the
+Schema changes and model-facing text. `SCHEMA_VERSION` in `src/maver/contracts/__init__.py` versions the
 submission schemas and the event contract together, and every run records it in its
 configuration snapshot.
 
@@ -10,6 +10,15 @@ with the configuration. The procedure is in STYLE_GUIDE.md, "Typed artifacts are
 frozen".
 
 ## Breaking changes
+
+### MAVER naming
+
+- Rename the Python package, CLI, entry-point groups, and deployment examples from
+  Kira to MAVER. Use `maver serve` and `MAVER_` settings. Old `KIRA_` settings remain
+  readable, with the new spelling taking precedence. Existing PostgreSQL data and
+  Compose workspace volumes keep their physical names. Frozen prompts and arm files
+  are unchanged; the rename changes no recovery policy.
+
 
 ### Schema version 1
 
@@ -31,9 +40,9 @@ frozen".
   `eval`, `timeout 5 kubectl` and a script wrapping any of them all reached the cluster
   outside the kubectl tool's screen, the approval gate's selectors and the
   ServiceAccount's RBAC. Every simple command in the line must now start with one of the
-  host binaries named in `src/kira/tools/host.py`, and the tool's description says so.
+  host binaries named in `src/maver/tools/host.py`, and the tool's description says so.
   The refusal surface is wider than the archive's, and no measured run enabled the tool:
-  `KIRA_TOOLS__HOST_RECOVERY_NODES` was empty in every campaign, so every call returned
+  `MAVER_TOOLS__HOST_RECOVERY_NODES` was empty in every campaign, so every call returned
   the "not an allowed recovery node" refusal before reaching a command.
 
 - **`ssh_exec` is offered whether or not a recovery node is configured.** The toolset
@@ -95,7 +104,7 @@ number, so a change to how it is built belongs here rather than in the commit lo
   stopwords matched the whole SQLite corpus and none of the PostgreSQL one. An adopter
   who will not run PostgreSQL still has to be able to reproduce the retriever that was
   measured, so both backends now index and query the output of one Python normaliser
-  (`kira.memory.lexemes`) and their pools are equal by construction. On the campaign's
+  (`maver.memory.lexemes`) and their pools are equal by construction. On the campaign's
   116-record corpus the two return identical candidate sets for all 30 queries tried.
 
   Against the pool the old PostgreSQL path built, 15 of those 30 queries are unchanged
@@ -145,7 +154,7 @@ number, so a change to how it is built belongs here rather than in the commit lo
 ## Storage
 
 Where a record is kept, as opposed to what it says. `STORE_SCHEMA_VERSION` in
-`src/kira/memory/backends/schema.py` versions the store layout — the tables, columns and
+`src/maver/memory/backends/schema.py` versions the store layout — the tables, columns and
 indexes a database holds — and is a different number from `SCHEMA_VERSION` above, which
 versions the submission schemas and the event contract.
 
@@ -201,7 +210,7 @@ change a reported number are recorded here rather than left to the commit log.
   assigns both fields when the model wrote no classification at all. The rules are kept,
   because AIOpsLab's four levels and six fault types are its vocabulary and the agent's
   `RootCause` does not have them, but every episode now writes `source` (`model`,
-  `normalized` or `fallback`) and the rule's name into `kira-submission.json` beside the
+  `normalized` or `fallback`) and the rule's name into `maver-submission.json` beside the
   graded answer. An analysis accuracy quoted without that split reports the rules'
   accuracy as the agent's. The prototype had the rules and not the accounting.
 

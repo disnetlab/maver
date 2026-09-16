@@ -23,34 +23,34 @@ import respx
 from test_kubectl_proxy_route import ALL_CAPABILITIES
 from test_kubectl_proxy_route import context as tool_context
 
-from kira.adapters.base import EnvironmentAdapter, EpisodeContext
-from kira.adapters.registry import get_adapter
-from kira.adapters.sregym import SREGymAdapter, SregymConfig
-from kira.adapters.sregym import api as sregym_api
-from kira.adapters.sregym.episode import reduce_feedback
-from kira.adapters.sregym.evidence import EvidenceFilter
-from kira.adapters.sregym.signal import build_diagnosis_solution, build_signal
-from kira.adapters.sregym.tools import adapter_tools
-from kira.adapters.sregym.transport import McpTransport
-from kira.api.app import create_app
-from kira.audit.journal import Journal, ListSink
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.memory.factory import build_storage
-from kira.memory.ports import SessionMemory
-from kira.orchestration.episode import EpisodeStart
-from kira.orchestration.runner import Deployment
-from kira.settings.groups import (
+from maver.adapters.base import EnvironmentAdapter, EpisodeContext
+from maver.adapters.registry import get_adapter
+from maver.adapters.sregym import SREGymAdapter, SregymConfig
+from maver.adapters.sregym import api as sregym_api
+from maver.adapters.sregym.episode import reduce_feedback
+from maver.adapters.sregym.evidence import EvidenceFilter
+from maver.adapters.sregym.signal import build_diagnosis_solution, build_signal
+from maver.adapters.sregym.tools import adapter_tools
+from maver.adapters.sregym.transport import McpTransport
+from maver.api.app import create_app
+from maver.audit.journal import Journal, ListSink
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.memory.factory import build_storage
+from maver.memory.ports import SessionMemory
+from maver.orchestration.episode import EpisodeStart
+from maver.orchestration.runner import Deployment
+from maver.settings.groups import (
     MemorySettings,
     ServerSettings,
     ToolSettings,
     TransportSettings,
     VerifySettings,
 )
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
-from kira.tools.kubectl_proxy import ProxyRoute
-from kira.tools.toolsets import build_toolset
-from kira.tools.workspace import SessionWorkspace
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
+from maver.tools.kubectl_proxy import ProxyRoute
+from maver.tools.toolsets import build_toolset
+from maver.tools.workspace import SessionWorkspace
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 
@@ -405,11 +405,11 @@ async def test_each_tool_call_opens_and_closes_its_own_connection(
     those connections, because it is what the rollback journal is keyed by."""
     opened: list[str] = []
     monkeypatch.setattr(
-        "kira.adapters.sregym.transport.sse_client",
+        "maver.adapters.sregym.transport.sse_client",
         lambda url, headers, timeout, sse_read_timeout: _Connection(opened, headers),
     )
     monkeypatch.setattr(
-        "kira.adapters.sregym.transport.ClientSession", lambda read, write: _Session(opened)
+        "maver.adapters.sregym.transport.ClientSession", lambda read, write: _Session(opened)
     )
 
     transport = McpTransport("http://mcp:9954")
@@ -430,7 +430,7 @@ async def test_a_transport_failure_is_a_result_the_loop_can_read(
     def explode(**kwargs: Any) -> Any:
         raise ConnectionRefusedError("nothing listening")
 
-    monkeypatch.setattr("kira.adapters.sregym.transport.sse_client", lambda *a, **k: explode())
+    monkeypatch.setattr("maver.adapters.sregym.transport.sse_client", lambda *a, **k: explode())
     result = await McpTransport("http://mcp:9954").query_logs('{app="user"}')
     assert result.startswith("error: MCP loki.get_logs call failed: ConnectionRefusedError")
 
@@ -546,7 +546,7 @@ async def test_the_external_driver_gets_the_reply_and_the_submissions_it_expects
     with respx.mock:
         respx.route(host="localhost", port=8000).mock(side_effect=conductor.route)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://kira"
+            transport=httpx.ASGITransport(app=app), base_url="http://maver"
         ) as client:
             accepted = await client.post("/api/v1/sregym/episodes?submit=true")
             assert accepted.status_code == 202
@@ -576,9 +576,9 @@ def test_the_rollback_pair_is_offered_only_where_it_was_measured(tmp_path: pathl
     as much as their presence: the order a role sees its tools declared in was hand-tuned
     and every published measurement was taken with it, and in the configuration these
     came from they sat immediately before the submission tool."""
-    from kira.adapters.sregym.tools import adapter_tools  # noqa: PLC0415
-    from kira.tools.context import ToolContext  # noqa: PLC0415
-    from kira.tools.toolsets import build_toolset  # noqa: PLC0415
+    from maver.adapters.sregym.tools import adapter_tools  # noqa: PLC0415
+    from maver.tools.context import ToolContext  # noqa: PLC0415
+    from maver.tools.toolsets import build_toolset  # noqa: PLC0415
 
     ctx = ToolContext(
         transport=McpTransport("http://mcp:9954"),
@@ -605,9 +605,9 @@ def test_the_rollback_carries_the_policy_the_approval_gate_reads() -> None:
     every write tool is classified cannot see them. The rollback is a cluster write —
     one issued against the wrong state is as damaging as the change it reverses — and a
     tool the gate cannot find is refused in every stage, this one's own included."""
-    from kira.adapters.sregym.tools import adapter_tools  # noqa: PLC0415
-    from kira.settings.groups import ToolSettings  # noqa: PLC0415
-    from kira.tools.policy import ActionClass, policy_for  # noqa: PLC0415
+    from maver.adapters.sregym.tools import adapter_tools  # noqa: PLC0415
+    from maver.settings.groups import ToolSettings  # noqa: PLC0415
+    from maver.tools.policy import ActionClass, policy_for  # noqa: PLC0415
 
     names = [tool.spec.name for tool in adapter_tools()]
     assert names == ["rollback_command", "get_previous_rollbackable_cmd"]
@@ -882,7 +882,7 @@ async def test_the_episode_route_answers_to_the_same_admission_rules(
     )
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://kira"
+        transport=httpx.ASGITransport(app=app), base_url="http://maver"
     ) as client:
         assert (await client.post("/api/v1/sregym/episodes")).status_code == 202
         full = await client.post("/api/v1/sregym/episodes")
@@ -931,7 +931,7 @@ async def test_the_mcp_transport_refuses_watches_before_opening_a_session(
     def explode(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("a refused command must not reach the server")
 
-    monkeypatch.setattr("kira.adapters.sregym.transport.sse_client", explode)
+    monkeypatch.setattr("maver.adapters.sregym.transport.sse_client", explode)
 
     result = await McpTransport("http://mcp:9954").kubectl(argv)
 
@@ -962,7 +962,7 @@ async def test_an_ordinary_read_runs_the_local_kubectl_and_never_the_server(
     def explode(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("kubectl must not reach the MCP server")
 
-    monkeypatch.setattr("kira.adapters.sregym.transport.sse_client", explode)
+    monkeypatch.setattr("maver.adapters.sregym.transport.sse_client", explode)
 
     result = await McpTransport(
         "http://mcp:9954",

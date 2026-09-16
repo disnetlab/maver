@@ -13,28 +13,28 @@ from typing import Any
 
 import pytest
 
-from kira.audit.journal import Journal, ListSink
-from kira.contracts import SCHEMA_VERSION
-from kira.contracts.events import InterventionEvent
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.memory.factory import build_storage
-from kira.orchestration.runner import (
+from maver.audit.journal import Journal, ListSink
+from maver.contracts import SCHEMA_VERSION
+from maver.contracts.events import InterventionEvent
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.memory.factory import build_storage
+from maver.orchestration.runner import (
     Deployment,
     incident_context,
     run_incident,
     tool_context_for,
 )
-from kira.settings.authority import AuthoritySettings
-from kira.settings.groups import (
+from maver.settings.authority import AuthoritySettings
+from maver.settings.groups import (
     MemorySettings,
     PipelineSettings,
     ServerSettings,
     TransportSettings,
     VerifySettings,
 )
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
-from kira.tools.kubernetes import exec_kubectl_cmd_safely
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
+from maver.tools.kubernetes import exec_kubectl_cmd_safely
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 
@@ -263,20 +263,20 @@ async def test_the_incident_span_records_how_the_incident_ended(
 
     @contextlib.contextmanager
     def fake_span(name: str, attributes: dict[str, object] | None = None):
-        yield _Span() if name == "kira.incident" else _Noop()
+        yield _Span() if name == "maver.incident" else _Noop()
 
     class _Noop:
         def set_attribute(self, key: str, value: object) -> None:
             return None
 
-    monkeypatch.setattr("kira.orchestration.runner.span", fake_span)
+    monkeypatch.setattr("maver.orchestration.runner.span", fake_span)
     deploy, _, _ = deployment(tmp_path)
     session = deploy.storage.sessions.create_session(ALERT)
 
     await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
 
-    assert recorded["kira.outcome"] == "success"
-    assert recorded["kira.lifecycle"] == "tentative_success"
+    assert recorded["maver.outcome"] == "success"
+    assert recorded["maver.lifecycle"] == "tentative_success"
     deploy.storage.close()
 
 

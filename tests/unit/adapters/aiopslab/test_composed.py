@@ -22,15 +22,15 @@ from typing import Any
 import httpx
 import pytest
 
-from kira.api.app import build_deployment, create_app
-from kira.api.deps import Service
-from kira.audit.journal import ListSink
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.orchestration.runner import Deployment
-from kira.roles.policy import control
-from kira.settings.root import load_settings
+from maver.api.app import build_deployment, create_app
+from maver.api.deps import Service
+from maver.audit.journal import ListSink
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.orchestration.runner import Deployment
+from maver.roles.policy import control
+from maver.settings.root import load_settings
 
-PROMPTS = pathlib.Path(__file__).resolve().parents[4] / "src/kira/adapters/aiopslab/prompts"
+PROMPTS = pathlib.Path(__file__).resolve().parents[4] / "src/maver/adapters/aiopslab/prompts"
 
 TOKEN = "a-bridge-token-long-enough"
 NAMESPACE = "test-hotel-reservation"
@@ -165,19 +165,19 @@ def deployment(
     token = tmp_path / "bridge.token"
     token.write_text(TOKEN, encoding="utf-8")
     for name, value in {
-        "KIRA_SERVER__WORKDIR": str(tmp_path),
-        "KIRA_INTAKE__ADAPTERS": "aiopslab",
-        "KIRA_ADAPTERS__AIOPSLAB__ENABLED": "true",
-        "KIRA_ADAPTERS__AIOPSLAB__BRIDGE_URL": f"http://127.0.0.1:{port}",
-        "KIRA_ADAPTERS__AIOPSLAB__BRIDGE_TOKEN_FILE": str(token),
-        "KIRA_AUTHORITY__MODE": "auto",
-        "KIRA_VERIFY__ENABLED": "true",
-        "KIRA_MEMORY__ENABLED": "false",
-        "KIRA_MEMORY__LEARNING_ENABLED": "false",
+        "MAVER_SERVER__WORKDIR": str(tmp_path),
+        "MAVER_INTAKE__ADAPTERS": "aiopslab",
+        "MAVER_ADAPTERS__AIOPSLAB__ENABLED": "true",
+        "MAVER_ADAPTERS__AIOPSLAB__BRIDGE_URL": f"http://127.0.0.1:{port}",
+        "MAVER_ADAPTERS__AIOPSLAB__BRIDGE_TOKEN_FILE": str(token),
+        "MAVER_AUTHORITY__MODE": "auto",
+        "MAVER_VERIFY__ENABLED": "true",
+        "MAVER_MEMORY__ENABLED": "false",
+        "MAVER_MEMORY__LEARNING_ENABLED": "false",
         # Off so that what reaches the bridge is what a role asked for. The auto-injected
         # snapshot is the diagnosing role's own behaviour and is tested where it lives.
-        "KIRA_PIPELINE__AUTO_SNAPSHOT": "false",
-        "KIRA_PIPELINE__MAX_TURNS": "25",
+        "MAVER_PIPELINE__AUTO_SNAPSHOT": "false",
+        "MAVER_PIPELINE__MAX_TURNS": "25",
     }.items():
         monkeypatch.setenv(name, value)
     sink = ListSink()
@@ -186,7 +186,7 @@ def deployment(
 
 
 def client(app: Any) -> httpx.AsyncClient:
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://kira")
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://maver")
 
 
 async def settle(service: Service) -> None:

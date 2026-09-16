@@ -10,10 +10,10 @@ import pytest
 import yaml
 from pydantic import SecretStr, ValidationError
 
-from kira.settings import Settings, VerifySettings, legacy_names_in_use, load_settings
-from kira.settings.arms import arm_digest, load_arm
-from kira.settings.authority import AuthorityRule, AuthoritySettings
-from kira.settings.root import (
+from maver.settings import Settings, VerifySettings, legacy_names_in_use, load_settings
+from maver.settings.arms import arm_digest, load_arm
+from maver.settings.authority import AuthorityRule, AuthoritySettings
+from maver.settings.root import (
     AliasedField,
     _iter_aliases,
     arm_overrides,
@@ -43,7 +43,7 @@ class TestAliases:
         If the prefixed name is not spelled out in the alias list, it silently stops
         working while the legacy name keeps working. That is invisible without this test.
         """
-        assert field.modern.startswith("KIRA_"), f"{field.modern} is not a prefixed name"
+        assert field.modern.startswith("MAVER_"), f"{field.modern} is not a prefixed name"
         if reason := _ONE_VALID_VALUE.get(field.modern):
             pytest.skip(reason)
         probe = _probe_value(field)
@@ -68,8 +68,8 @@ class TestAliases:
 
 # Companions needed so a probe does not trip an unrelated cross-group rule.
 _COMPANIONS: dict[str, dict[str, str]] = {
-    "KIRA_MEMORY__ENABLED": {"LEARNING_ENABLED": "false"},
-    "KIRA_MEMORY__BACKEND": {"MEMORY_POSTGRES_DSN": "postgresql://u:p@db/kira"},
+    "MAVER_MEMORY__ENABLED": {"LEARNING_ENABLED": "false"},
+    "MAVER_MEMORY__BACKEND": {"MEMORY_POSTGRES_DSN": "postgresql://u:p@db/maver"},
 }
 
 # A probe flips a boolean away from its default, which needs the other value to be a
@@ -77,8 +77,8 @@ _COMPANIONS: dict[str, dict[str, str]] = {
 # is the honest way to say so: until something consumes from the queue, the queue intake
 # cannot be turned on and the HTTP intake cannot be turned off.
 _ONE_VALID_VALUE: dict[str, str] = {
-    "KIRA_INTAKE__KAFKA__ENABLED": "the queue intake is unbuilt, so enabling it is refused",
-    "KIRA_INTAKE__HTTP_ENABLED": "with no queue intake to fall back to, it cannot be off",
+    "MAVER_INTAKE__KAFKA__ENABLED": "the queue intake is unbuilt, so enabling it is refused",
+    "MAVER_INTAKE__HTTP_ENABLED": "with no queue intake to fall back to, it cannot be off",
 }
 
 
@@ -87,14 +87,14 @@ _ONE_VALID_VALUE: dict[str, str] = {
 # with the substring the value should be recognisable by once loaded.
 _EXPLICIT_PROBES: dict[str, tuple[str, str]] = {
     # A real arm, because the name is resolved during the load rather than stored.
-    "KIRA_ARM": ("ma-v", "ma-v"),
-    "KIRA_AUTHORITY__RULES": ('[{"name": "probe7", "mode": "deny"}]', "probe7"),
-    "KIRA_AUTHORITY__WEBHOOK_URL": ("https://probe7.example.com/", "probe7.example.com"),
-    "KIRA_MEMORY__LIFECYCLE_WEIGHTS": ('{"invalidated": 0.7}', "0.7"),
-    "KIRA_TRANSPORT__PROMETHEUS_URL": ("http://probe7.example.com:9090", "probe7.example.com"),
-    "KIRA_TRANSPORT__LOKI_URL": ("http://probe7.example.com:3100", "probe7.example.com"),
-    "KIRA_TRANSPORT__JAEGER_URL": ("http://probe7.example.com:16686", "probe7.example.com"),
-    "KIRA_ADAPTERS": ('{"probe7": {"conductor_base_url": "http://c:8000"}}', "probe7"),
+    "MAVER_ARM": ("ma-v", "ma-v"),
+    "MAVER_AUTHORITY__RULES": ('[{"name": "probe7", "mode": "deny"}]', "probe7"),
+    "MAVER_AUTHORITY__WEBHOOK_URL": ("https://probe7.example.com/", "probe7.example.com"),
+    "MAVER_MEMORY__LIFECYCLE_WEIGHTS": ('{"invalidated": 0.7}', "0.7"),
+    "MAVER_TRANSPORT__PROMETHEUS_URL": ("http://probe7.example.com:9090", "probe7.example.com"),
+    "MAVER_TRANSPORT__LOKI_URL": ("http://probe7.example.com:3100", "probe7.example.com"),
+    "MAVER_TRANSPORT__JAEGER_URL": ("http://probe7.example.com:16686", "probe7.example.com"),
+    "MAVER_ADAPTERS": ('{"probe7": {"conductor_base_url": "http://c:8000"}}', "probe7"),
 }
 
 
@@ -182,9 +182,9 @@ class TestExperienceAdoption:
         paths, and they were split across two top-level groups — which made a pair that
         draws on one store, and whose invariants are joint, look independent.
         """
-        monkeypatch.setenv("KIRA_MEMORY__ROLE_RETRIEVAL", "false")
-        monkeypatch.setenv("KIRA_MEMORY__SECOND_PASS__ENABLED", "true")
-        monkeypatch.setenv("KIRA_MEMORY__SECOND_PASS__GATE", "nominator")
+        monkeypatch.setenv("MAVER_MEMORY__ROLE_RETRIEVAL", "false")
+        monkeypatch.setenv("MAVER_MEMORY__SECOND_PASS__ENABLED", "true")
+        monkeypatch.setenv("MAVER_MEMORY__SECOND_PASS__GATE", "nominator")
         memory = load_settings().memory
         assert (memory.role_retrieval, memory.second_pass.enabled) == (False, True)
         assert memory.second_pass.gate == "nominator"
@@ -203,9 +203,9 @@ class TestExperienceAdoption:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Checked by the group that holds both, since both draw on the same store."""
-        monkeypatch.setenv("KIRA_MEMORY__ENABLED", "false")
-        monkeypatch.setenv("KIRA_MEMORY__SECOND_PASS__ENABLED", "true")
-        monkeypatch.setenv("KIRA_MEMORY__SECOND_PASS__DELIVERY", "context")
+        monkeypatch.setenv("MAVER_MEMORY__ENABLED", "false")
+        monkeypatch.setenv("MAVER_MEMORY__SECOND_PASS__ENABLED", "true")
+        monkeypatch.setenv("MAVER_MEMORY__SECOND_PASS__DELIVERY", "context")
         with pytest.raises(ValidationError, match="has no precedent to deliver"):
             load_settings()
 
@@ -236,7 +236,7 @@ class TestValidation:
     ) -> None:
         """A key pasted with a newline in it reaches the provider verbatim and comes
         back as a 401 minutes into a run, where it reads as the model failing."""
-        monkeypatch.setenv("KIRA_MODEL__API_KEY", "sk-first-half\nsk-second-half")
+        monkeypatch.setenv("MAVER_MODEL__API_KEY", "sk-first-half\nsk-second-half")
         with pytest.raises(ValidationError, match="control character"):
             load_settings()
 
@@ -283,18 +283,18 @@ class TestValidation:
         The process would start on defaults and behave differently from what the
         operator asked for, with nothing to show for it.
         """
-        monkeypatch.setenv("KIRA_MEMORY__ENABLEDD", "false")
-        with pytest.raises(ValueError, match="did you mean KIRA_MEMORY__ENABLED"):
+        monkeypatch.setenv("MAVER_MEMORY__ENABLEDD", "false")
+        with pytest.raises(ValueError, match="did you mean MAVER_MEMORY__ENABLED"):
             load_settings()
 
     def test_the_built_revision_is_not_read_as_a_typo(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The image sets KIRA_REVISION for /healthz to report, and answers to no field.
+        """The image sets MAVER_REVISION for /healthz to report, and answers to no field.
 
         Swept up as a misspelling, it stopped the container that set it from starting.
         """
-        monkeypatch.setenv("KIRA_REVISION", "9f3c1ab")
+        monkeypatch.setenv("MAVER_REVISION", "9f3c1ab")
         assert unknown_prefixed_names() == []
         assert load_settings().server.port == 8080
 
@@ -323,7 +323,7 @@ class TestArmFiles:
         The result was a published configuration that could not be selected, while two
         shipped artefacts told a reader it could.
         """
-        monkeypatch.setenv("KIRA_ARM", "ma-s")
+        monkeypatch.setenv("MAVER_ARM", "ma-s")
         s = load_settings()
         assert (s.arm, s.pipeline.mode) == ("ma-s", "multi")
         assert (s.memory.second_pass.enabled, s.memory.second_pass.gate) == (True, "quality")
@@ -337,8 +337,8 @@ class TestArmFiles:
         reads its own environment and a mapping from the parent arrives as that group's
         own init arguments.
         """
-        monkeypatch.setenv("KIRA_ARM", "ma-s")
-        monkeypatch.setenv("KIRA_MEMORY__TOP_K", "9")
+        monkeypatch.setenv("MAVER_ARM", "ma-s")
+        monkeypatch.setenv("MAVER_MEMORY__TOP_K", "9")
         s = load_settings()
         assert s.memory.top_k == 9
         assert s.memory.second_pass.gate == "quality", "the rest of the arm still applies"
@@ -349,7 +349,7 @@ class TestArmFiles:
         An arm file that could silently override one would change what a campaign
         measured while the operator read the value they exported.
         """
-        monkeypatch.setenv("KIRA_ARM", "ma-s")
+        monkeypatch.setenv("MAVER_ARM", "ma-s")
         monkeypatch.setenv("MEMORY_SEARCH_TOP_K", "9")
         assert load_settings().memory.top_k == 9
 
@@ -357,7 +357,7 @@ class TestArmFiles:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Held constant is what licenses reading a two-arm gap as single-variable."""
-        monkeypatch.setenv("KIRA_ARM", "ma")
+        monkeypatch.setenv("MAVER_ARM", "ma")
         monkeypatch.setenv("MAX_TURNS", "8")
         with pytest.raises(ValueError, match="holds constant"):
             load_settings()
@@ -369,11 +369,11 @@ class TestArmFiles:
         declares neither, so a claim enforced only where the file happens to write is a
         claim enforced nowhere: the arm's own digest went into the run record while the
         campaign ran on another model."""
-        monkeypatch.setenv("KIRA_ARM", "ma-s")
-        monkeypatch.setenv("KIRA_MODEL__PROFILE", "qwen3.8-27b")
+        monkeypatch.setenv("MAVER_ARM", "ma-s")
+        monkeypatch.setenv("MAVER_MODEL__PROFILE", "qwen3.8-27b")
         with pytest.raises(ValueError, match=r"model\.profile"):
             load_settings()
-        monkeypatch.delenv("KIRA_MODEL__PROFILE")
+        monkeypatch.delenv("MAVER_MODEL__PROFILE")
         monkeypatch.setenv("LLM_REPEAT_CALL_SOFT_LIMIT", "4")
         with pytest.raises(ValueError, match=r"runtime\.repeat_call_soft"):
             load_settings()
@@ -383,20 +383,20 @@ class TestArmFiles:
     ) -> None:
         """Overriding one key without editing a frozen file is the deployment contract
         working, so it belongs in the report rather than in a refusal."""
-        monkeypatch.setenv("KIRA_ARM", "ma")
-        monkeypatch.setenv("KIRA_MEMORY__TOP_K", "9")
+        monkeypatch.setenv("MAVER_ARM", "ma")
+        monkeypatch.setenv("MAVER_MEMORY__TOP_K", "9")
         assert arm_overrides(load_settings()).allowed["memory.top_k"] == (3, 9)
 
     def test_the_arm_reaches_the_run_record(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A frozen arm carries a published number, so a later edit has to be detectable."""
-        monkeypatch.setenv("KIRA_ARM", "ma-v")
+        monkeypatch.setenv("MAVER_ARM", "ma-v")
         snapshot = load_settings().snapshot()
         assert snapshot["settings"]["arm"] == "ma-v"
         assert snapshot["arm_digest"] == arm_digest("ma-v", Path("configs/arms"))
 
     def test_a_misnamed_arm_is_a_startup_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Otherwise the run is attributed to an arm whose settings never applied."""
-        monkeypatch.setenv("KIRA_ARM", "ma-x")
+        monkeypatch.setenv("MAVER_ARM", "ma-x")
         with pytest.raises(FileNotFoundError, match="available"):
             load_settings()
 
@@ -407,8 +407,8 @@ class TestArmFiles:
         arm = yaml.safe_load(Path("configs/arms/ma.yaml").read_text())
         arm["settings"]["memory"]["enabldd"] = False
         (tmp_path / "ma.yaml").write_text(yaml.safe_dump(arm))
-        monkeypatch.setenv("KIRA_ARM", "ma")
-        monkeypatch.setenv("KIRA_ARM_DIR", str(tmp_path))
+        monkeypatch.setenv("MAVER_ARM", "ma")
+        monkeypatch.setenv("MAVER_ARM_DIR", str(tmp_path))
         with pytest.raises(ValueError, match=r"memory\.enabldd, which is not a setting"):
             load_settings()
 
@@ -429,8 +429,8 @@ class TestLegacyVocabulary:
         monkeypatch.setenv("LEARNING_ENABLED", "false")
         monkeypatch.setenv("MAX_TURNS", "5")
         found = legacy_names_in_use()
-        assert found["MEMORY_ENABLED"] == "KIRA_MEMORY__ENABLED"
-        assert found["MAX_TURNS"] == "KIRA_PIPELINE__MAX_TURNS"
+        assert found["MEMORY_ENABLED"] == "MAVER_MEMORY__ENABLED"
+        assert found["MAX_TURNS"] == "MAVER_PIPELINE__MAX_TURNS"
 
     def test_the_snapshot_deploy_typo_is_honoured(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A deploy script sets a name the prototype never read, so 'off' meant 'on'."""
@@ -441,7 +441,7 @@ class TestLegacyVocabulary:
 class TestSecretsAndImmutability:
     def test_secrets_do_not_appear_in_the_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MEMORY_MODE", "postgres")
-        monkeypatch.setenv("MEMORY_POSTGRES_DSN", "postgresql://u:hunter2@db/kira")
+        monkeypatch.setenv("MEMORY_POSTGRES_DSN", "postgresql://u:hunter2@db/maver")
         snapshot = load_settings().snapshot()
         assert "hunter2" not in repr(snapshot)
 
@@ -450,8 +450,8 @@ class TestSecretsAndImmutability:
     ) -> None:
         """The slice is untyped so nothing in it is a SecretStr, and this record goes
         into every run and is echoed by a command documented as safe to paste."""
-        monkeypatch.setenv("KIRA_ADAPTERS__SREGYM__API_TOKEN", "tok-hunter2")
-        monkeypatch.setenv("KIRA_ADAPTERS__SREGYM__CONDUCTOR_BASE_URL", "http://c:8000")
+        monkeypatch.setenv("MAVER_ADAPTERS__SREGYM__API_TOKEN", "tok-hunter2")
+        monkeypatch.setenv("MAVER_ADAPTERS__SREGYM__CONDUCTOR_BASE_URL", "http://c:8000")
         adapters = load_settings().snapshot()["settings"]["adapters"]
         assert adapters["sregym"]["api_token"] == "**********"
         assert adapters["sregym"]["conductor_base_url"] == "http://c:8000"
@@ -503,7 +503,7 @@ class TestRealDeployments:
         assert s.tools.host_recovery_nodes == frozenset({"worker-1", "worker-2"})
 
     def test_a_json_array_is_also_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("KIRA_TOOLS__BLIND_NAMESPACES", '["a", "b"]')
+        monkeypatch.setenv("MAVER_TOOLS__BLIND_NAMESPACES", '["a", "b"]')
         assert load_settings().tools.blind_namespaces == frozenset({"a", "b"})
 
     def test_an_existing_evaluation_environment_loads_unchanged(
@@ -522,7 +522,7 @@ class TestRealDeployments:
             "MEMORY_ENABLED": "true",
             "LEARNING_ENABLED": "true",
             "MEMORY_MODE": "postgres",
-            "MEMORY_POSTGRES_DSN": "postgresql://kira:pw@127.0.0.1:5432/kira",
+            "MEMORY_POSTGRES_DSN": "postgresql://maver:pw@127.0.0.1:5432/maver",
             "MEMORY_POSTGRES_SCHEMA": "agent_memory",
             "MEMORY_EXPERIMENT_ID": "sweep-a",
             "LLM_MODEL": "openai/qwen3.6-35b-a3b",
@@ -563,7 +563,7 @@ class TestRealDeployments:
         """PROMPT_VARIANT selected between prompt sets that no longer exist."""
         monkeypatch.setenv("PROMPT_VARIANT", "minimal")
         # It is not a recognised name, so it must not resolve to anything, and because
-        # it carries no KIRA_ prefix it must not stop the process either.
+        # it carries no MAVER_ prefix it must not stop the process either.
         assert "PROMPT_VARIANT" not in legacy_names_in_use()
         assert load_settings().pipeline.mode == "multi"
 
@@ -604,7 +604,7 @@ def test_verification_blindness_is_structural_not_configurable() -> None:
 def test_a_legacy_run_script_setting_the_retired_flag_still_starts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """It carries no KIRA_ prefix, so it is ignored rather than fatal."""
+    """It carries no MAVER_ prefix, so it is ignored rather than fatal."""
     monkeypatch.setenv("VERIFY_BLIND_TO_DIAGNOSIS", "false")
     assert load_settings().verify.enabled is False
 
@@ -643,11 +643,11 @@ def test_a_deployment_that_can_reach_no_node_says_so(
     role regardless, and every call it makes is refused. Nothing said so, and a whole
     campaign was measured with node-level faults unfixable and graded as the agent
     failing to fix them."""
-    with caplog.at_level(logging.WARNING, logger="kira.settings.root"):
+    with caplog.at_level(logging.WARNING, logger="maver.settings.root"):
         settings = load_settings()
 
     assert settings.tools.host_recovery_nodes == frozenset()
-    assert any("KIRA_TOOLS__HOST_RECOVERY_NODES" in r.getMessage() for r in caplog.records)
+    assert any("MAVER_TOOLS__HOST_RECOVERY_NODES" in r.getMessage() for r in caplog.records)
     assert settings.snapshot()["settings"]["tools"]["host_recovery_nodes"] == []
 
 
@@ -656,7 +656,7 @@ def test_a_configured_node_leaves_the_warning_unsaid(
 ) -> None:
     """A warning on every start is one an operator learns to scroll past."""
     monkeypatch.setenv("HOST_RECOVERY_ALLOWED_NODES", "worker-1")
-    with caplog.at_level(logging.WARNING, logger="kira.settings.root"):
+    with caplog.at_level(logging.WARNING, logger="maver.settings.root"):
         load_settings()
 
     assert not any("HOST_RECOVERY" in r.getMessage() for r in caplog.records)
@@ -668,7 +668,7 @@ def test_an_arm_may_not_decide_who_authorises_a_cluster_write(
     """Every shipped arm asked for unattended approval, because a measured campaign
     cannot park on a person. That was inert while nothing read arm files, so wiring them
     up made one line in a research configuration disable the approval gate on a process
-    holding cluster write credentials — and `KIRA_ARM=<anything>` was enough to do it.
+    holding cluster write credentials — and `MAVER_ARM=<anything>` was enough to do it.
 
     No archived campaign supplied the value that way; all twenty-three set it in the
     environment. So the key is refused where it does not belong rather than warned
@@ -684,10 +684,10 @@ def test_an_arm_may_not_decide_who_authorises_a_cluster_write(
         "settings:\n"
         "  authority: {mode: auto}\n"
     )
-    with pytest.raises(ValidationError, match="set KIRA_AUTHORITY__MODE in the environment"):
+    with pytest.raises(ValidationError, match="set MAVER_AUTHORITY__MODE in the environment"):
         load_arm("unattended", tmp_path)
 
-    monkeypatch.setenv("KIRA_ARM", "ma-s")
+    monkeypatch.setenv("MAVER_ARM", "ma-s")
     reset_settings()
     assert load_settings().authority.mode == "prompt"
 
@@ -708,14 +708,14 @@ def test_production_may_not_run_every_cluster_write_unattended(
     rule rather than a second flag: a deployment can say that routine scaling proceeds
     unattended, and cannot say that everything does.
     """
-    monkeypatch.setenv("KIRA_SERVER__ENVIRONMENT", "production")
-    monkeypatch.setenv("KIRA_AUTHORITY__MODE", "auto")
+    monkeypatch.setenv("MAVER_SERVER__ENVIRONMENT", "production")
+    monkeypatch.setenv("MAVER_AUTHORITY__MODE", "auto")
     with pytest.raises(ValidationError, match="would let every cluster write proceed unreviewed"):
         Settings()
 
-    monkeypatch.setenv("KIRA_AUTHORITY__MODE", "prompt")
+    monkeypatch.setenv("MAVER_AUTHORITY__MODE", "prompt")
     monkeypatch.setenv(
-        "KIRA_AUTHORITY__RULES",
+        "MAVER_AUTHORITY__RULES",
         '[{"name": "routine-scaling", "selectors": ["verb:scale"], "mode": "auto"}]',
     )
     settings = Settings()
@@ -730,7 +730,7 @@ def test_an_unattended_benchmark_is_still_allowed_outside_production(
     Every measured campaign ran unattended, and a check that stopped one from starting
     would make the artifact unable to reproduce its own results.
     """
-    monkeypatch.setenv("KIRA_AUTHORITY__MODE", "auto")
+    monkeypatch.setenv("MAVER_AUTHORITY__MODE", "auto")
     assert Settings().authority.mode == "auto"
 
 
@@ -744,9 +744,9 @@ def test_a_queue_intake_that_consumes_nothing_is_refused(monkeypatch: pytest.Mon
     that answers a liveness question without supplying the liveness is worse than one
     that is absent.
     """
-    monkeypatch.setenv("KIRA_INTAKE__HTTP_ENABLED", "false")
-    monkeypatch.setenv("KIRA_INTAKE__KAFKA__ENABLED", "true")
-    monkeypatch.setenv("KIRA_INTAKE__KAFKA__BOOTSTRAP_SERVERS", "broker:9092")
+    monkeypatch.setenv("MAVER_INTAKE__HTTP_ENABLED", "false")
+    monkeypatch.setenv("MAVER_INTAKE__KAFKA__ENABLED", "true")
+    monkeypatch.setenv("MAVER_INTAKE__KAFKA__BOOTSTRAP_SERVERS", "broker:9092")
 
     with pytest.raises(ValidationError, match="queue intake is not implemented"):
         Settings()
@@ -770,7 +770,7 @@ class TestAFrozenArmAndTheSamplingKnobs:
     def test_an_override_on_a_frozen_arm_is_a_startup_failure(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("KIRA_ARM", "ma-s")
+        monkeypatch.setenv("MAVER_ARM", "ma-s")
         monkeypatch.setenv("LLM_TEMPERATURE", "0")
         reset_settings()
 

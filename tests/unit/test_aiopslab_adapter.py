@@ -14,11 +14,11 @@ from typing import Any
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from kira.adapters.aiopslab import ADAPTER, ADAPTER_NAME, AiopsLabAdapter, AiopsLabConfig
-from kira.adapters.base import LifecycleRunsElsewhere
-from kira.adapters.registry import available_adapters, get_adapter
-from kira.settings.groups import ServerSettings
-from kira.settings.root import Settings
+from maver.adapters.aiopslab import ADAPTER, ADAPTER_NAME, AiopsLabAdapter, AiopsLabConfig
+from maver.adapters.base import LifecycleRunsElsewhere
+from maver.adapters.registry import available_adapters, get_adapter
+from maver.settings.groups import ServerSettings
+from maver.settings.root import Settings
 
 TOKEN = "a-bridge-token-long-enough"
 
@@ -186,7 +186,7 @@ def test_a_bound_adapter_with_no_bridge_refuses_at_startup(
     def missing(name: str) -> Any:
         raise ImportError(f"no module named {name}")
 
-    monkeypatch.setattr("kira.adapters.aiopslab.adapter.import_module", missing)
+    monkeypatch.setattr("maver.adapters.aiopslab.adapter.import_module", missing)
     enabled = AiopsLabAdapter(AiopsLabConfig(enabled=True, bridge_token=SecretStr(TOKEN)))
     with pytest.raises(ValueError, match="bridge transport is not available"):
         enabled.tool_transport()

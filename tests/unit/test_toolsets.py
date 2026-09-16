@@ -5,13 +5,13 @@ from pathlib import Path
 import pytest
 from prototype_tree import prototype_root
 
-from kira.audit.journal import Journal
-from kira.settings.groups import ToolSettings
-from kira.tools import sandbox, toolsets
-from kira.tools.allowlists import ROLE_TOOLSETS
-from kira.tools.context import ToolContext
-from kira.tools.toolsets import build_toolset
-from kira.tools.workspace import SessionWorkspace
+from maver.audit.journal import Journal
+from maver.settings.groups import ToolSettings
+from maver.tools import sandbox, toolsets
+from maver.tools.allowlists import ROLE_TOOLSETS
+from maver.tools.context import ToolContext
+from maver.tools.toolsets import build_toolset
+from maver.tools.workspace import SessionWorkspace
 
 
 class FakeTransport:

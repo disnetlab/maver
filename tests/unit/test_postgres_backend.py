@@ -7,9 +7,9 @@ sequence both keep their event, and that a wait on this server is bounded at all
 
 Needs a live database. Set POSTGRES_TEST_DSN to run it, for instance:
 
-    docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=kira -e POSTGRES_USER=kira \\
-        -e POSTGRES_DB=kira postgres:17-alpine
-    POSTGRES_TEST_DSN=postgresql://kira:kira@127.0.0.1:55432/kira uv run pytest \\
+    docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=maver -e POSTGRES_USER=maver \\
+        -e POSTGRES_DB=maver postgres:17-alpine
+    POSTGRES_TEST_DSN=postgresql://maver:maver@127.0.0.1:55432/maver uv run pytest \\
         tests/unit/test_postgres_backend.py
 
 Each test gets a schema of its own, dropped afterwards, so the suite can run repeatedly
@@ -35,11 +35,11 @@ from memory_contract import (
     an_event,
 )
 
-from kira.contracts.lifecycle import LifecycleState
-from kira.memory.backends.schema import STORE_SCHEMA_VERSION
-from kira.memory.backends.sqlite import SqliteStore
-from kira.memory.lexemes import lexemes
-from kira.memory.ports import TextSearch
+from maver.contracts.lifecycle import LifecycleState
+from maver.memory.backends.schema import STORE_SCHEMA_VERSION
+from maver.memory.backends.sqlite import SqliteStore
+from maver.memory.lexemes import lexemes
+from maver.memory.ports import TextSearch
 
 DSN = os.environ.get("POSTGRES_TEST_DSN", "")
 
@@ -50,7 +50,7 @@ from psycopg import sql  # noqa: E402
 from psycopg.conninfo import make_conninfo  # noqa: E402
 from psycopg.types.json import Jsonb  # noqa: E402
 
-from kira.memory.backends.postgres import PostgresStore  # noqa: E402
+from maver.memory.backends.postgres import PostgresStore  # noqa: E402
 
 pytestmark = [
     pytest.mark.integration,
@@ -61,7 +61,7 @@ pytestmark = [
 @contextmanager
 def _temporary_schema() -> Iterator[str]:
     """A schema of this test's own, dropped whatever happens to it."""
-    name = f"kira_test_{uuid.uuid4().hex}"
+    name = f"maver_test_{uuid.uuid4().hex}"
     try:
         yield name
     finally:
@@ -401,7 +401,7 @@ def test_an_unstamped_database_in_the_current_shape_is_stamped_and_left_alone(
         conn.execute("DROP TABLE schema_version")
 
     with (
-        caplog.at_level(logging.INFO, logger="kira.memory.backends.schema"),
+        caplog.at_level(logging.INFO, logger="maver.memory.backends.schema"),
         closing(PostgresStore(DSN, schema=schema)) as reopened,
     ):
         assert reopened.schema_version == STORE_SCHEMA_VERSION

@@ -4,15 +4,15 @@
 #
 # It names no arm, and states the mechanism keys itself. An arm file is an experiment
 # configuration: it pins every mechanism at once. A deployment reproducing a published
-# arm sets `KIRA_ARM` instead and drops the mechanism keys below — the arm's name and
+# arm sets `MAVER_ARM` instead and drops the mechanism keys below — the arm's name and
 # the digest of its file then land in every run's configuration snapshot, and a name
 # overridden key by key here is worse provenance than no name at all. The environment
 # still wins where the two disagree, except on a setting the arm declares it holds
-# constant, which refuses to start. An arm cannot touch `KIRA_AUTHORITY__MODE`: an
-# unattended benchmark sets that in the environment beside `KIRA_ARM`, so no research
+# constant, which refuses to start. An arm cannot touch `MAVER_AUTHORITY__MODE`: an
+# unattended benchmark sets that in the environment beside `MAVER_ARM`, so no research
 # configuration can disarm the approval gate on a service holding write permissions.
 #
-# Every name here is one the settings layer recognises. A KIRA_-prefixed name it does
+# Every name here is one the settings layer recognises. A MAVER_-prefixed name it does
 # not recognise is a startup failure and not a silent default, which is what makes a
 # typo in this file a pod that will not start rather than a pod running something else.
 # The flat prototype spellings still resolve, but a new manifest should not teach a
@@ -20,49 +20,49 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: kira-config
-  namespace: kira
+  name: maver-config
+  namespace: maver
   labels:
-    app.kubernetes.io/name: kira
+    app.kubernetes.io/name: maver
 data:
   # Model. The profile carries the complete sampling set; only the address changes per
   # deployment, and the key itself is a Secret.
-  KIRA_MODEL__PROFILE: "qwen3.6-35b-a3b"
-  KIRA_MODEL__ENDPOINT_OVERRIDE: "http://vllm.models.svc.cluster.local:8000/v1"
+  MAVER_MODEL__PROFILE: "qwen3.6-35b-a3b"
+  MAVER_MODEL__ENDPOINT_OVERRIDE: "http://vllm.models.svc.cluster.local:8000/v1"
 
   # Authority. `prompt` is the shipped default and this file states it, because the
   # prototype's ConfigMap set `auto` on a service holding cluster write permissions.
   # A request nobody answers within the timeout is denied; approving on expiry is
   # available per policy rule and never globally.
-  KIRA_AUTHORITY__MODE: "prompt"
-  KIRA_AUTHORITY__TIMEOUT_S: "1800"
+  MAVER_AUTHORITY__MODE: "prompt"
+  MAVER_AUTHORITY__TIMEOUT_S: "1800"
 
   # Pipeline and mechanisms.
-  KIRA_PIPELINE__MAX_TURNS: "100"
-  KIRA_PIPELINE__REMEDIATION_RETRIES: "2"
-  KIRA_VERIFY__ENABLED: "false"
-  KIRA_MEMORY__SECOND_PASS__ENABLED: "false"
-  KIRA_MEMORY__ENABLED: "true"
-  KIRA_MEMORY__LEARNING_ENABLED: "true"
-  KIRA_MEMORY__BACKEND: "embedded"
+  MAVER_PIPELINE__MAX_TURNS: "100"
+  MAVER_PIPELINE__REMEDIATION_RETRIES: "2"
+  MAVER_VERIFY__ENABLED: "false"
+  MAVER_MEMORY__SECOND_PASS__ENABLED: "false"
+  MAVER_MEMORY__ENABLED: "true"
+  MAVER_MEMORY__LEARNING_ENABLED: "true"
+  MAVER_MEMORY__BACKEND: "embedded"
 
   # Intake. The bound on concurrent incidents is about the model endpoint rather than
   # this pod: a privately served model answers a small number of sequences at once, so
   # unbounded intake degrades every run in flight instead of queueing.
-  KIRA_INTAKE__HTTP_ENABLED: "true"
-  KIRA_INTAKE__KAFKA__ENABLED: "false"
-  KIRA_SERVER__MAX_CONCURRENT_INCIDENTS: "4"
+  MAVER_INTAKE__HTTP_ENABLED: "true"
+  MAVER_INTAKE__KAFKA__ENABLED: "false"
+  MAVER_SERVER__MAX_CONCURRENT_INCIDENTS: "4"
 
   # Telemetry backends. An unset endpoint is a description of the deployment rather than
   # an error: the tools that would have used it are withdrawn before the run, with the
   # reason recorded, instead of failing the first time a role calls one. These three
   # names and the model endpoint above are what the NetworkPolicy's egress rules allow,
   # so the two files move together.
-  KIRA_TRANSPORT__PROMETHEUS_URL: "http://prometheus.observability.svc.cluster.local:9090"
-  KIRA_TRANSPORT__LOKI_URL: "http://loki.observability.svc.cluster.local:3100"
-  KIRA_TRANSPORT__JAEGER_URL: "http://jaeger-query.observability.svc.cluster.local:16686"
+  MAVER_TRANSPORT__PROMETHEUS_URL: "http://prometheus.observability.svc.cluster.local:9090"
+  MAVER_TRANSPORT__LOKI_URL: "http://loki.observability.svc.cluster.local:3100"
+  MAVER_TRANSPORT__JAEGER_URL: "http://jaeger-query.observability.svc.cluster.local:16686"
 
   # Observability.
-  KIRA_OBSERVABILITY__OTLP_ENDPOINT: "alloy-collector.observability.svc.cluster.local:4317"
-  KIRA_OBSERVABILITY__OTLP_INSECURE: "true"
-  KIRA_OBSERVABILITY__LOG_LEVEL: "INFO"
+  MAVER_OBSERVABILITY__OTLP_ENDPOINT: "alloy-collector.observability.svc.cluster.local:4317"
+  MAVER_OBSERVABILITY__OTLP_INSECURE: "true"
+  MAVER_OBSERVABILITY__LOG_LEVEL: "INFO"

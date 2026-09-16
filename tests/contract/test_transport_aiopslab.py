@@ -32,8 +32,8 @@ from transport_contract import (
     ToolTransportContract,
 )
 
-from kira.adapters.aiopslab.transport import AiopsLabTransport
-from kira.tools.errors import call_failed
+from maver.adapters.aiopslab.transport import AiopsLabTransport
+from maver.tools.errors import call_failed
 
 BRIDGE = "http://127.0.0.1:18099"
 TOKEN = "contract-token"

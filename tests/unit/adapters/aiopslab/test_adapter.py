@@ -11,12 +11,12 @@ from typing import Any
 
 from pydantic import SecretStr
 
-from kira.adapters.aiopslab import ADAPTER, ADAPTER_NAME
-from kira.adapters.aiopslab.adapter import AiopsLabAdapter
-from kira.adapters.aiopslab.config import AiopsLabConfig
-from kira.settings.authority import AuthoritySettings
-from kira.settings.groups import ServerSettings
-from kira.settings.root import Settings
+from maver.adapters.aiopslab import ADAPTER, ADAPTER_NAME
+from maver.adapters.aiopslab.adapter import AiopsLabAdapter
+from maver.adapters.aiopslab.config import AiopsLabConfig
+from maver.settings.authority import AuthoritySettings
+from maver.settings.groups import ServerSettings
+from maver.settings.root import Settings
 
 TOKEN = "a-bridge-token-long-enough"
 NAMESPACE = "astronomy-shop"

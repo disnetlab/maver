@@ -17,12 +17,12 @@ from typing import Any, cast
 
 import pytest
 
-from kira.audit.journal import Journal, ListSink
-from kira.contracts.artifacts import RootCause
-from kira.contracts.state import IncidentState
-from kira.llm.types import ModelRequest, ModelResponse, Usage
-from kira.memory.ports import SearchHit, SearchScope
-from kira.secondpass import (
+from maver.audit.journal import Journal, ListSink
+from maver.contracts.artifacts import RootCause
+from maver.contracts.state import IncidentState
+from maver.llm.types import ModelRequest, ModelResponse, Usage
+from maver.memory.ports import SearchHit, SearchScope
+from maver.secondpass import (
     NOMINATED_ASSIGNMENT,
     QUALITY_GATED_PRECEDENT,
     UNCONDITIONAL_RESAMPLE,
@@ -36,7 +36,7 @@ from kira.secondpass import (
     blinded_labels,
     build_evidence_bundle,
 )
-from kira.settings.profiles import load_profile
+from maver.settings.profiles import load_profile
 
 SAMPLING = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models")).sampling
 

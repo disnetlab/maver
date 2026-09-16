@@ -4,14 +4,14 @@ import importlib
 import pathlib
 import tomllib
 
-import kira
+import maver
 
 PYPROJECT = pathlib.Path(__file__).resolve().parents[2] / "pyproject.toml"
 
 
 def test_version_matches_pyproject() -> None:
     declared = tomllib.loads(PYPROJECT.read_text())["project"]["version"]
-    assert kira.__version__ == declared
+    assert maver.__version__ == declared
 
 
 def test_subpackages_import() -> None:
@@ -30,4 +30,4 @@ def test_subpackages_import() -> None:
         "settings",
         "tools",
     ):
-        importlib.import_module(f"kira.{name}")
+        importlib.import_module(f"maver.{name}")

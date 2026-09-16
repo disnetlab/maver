@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Drive one incident against a running Kira and print what it concluded.
+"""Drive one incident against a running MAVER and print what it concluded.
 
 The shortest complete example of the service's contract: post an alert, poll until the
-run reaches a terminal status, print the artifacts. Nothing here is Kira-specific beyond
+run reaches a terminal status, print the artifacts. Nothing here is MAVER-specific beyond
 the two URLs, which is the point — an operator's own alerting can post the same body.
 
-    kira serve &
+    maver serve &
     python examples/run_incident.py examples/alerts/high-error-rate.json
 
 Pass ``--target-stage diagnose`` to stop after the diagnosis without touching the
@@ -51,7 +51,7 @@ def main() -> int:
                 return 0
             if status == "awaiting_human":
                 # The run is parked on an approval. It is not stuck: a decision through
-                # `kira approvals` or the HTTP surface continues this same incident.
+                # `maver approvals` or the HTTP surface continues this same incident.
                 print(json.dumps(incident, indent=2))
                 print("parked on a human decision", file=sys.stderr)
                 return 0
@@ -65,7 +65,7 @@ def main() -> int:
 def _arguments() -> Any:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("alert", help="Path to a JSON alert payload.")
-    parser.add_argument("--url", default="http://127.0.0.1:8080", help="Where Kira is serving.")
+    parser.add_argument("--url", default="http://127.0.0.1:8080", help="Where MAVER is serving.")
     parser.add_argument(
         "--target-stage",
         default="full",

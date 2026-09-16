@@ -1,6 +1,6 @@
 # Style guide
 
-Kira follows **PEP 8 as enforced by ruff**, and the **[Google Python Style
+MAVER follows **PEP 8 as enforced by ruff**, and the **[Google Python Style
 Guide](https://google.github.io/styleguide/pyguide.html)** for anything ruff does not
 cover. Both are configured in `pyproject.toml`; `make lint` is the arbiter, and no
 formatting question is worth arguing about that `ruff format` already answers.
@@ -34,8 +34,8 @@ Rules that follow, and how they are enforced:
 
 | Rule | Enforcement |
 |---|---|
-| `contracts/` imports nothing from `kira` except `settings` | review |
-| Core modules must never import `kira.adapters.<name>` | ruff `TID251` banned-api |
+| `contracts/` imports nothing from `maver` except `settings` | review |
+| Core modules must never import `maver.adapters.<name>` | ruff `TID251` banned-api |
 | `memory/backends/*` is constructed only by `memory/factory.py` | review |
 | Nothing imports `api/` or `cli.py` | review |
 | A role never imports another role | review |
@@ -44,10 +44,10 @@ Rules that follow, and how they are enforced:
 capability to the core; the core never branches on which environment it is running
 under. The prototype violated this: `agent/tools/mcp_client.py` opened its central
 call path with `if aiopslab_bridge_enabled():`, so adding a second benchmark meant
-editing the transport every module depends on. In Kira an adapter provides a
+editing the transport every module depends on. In MAVER an adapter provides a
 `ToolTransport` and the core cannot tell the difference.
 
-If you find yourself wanting `if benchmark == ...` anywhere under `src/kira/` outside
+If you find yourself wanting `if benchmark == ...` anywhere under `src/maver/` outside
 `adapters/`, the design is wrong, not the requirement.
 
 ## 2. Tools and authority
@@ -93,7 +93,7 @@ is why it is written down here rather than left implicit.
 
 ## 4. Prompts
 
-Prompts are `.txt` files under `src/kira/prompts/`, one per role, loaded through
+Prompts are `.txt` files under `src/maver/prompts/`, one per role, loaded through
 `importlib.resources` and never by filesystem path.
 
 This is a **deliberate deviation** from every major agent framework. LangGraph puts
@@ -157,7 +157,7 @@ that catches its own exception and calls `handler(request)` anyway.
   same commit**. A live variable declared in no config file is invisible to everyone
   but its author.
 - Credentials are `SecretStr`. They must not appear in a log line, a trace attribute,
-  or `kira config show`.
+  or `maver config show`.
 - Environment variables override YAML, so a Kubernetes ConfigMap remains the
   deployment control surface.
 

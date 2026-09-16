@@ -17,7 +17,7 @@ cluster, a network or a database.
 
 The payloads are the contract's rather than each subclass's, and each implementation
 serves them in whatever encoding its own backend natively produces. The assertions are
-then made through the consumers in ``kira.tools`` that have to read the result, because
+then made through the consumers in ``maver.tools`` that have to read the result, because
 the risk this suite exists for is divergence: prompts are written against the strings a
 transport returns, so tool output is part of the interface, and a transport that renders
 something the layer above cannot read fails silently in the middle of an incident rather
@@ -32,16 +32,16 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from kira.tools.errors import call_failed
-from kira.tools.metrics import _parse_alerts, partition_incident_alerts
-from kira.tools.snapshot import _load_items
-from kira.tools.traces import (
+from maver.tools.errors import call_failed
+from maver.tools.metrics import _parse_alerts, partition_incident_alerts
+from maver.tools.snapshot import _load_items
+from maver.tools.traces import (
     _PASSTHROUGH_LIMIT,
     _filter_traces_to_candidates,
     _parse_structured,
     _unparseable_scope_error,
 )
-from kira.tools.transport.base import CAPABILITIES, ToolTransport
+from maver.tools.transport.base import CAPABILITIES, ToolTransport
 
 __all__ = [
     "ALERTS",

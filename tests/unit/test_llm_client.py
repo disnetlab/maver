@@ -10,8 +10,8 @@ from typing import Any
 
 import pytest
 
-from kira.contracts.events import ModelCallEvent
-from kira.llm import (
+from maver.contracts.events import ModelCallEvent
+from maver.llm import (
     ErrorClass,
     LLMClient,
     ModelCallError,
@@ -25,10 +25,10 @@ from kira.llm import (
     serialise_assistant,
     serialise_tool_results,
 )
-from kira.llm.client import _BACKOFF_CAP_S, _backoff, carry_reasoning_forward
-from kira.llm.sampling import assert_sampling_is_pinned
-from kira.llm.types import ModelResponse, ToolSpec, Usage
-from kira.settings import load_profile, load_settings
+from maver.llm.client import _BACKOFF_CAP_S, _backoff, carry_reasoning_forward
+from maver.llm.sampling import assert_sampling_is_pinned
+from maver.llm.types import ModelResponse, ToolSpec, Usage
+from maver.settings import load_profile, load_settings
 
 MODELS = Path("configs/models")
 
@@ -40,7 +40,7 @@ def _no_real_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
     The backoff schedule itself is unit-tested separately; sleeping through it here
     would make the suite slow and its duration random.
     """
-    monkeypatch.setattr("kira.llm.client._backoff", lambda *_: 0.0)
+    monkeypatch.setattr("maver.llm.client._backoff", lambda *_: 0.0)
 
 
 class _Fn:
@@ -572,8 +572,8 @@ def test_a_quoted_key_in_the_environment_is_not_sent_with_its_quotes(
 def test_an_override_displaces_the_profile(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pointing a run at another server is what the override is for, and a key given
     explicitly outranks one the profile names."""
-    monkeypatch.setenv("KIRA_MODEL__ENDPOINT_OVERRIDE", "http://localhost:9/v1")
-    monkeypatch.setenv("KIRA_MODEL__API_KEY", "sk-from-the-operator")
+    monkeypatch.setenv("MAVER_MODEL__ENDPOINT_OVERRIDE", "http://localhost:9/v1")
+    monkeypatch.setenv("MAVER_MODEL__API_KEY", "sk-from-the-operator")
     client = LLMClient(load_profile("qwen3.6-35b-a3b", MODELS), load_settings())
 
     kwargs, _ = client._build_kwargs(

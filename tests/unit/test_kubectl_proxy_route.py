@@ -19,14 +19,14 @@ from typing import Any
 import pytest
 import yaml
 
-from kira.audit.journal import Journal
-from kira.settings.groups import ToolSettings
-from kira.tools.allowlists import ROLE_TOOLSETS
-from kira.tools.context import EvidencePolicy, ToolContext, kubectl_route
-from kira.tools.execution import bash_exec, code_exec, subprocess_env
-from kira.tools.registry import ToolRegistryError, description_for, validate_registry
-from kira.tools.toolsets import build_toolset
-from kira.tools.workspace import SessionWorkspace
+from maver.audit.journal import Journal
+from maver.settings.groups import ToolSettings
+from maver.tools.allowlists import ROLE_TOOLSETS
+from maver.tools.context import EvidencePolicy, ToolContext, kubectl_route
+from maver.tools.execution import bash_exec, code_exec, subprocess_env
+from maver.tools.registry import ToolRegistryError, description_for, validate_registry
+from maver.tools.toolsets import build_toolset
+from maver.tools.workspace import SessionWorkspace
 
 ALL_CAPABILITIES = frozenset({"kubernetes", "kubernetes.rollback", "metrics", "logs", "traces"})
 
@@ -243,7 +243,7 @@ async def test_output_still_goes_through_the_evidence_policy_on_the_proxy_route(
 # --- the role prompts ---------------------------------------------------------------
 
 
-ROLES = Path(__file__).resolve().parents[2] / "src" / "kira" / "roles"
+ROLES = Path(__file__).resolve().parents[2] / "src" / "maver" / "roles"
 
 
 def test_every_role_composes_its_prompt_for_the_route_it_is_running_on() -> None:
@@ -337,7 +337,7 @@ def test_a_route_entry_may_not_describe_a_role_that_cannot_call_the_tool() -> No
 
 
 def _stand_in():
-    from kira.tools.registry import ToolSpec  # noqa: PLC0415
+    from maver.tools.registry import ToolSpec  # noqa: PLC0415
 
     async def fn(ctx: object, **_: object) -> str:
         return "ok"
@@ -374,7 +374,7 @@ async def test_a_killed_sandbox_command_is_reported_in_the_words_the_archive_use
     tmp_path: Path,
 ) -> None:
     """A rebuild is validated by comparing the `error:` strings the model saw against the
-    archive's, where a string only Kira emits reads as a defect. The prototype called
+    archive's, where a string only MAVER emits reads as a defect. The prototype called
     these `command` and `script`; the saved-output labels stay `shell` and `code_exec`,
     which is also what it used."""
     ctx = context(tmp_path)

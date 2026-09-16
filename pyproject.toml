@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "kira"
+name = "maver"
 version = "0.1.0"
-description = "Kubernetes Incident Recovery Agent: a memory-augmented multi-agent pipeline for autonomous microservice incident recovery with privately served language models."
+description = "Multi-Agent Verification and Experience-informed Recovery: a configurable framework for autonomous microservice incident recovery with privately served language models."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -57,7 +57,7 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.30",
     # The Snowball English stemmer PostgreSQL's `english_stem` dictionary runs, so that
     # the embedded backend can build the same candidate pool as the server one. Pure
-    # Python and dependency-free: see kira.memory.lexemes.
+    # Python and dependency-free: see maver.memory.lexemes.
     "snowballstemmer>=3.1.1",
 ]
 
@@ -66,14 +66,14 @@ postgres = ["psycopg[binary]>=3.2"]
 vector = ["chromadb>=1.0"]
 kafka = ["aiokafka>=0.12"]
 sregym = ["mcp>=2.1", "httpx-sse>=0.4"]
-all = ["kira[postgres,vector,kafka,sregym]"]
+all = ["maver[postgres,vector,kafka,sregym]"]
 
 [project.scripts]
-kira = "kira.cli:app"
+maver = "maver.cli:app"
 # The harness spawns this as a subprocess and waits for it to exit. It is a console
 # script so a fresh install has the path, and scripts/sregym-driver.py so the path a
 # deployed harness already names keeps working.
-kira-sregym-driver = "kira.adapters.sregym.driver:main"
+maver-sregym-driver = "maver.adapters.sregym.driver:main"
 
 # Extension seams. A third party ships a role, tool, ranker or environment adapter by
 # declaring an entry point in these groups; no fork required. The module named by the
@@ -81,27 +81,27 @@ kira-sregym-driver = "kira.adapters.sregym.driver:main"
 # it checks anything, so a plugin is validated with the rest of the deployment.
 #
 # A role and a tool still need an allowlist entry to be reachable, and the allowlist is
-# core: `kira.tools.allowlists.ROLE_TOOLSETS` is the mutable table a plugin module adds
+# core: `maver.tools.allowlists.ROLE_TOOLSETS` is the mutable table a plugin module adds
 # its own row to, or splices its tool name into, in the same import. A tool shipped this
 # way carries its own `descriptions` rather than appearing in the packaged catalogue.
 #
 # There is no transports group: a transport is not selected by name anywhere. The core
 # uses the direct one and an environment adapter supplies its own, so the adapter group
 # below is the seam a third-party transport arrives through.
-[project.entry-points."kira.roles"]
+[project.entry-points."maver.roles"]
 
-[project.entry-points."kira.tools"]
+[project.entry-points."maver.tools"]
 
-[project.entry-points."kira.rankers"]
+[project.entry-points."maver.rankers"]
 
-[project.entry-points."kira.adapters"]
+[project.entry-points."maver.adapters"]
 # Present in every install, including one without the sregym extra, so the module it
 # names must import without the client library. The import that needs it is deferred.
-sregym = "kira.adapters.sregym"
+sregym = "maver.adapters.sregym"
 # No extra of its own: the bridge client is httpx, which is a core dependency, and
 # AIOpsLab is an operator-supplied checkout rather than a package. The import that needs
 # the bridge is deferred for the same reason as above.
-aiopslab = "kira.adapters.aiopslab:ADAPTER"
+aiopslab = "maver.adapters.aiopslab:ADAPTER"
 
 [project.urls]
 Homepage = "https://github.com/evenodderguy/kira"
@@ -122,7 +122,7 @@ test = [
 required-version = ">=0.9"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/kira"]
+packages = ["src/maver", "src/kira"]
 
 [tool.ruff]
 line-length = 100
@@ -160,7 +160,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["D"]
 # The suite has to be able to exercise an adapter. The rule it stands for is enforced
-# over src/kira by an AST walk in tests/unit/test_adapters.py, which a lint rule cannot
+# over src/maver by an AST walk in tests/unit/test_adapters.py, which a lint rule cannot
 # do for an adapter nobody has written yet or for an import taken by name.
 "tests/unit/test_sregym_adapter.py" = ["TID251"]
 "tests/unit/test_sregym_exclusions.py" = ["TID251"]
@@ -170,21 +170,21 @@ ignore = [
 # The AIOpsLab adapter's own tests, for the same two reasons.
 "tests/unit/adapters/aiopslab/*" = ["TID251"]
 "tests/contract/test_transport_aiopslab.py" = ["TID251"]
-"src/kira/prompts/*" = ["D"]
+"src/maver/prompts/*" = ["D"]
 # Field descriptions in the artifact schemas are shipped to the model as its
 # submission tool's JSON Schema and are carried over verbatim. Their typographic
 # characters are part of the frozen contract, not a style choice.
-"src/kira/contracts/artifacts.py" = ["RUF001", "RUF002", "RUF003"]
-"src/kira/orchestration/graph.py" = ["TID251"]  # the one module allowed to import it
-"src/kira/llm/_provider.py" = ["TID251"]  # the one module allowed to import it
+"src/maver/contracts/artifacts.py" = ["RUF001", "RUF002", "RUF003"]
+"src/maver/orchestration/graph.py" = ["TID251"]  # the one module allowed to import it
+"src/maver/llm/_provider.py" = ["TID251"]  # the one module allowed to import it
 # An adapter's own modules are the one place its package may be imported from. The ban
 # exists to stop the core naming an environment, not to stop an adapter being written.
-"src/kira/adapters/sregym/*" = ["TID251"]
-"src/kira/adapters/aiopslab/*" = ["TID251"]
+"src/maver/adapters/sregym/*" = ["TID251"]
+"src/maver/adapters/aiopslab/*" = ["TID251"]
 "tests/unit/test_aiopslab_adapter.py" = ["TID251"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["kira"]
+known-first-party = ["maver"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -193,10 +193,10 @@ convention = "google"
 # environment it is running under; an adapter supplies its transport instead.
 # See STYLE_GUIDE.md "Layer boundaries".
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
-"kira.adapters.sregym".msg = "Core modules must not import an adapter. Adapters register via the kira.adapters entry-point group and supply their own transport."
-"kira.adapters.aiopslab".msg = "Core modules must not import an adapter. Adapters register via the kira.adapters entry-point group and supply their own transport."
-"langgraph".msg = "Only kira.orchestration.graph may import the graph executor. Routing lives in routing.py and is framework-free; see STYLE_GUIDE.md 'LangGraph containment'."
-"litellm".msg = "Only kira.llm._provider may import the provider library; it owns the import-time environment write the library requires. Use kira.llm types instead."
+"maver.adapters.sregym".msg = "Core modules must not import an adapter. Adapters register via the maver.adapters entry-point group and supply their own transport."
+"maver.adapters.aiopslab".msg = "Core modules must not import an adapter. Adapters register via the maver.adapters entry-point group and supply their own transport."
+"langgraph".msg = "Only maver.orchestration.graph may import the graph executor. Routing lives in routing.py and is framework-free; see STYLE_GUIDE.md 'LangGraph containment'."
+"litellm".msg = "Only maver.llm._provider may import the provider library; it owns the import-time environment write the library requires. Use maver.llm types instead."
 
 [tool.ruff.format]
 docstring-code-format = true

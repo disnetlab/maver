@@ -15,10 +15,10 @@ from typing import Any
 
 import pytest
 
-from kira.audit.journal import Journal
-from kira.tools.context import ToolContext
-from kira.tools.snapshot import namespace_snapshot
-from kira.tools.workspace import SessionWorkspace
+from maver.audit.journal import Journal
+from maver.tools.context import ToolContext
+from maver.tools.snapshot import namespace_snapshot
+from maver.tools.workspace import SessionWorkspace
 
 _RESOURCE = {
     "deployments,statefulsets,daemonsets": "workloads",
@@ -251,7 +251,7 @@ async def test_every_unusable_read_is_named_in_the_log(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A total read outage stayed invisible for months. "(unavailable)" alone is why."""
-    with caplog.at_level(logging.WARNING, logger="kira.tools.snapshot"):
+    with caplog.at_level(logging.WARNING, logger="maver.tools.snapshot"):
         await namespace_snapshot(context(tmp_path, FakeCluster(failed_reads())), namespace="shop")
     named = {record.args[1] for record in caplog.records if record.args}
     assert named == set(_RESOURCE.values())

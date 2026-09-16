@@ -4,17 +4,17 @@ from collections.abc import Sequence
 
 import pytest
 
-from kira.contracts.lifecycle import LifecycleState as S
-from kira.memory.lifecycle import (
+from maver.contracts.lifecycle import LifecycleState as S
+from maver.memory.lifecycle import (
     DEFAULT_LIFECYCLE_WEIGHT,
     IllegalTransition,
     check_transition,
     resolve_weights,
     weight_for,
 )
-from kira.memory.ports import SearchScope, SessionMemory
-from kira.memory.ranking import Bm25Ranker
-from kira.memory.retrieval import Retriever
+from maver.memory.ports import SearchScope, SessionMemory
+from maver.memory.ranking import Bm25Ranker
+from maver.memory.retrieval import Retriever
 
 
 @pytest.mark.parametrize(

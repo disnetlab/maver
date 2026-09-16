@@ -3,12 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from kira.audit.journal import Journal
-from kira.settings.groups import ToolSettings
-from kira.tools.context import ToolContext
-from kira.tools.execution import bash_exec
-from kira.tools.host import ssh_exec
-from kira.tools.kubernetes import (
+from maver.audit.journal import Journal
+from maver.settings.groups import ToolSettings
+from maver.tools.context import ToolContext
+from maver.tools.execution import bash_exec
+from maver.tools.host import ssh_exec
+from maver.tools.kubernetes import (
     KubernetesPolicy,
     _append_delete_wait_false,
     _bound_blocking_wait,
@@ -19,7 +19,7 @@ from kira.tools.kubernetes import (
     kubectl_authority,
     tokenize,
 )
-from kira.tools.workspace import SessionWorkspace
+from maver.tools.workspace import SessionWorkspace
 
 POLICY = KubernetesPolicy()
 

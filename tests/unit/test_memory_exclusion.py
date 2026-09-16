@@ -15,15 +15,15 @@ import json
 import pathlib
 from collections.abc import AsyncIterator
 
-from kira.audit.journal import Journal, ListSink
-from kira.memory.factory import build_storage
-from kira.memory.ports import SessionMemory
-from kira.orchestration.runner import Deployment, incident_context, tool_context_for
-from kira.settings.groups import MemorySettings, ServerSettings, VerifySettings
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
-from kira.tools.context import ToolContext
-from kira.tools.memory import memory_search, open_memory, session_trace_summary
+from maver.audit.journal import Journal, ListSink
+from maver.memory.factory import build_storage
+from maver.memory.ports import SessionMemory
+from maver.orchestration.runner import Deployment, incident_context, tool_context_for
+from maver.settings.groups import MemorySettings, ServerSettings, VerifySettings
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
+from maver.tools.context import ToolContext
+from maver.tools.memory import memory_search, open_memory, session_trace_summary
 
 WITHHELD = "sess-withheld"
 QUERY = "probe payment-service 8080 listens 9090"

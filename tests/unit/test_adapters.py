@@ -19,7 +19,7 @@ import httpx
 import pytest
 from fastapi import APIRouter
 
-from kira.adapters.base import (
+from maver.adapters.base import (
     AdapterTool,
     EnvironmentAdapter,
     EpisodeContext,
@@ -28,25 +28,25 @@ from kira.adapters.base import (
     RoleOverlay,
     SubmissionRecord,
 )
-from kira.adapters.registry import adapter, available_adapters, clear_adapters, get_adapter
-from kira.api.app import build_deployment, create_app
-from kira.audit.journal import ListSink
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.memory.factory import build_storage
-from kira.memory.ports import SessionMemory
-from kira.middleware.authority import ApprovalPending
-from kira.orchestration import episode as episode_module
-from kira.orchestration.episode import open_episode, run_episode
-from kira.orchestration.runner import Deployment
-from kira.settings.groups import (
+from maver.adapters.registry import adapter, available_adapters, clear_adapters, get_adapter
+from maver.api.app import build_deployment, create_app
+from maver.audit.journal import ListSink
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.memory.factory import build_storage
+from maver.memory.ports import SessionMemory
+from maver.middleware.authority import ApprovalPending
+from maver.orchestration import episode as episode_module
+from maver.orchestration.episode import open_episode, run_episode
+from maver.orchestration.runner import Deployment
+from maver.settings.groups import (
     IntakeSettings,
     MemorySettings,
     ServerSettings,
     VerifySettings,
 )
-from kira.settings.profiles import load_profile
-from kira.settings.root import Settings
-from kira.tools.registry import ToolSpec
+from maver.settings.profiles import load_profile
+from maver.settings.root import Settings
+from maver.tools.registry import ToolSpec
 
 PROFILE = load_profile("qwen3.6-35b-a3b", pathlib.Path("configs/models"))
 
@@ -376,7 +376,7 @@ async def test_the_storage_only_key_is_written_and_never_rendered(
 ) -> None:
     """The episode key is the ground-truth fault label. It reaches the session record
     and the prompt view drops it, which is what makes the blinding structural."""
-    from kira.roles.prompting import visible_alert  # noqa: PLC0415
+    from maver.roles.prompting import visible_alert  # noqa: PLC0415
 
     stub = StubAdapter()
     deploy = deployment(tmp_path, model=SubmittingModel())
@@ -403,21 +403,21 @@ def test_an_adapter_that_could_not_load_is_reported_rather_than_missing(
         get_adapter("nope")
 
 
-CONTRACT_MODULES = {"kira.adapters", "kira.adapters.base", "kira.adapters.registry"}
+CONTRACT_MODULES = {"maver.adapters", "maver.adapters.base", "maver.adapters.registry"}
 
 
 def test_no_core_module_imports_a_concrete_adapter() -> None:
     """Generalises the lint rule to adapters nobody has written yet, and to the
     import-by-name form a lint rule cannot see."""
-    root = pathlib.Path("src/kira")
+    root = pathlib.Path("src/maver")
     offenders: list[str] = []
     for path in root.rglob("*.py"):
-        if path.parts[:3] == ("src", "kira", "adapters") and len(path.parts) > 4:
+        if path.parts[:3] == ("src", "maver", "adapters") and len(path.parts) > 4:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             for name in _imported_modules(node):
-                if name.startswith("kira.adapters") and name not in CONTRACT_MODULES:
+                if name.startswith("maver.adapters") and name not in CONTRACT_MODULES:
                     offenders.append(f"{path}: {name}")
     assert offenders == []
 
@@ -432,7 +432,7 @@ def test_every_in_tree_adapter_package_is_banned_from_core_imports() -> None:
     """
     packages = {
         path.name
-        for path in pathlib.Path("src/kira/adapters").iterdir()
+        for path in pathlib.Path("src/maver/adapters").iterdir()
         if (path / "__init__.py").exists()
     }
     banned = set(
@@ -442,16 +442,16 @@ def test_every_in_tree_adapter_package_is_banned_from_core_imports() -> None:
     )
 
     assert packages
-    assert {f"kira.adapters.{name}" for name in packages} <= banned
+    assert {f"maver.adapters.{name}" for name in packages} <= banned
 
 
 def test_importing_the_core_does_not_import_an_adapter() -> None:
     """Catches an import that arrives through a re-export rather than a statement."""
     code = (
-        "import sys, kira.orchestration.runner, kira.roles.registry, kira.tools.toolsets, "
-        "kira.api.app;"
-        "print([m for m in sys.modules if m.startswith('kira.adapters.') "
-        "and m not in ('kira.adapters.base', 'kira.adapters.registry')])"
+        "import sys, maver.orchestration.runner, maver.roles.registry, maver.tools.toolsets, "
+        "maver.api.app;"
+        "print([m for m in sys.modules if m.startswith('maver.adapters.') "
+        "and m not in ('maver.adapters.base', 'maver.adapters.registry')])"
     )
     out = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, check=True
@@ -746,7 +746,7 @@ async def test_an_adapter_with_no_episode_route_serves_the_generic_intake(
     app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
     transport = deploy.transport_for("s")
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://kira"
+        transport=httpx.ASGITransport(app=app), base_url="http://maver"
     ) as http:
         accepted = await http.post(
             "/api/v1/incidents", json={"alert": {"alertname": "X", "namespace": "shop"}}

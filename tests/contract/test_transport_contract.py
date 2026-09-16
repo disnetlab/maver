@@ -30,7 +30,7 @@ from transport_contract import (
     ToolTransportContract,
 )
 
-from kira.tools.errors import tool_error
+from maver.tools.errors import tool_error
 
 UNREACHABLE = tool_error("the backend is not reachable")
 

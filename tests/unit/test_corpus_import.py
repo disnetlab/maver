@@ -13,11 +13,11 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from kira.cli import app
-from kira.memory.corpus import ImportReport, MalformedRecord, import_records, parse_records
-from kira.memory.factory import build_storage
-from kira.settings.groups import MemorySettings, ServerSettings
-from kira.settings.root import Settings
+from maver.cli import app
+from maver.memory.corpus import ImportReport, MalformedRecord, import_records, parse_records
+from maver.memory.factory import build_storage
+from maver.settings.groups import MemorySettings, ServerSettings
+from maver.settings.root import Settings
 
 runner = CliRunner()
 
@@ -177,7 +177,7 @@ def test_the_command_loads_a_named_corpus_and_reports_what_it_did(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The corpus is the database, so ``--corpus`` decides which campaign these become."""
-    monkeypatch.setenv("KIRA_SERVER__WORKDIR", str(tmp_path))
+    monkeypatch.setenv("MAVER_SERVER__WORKDIR", str(tmp_path))
     path = _file(tmp_path, RECORD, OTHER)
 
     first = runner.invoke(app, ["memory", "import", str(path), "--corpus", "archived_sweep"])
@@ -203,7 +203,7 @@ def test_a_bad_file_leaves_no_corpus_behind(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Validated whole before the store is opened, so a refusal is not a half-import."""
-    monkeypatch.setenv("KIRA_SERVER__WORKDIR", str(tmp_path))
+    monkeypatch.setenv("MAVER_SERVER__WORKDIR", str(tmp_path))
     path = tmp_path / "corpus.jsonl"
     path.write_text(f"{json.dumps(RECORD)}\n{json.dumps({'session_id': 'x'})}\n", encoding="utf-8")
 
@@ -217,7 +217,7 @@ def test_a_bad_file_leaves_no_corpus_behind(
 def test_a_missing_file_is_a_message_rather_than_a_traceback(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("KIRA_SERVER__WORKDIR", str(tmp_path))
+    monkeypatch.setenv("MAVER_SERVER__WORKDIR", str(tmp_path))
     missing = runner.invoke(app, ["memory", "import", str(tmp_path / "nothing.jsonl")])
     assert missing.exit_code == 2
     assert "nothing.jsonl" in missing.output

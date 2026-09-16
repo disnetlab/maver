@@ -23,11 +23,11 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from kira.adapters.aiopslab.host import bridge as bridge_module
-from kira.adapters.aiopslab.host import lifecycle as lifecycle_module
-from kira.adapters.aiopslab.host import main as main_module
-from kira.adapters.aiopslab.host import sweep as sweep_module
-from kira.adapters.aiopslab.host.bridge import BridgeBackend, serve_bridge
+from maver.adapters.aiopslab.host import bridge as bridge_module
+from maver.adapters.aiopslab.host import lifecycle as lifecycle_module
+from maver.adapters.aiopslab.host import main as main_module
+from maver.adapters.aiopslab.host import sweep as sweep_module
+from maver.adapters.aiopslab.host.bridge import BridgeBackend, serve_bridge
 
 NAMESPACE = "test-hotel-reservation"
 TOKEN = "0123456789abcdef"
@@ -208,7 +208,7 @@ def post_action(port: int, payload: dict[str, Any], token: str = TOKEN) -> None:
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
-            "X-Kira-Session": "sess-1",
+            "X-MAVER-Session": "sess-1",
         },
         method="POST",
     )
@@ -272,7 +272,7 @@ async def test_one_problem_leaves_both_records_beside_the_harness_result(
     with fake_agent() as server:
         await lifecycle_module.run(run_args(server, tmp_path, "misconfig-analysis-1"))
 
-    record = json.loads((tmp_path / "kira-submission.json").read_text(encoding="utf-8"))
+    record = json.loads((tmp_path / "maver-submission.json").read_text(encoding="utf-8"))
 
     assert (tmp_path / "bridge.log").exists()
     assert record["problem"] == "misconfig-analysis-1"
@@ -472,7 +472,7 @@ async def test_every_problem_gets_a_row_a_record_and_a_line_in_the_sweep_log(
     assert rows[0]["ended_utc"].endswith("Z")
     assert float(rows[0]["duration_seconds"]) >= 0
     assert Path(rows[0]["result_file"]).parent == problem_dir
-    assert (problem_dir / "kira-submission.json").exists()
+    assert (problem_dir / "maver-submission.json").exists()
     assert (problem_dir / "bridge.log").exists()
     assert metadata["problem_count"] == "2"
     assert metadata["agent_revision"] == "abc123"

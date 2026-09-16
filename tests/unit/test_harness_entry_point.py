@@ -26,7 +26,7 @@ ENTRY = SCRIPTS / "sregym-driver.py"
 DRIVER = (
     pathlib.Path(__file__).resolve().parents[2]
     / "src"
-    / "kira"
+    / "maver"
     / "adapters"
     / "sregym"
     / "driver.py"
@@ -69,5 +69,5 @@ def test_the_driver_imports_only_the_standard_library() -> None:
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             imported.add(node.module.split(".")[0])
 
-    assert "kira" not in imported
+    assert "maver" not in imported
     assert imported <= set(__import__("sys").stdlib_module_names)

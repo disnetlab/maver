@@ -4,21 +4,21 @@ from typing import Any
 
 import pytest
 
-from kira.contracts.artifacts import ExecutionResult, Plan, PlanStep, RootCause, VerifyResult
-from kira.contracts.state import IncidentState
-from kira.orchestration.engine import (
+from maver.contracts.artifacts import ExecutionResult, Plan, PlanStep, RootCause, VerifyResult
+from maver.contracts.state import IncidentState
+from maver.orchestration.engine import (
     STEP_LIMIT,
     Engine,
     LangGraphEngine,
     SequentialEngine,
     StepLimitExceeded,
 )
-from kira.orchestration.graph import build_graph
-from kira.orchestration.modes import resolve_mode
-from kira.orchestration.routing import RoutingPolicy, apply_handback, pending_handback
-from kira.orchestration.state import initial_state
-from kira.settings.groups import PipelineSettings
-from kira.settings.root import Settings
+from maver.orchestration.graph import build_graph
+from maver.orchestration.modes import resolve_mode
+from maver.orchestration.routing import RoutingPolicy, apply_handback, pending_handback
+from maver.orchestration.state import initial_state
+from maver.settings.groups import PipelineSettings
+from maver.settings.root import Settings
 
 POLICY = RoutingPolicy(verify_enabled=True, remediation_retries=2, inconclusive_retries=1)
 

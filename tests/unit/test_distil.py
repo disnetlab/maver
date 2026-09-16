@@ -5,11 +5,11 @@ from typing import Any
 
 import pytest
 
-from kira.contracts.artifacts import LearningPacket, LearningResult, RoleTraceSummary
-from kira.memory.distil import distil
-from kira.memory.factory import build_storage
-from kira.settings.groups import MemorySettings, ServerSettings
-from kira.settings.root import Settings
+from maver.contracts.artifacts import LearningPacket, LearningResult, RoleTraceSummary
+from maver.memory.distil import distil
+from maver.memory.factory import build_storage
+from maver.settings.groups import MemorySettings, ServerSettings
+from maver.settings.root import Settings
 
 RESULT = LearningResult(
     observations=["svc/user had no endpoints"],

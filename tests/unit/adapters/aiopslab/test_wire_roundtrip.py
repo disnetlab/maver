@@ -32,12 +32,12 @@ from urllib.request import urlopen
 
 import pytest
 
-from kira.adapters.aiopslab.host.bridge import BridgeBackend, serve_bridge
-from kira.adapters.aiopslab.transport import AiopsLabTransport
-from kira.tools.errors import call_failed
-from kira.tools.metrics import _parse_alerts, partition_incident_alerts
-from kira.tools.snapshot import _load_items
-from kira.tools.traces import _filter_traces_to_candidates, _parse_structured
+from maver.adapters.aiopslab.host.bridge import BridgeBackend, serve_bridge
+from maver.adapters.aiopslab.transport import AiopsLabTransport
+from maver.tools.errors import call_failed
+from maver.tools.metrics import _parse_alerts, partition_incident_alerts
+from maver.tools.snapshot import _load_items
+from maver.tools.traces import _filter_traces_to_candidates, _parse_structured
 
 NAMESPACE = "test-hotel-reservation"
 TOKEN = "s3cret-token-value"

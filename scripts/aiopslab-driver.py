@@ -19,9 +19,9 @@ import sys
 import types
 
 _HOST = (
-    pathlib.Path(__file__).resolve().parents[1] / "src" / "kira" / "adapters" / "aiopslab" / "host"
+    pathlib.Path(__file__).resolve().parents[1] / "src" / "maver" / "adapters" / "aiopslab" / "host"
 )
-_PACKAGE = "kira_aiopslab_host"
+_PACKAGE = "maver_aiopslab_host"
 
 
 def _load() -> types.ModuleType:

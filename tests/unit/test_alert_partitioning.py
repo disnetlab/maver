@@ -12,12 +12,12 @@ from typing import Any
 
 import pytest
 
-from kira.audit.journal import Journal, ListSink
-from kira.settings.groups import ToolSettings
-from kira.tools.context import ToolContext
-from kira.tools.metrics import get_alerts, partition_incident_alerts
-from kira.tools.scope import IncidentScope
-from kira.tools.workspace import SessionWorkspace
+from maver.audit.journal import Journal, ListSink
+from maver.settings.groups import ToolSettings
+from maver.tools.context import ToolContext
+from maver.tools.metrics import get_alerts, partition_incident_alerts
+from maver.tools.scope import IncidentScope
+from maver.tools.workspace import SessionWorkspace
 
 FIXTURE = json.loads(
     (

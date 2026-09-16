@@ -6,36 +6,36 @@
 # bind either in a platform, observability, or fault-injection namespace: the last of
 # those is where a benchmark keeps the answer.
 #
-# `kira scaffold rolebinding --namespace <ns> [--write]` generates these once the CLI
+# `maver scaffold rolebinding --namespace <ns> [--write]` generates these once the CLI
 # command lands; until then this file is the template.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: kira-read
+  name: maver-read
   namespace: REPLACE_TARGET_NAMESPACE
   labels:
-    app.kubernetes.io/name: kira
+    app.kubernetes.io/name: maver
 subjects:
   - kind: ServiceAccount
-    name: kira
-    namespace: kira
+    name: maver
+    namespace: maver
 roleRef:
   kind: ClusterRole
-  name: kira-namespace-read
+  name: maver-namespace-read
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: kira-write
+  name: maver-write
   namespace: REPLACE_TARGET_NAMESPACE
   labels:
-    app.kubernetes.io/name: kira
+    app.kubernetes.io/name: maver
 subjects:
   - kind: ServiceAccount
-    name: kira
-    namespace: kira
+    name: maver
+    namespace: maver
 roleRef:
   kind: ClusterRole
-  name: kira-namespace-write
+  name: maver-namespace-write
   apiGroup: rbac.authorization.k8s.io

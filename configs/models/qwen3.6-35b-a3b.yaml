@@ -1,7 +1,7 @@
 # Privately served open-weight agent model. Every sampling field is present; null
 # means the field is omitted from the request, never that it was forgotten. The
 # endpoint below is a placeholder for the operator's own server; a deployment points
-# at its real one with KIRA_MODEL__ENDPOINT_OVERRIDE rather than by editing this file.
+# at its real one with MAVER_MODEL__ENDPOINT_OVERRIDE rather than by editing this file.
 schema_version: 1
 name: qwen3.6-35b-a3b
 model: openai/qwen3.6-35b-a3b

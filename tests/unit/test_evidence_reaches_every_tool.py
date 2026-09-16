@@ -15,12 +15,12 @@ import pathlib
 
 import pytest
 
-from kira.audit.journal import Journal, ListSink
-from kira.tools.context import ToolContext
-from kira.tools.logs import get_label_values, get_labels, get_logs
-from kira.tools.metrics import get_alerts, get_metrics
-from kira.tools.traces import get_dependency_graph, get_operations, get_services, get_traces
-from kira.tools.workspace import SessionWorkspace
+from maver.audit.journal import Journal, ListSink
+from maver.tools.context import ToolContext
+from maver.tools.logs import get_label_values, get_labels, get_logs
+from maver.tools.metrics import get_alerts, get_metrics
+from maver.tools.traces import get_dependency_graph, get_operations, get_services, get_traces
+from maver.tools.workspace import SessionWorkspace
 
 MARKER = "chaos-mesh-must-not-be-seen"
 

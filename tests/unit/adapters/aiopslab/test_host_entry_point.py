@@ -8,7 +8,7 @@ moves without noticing: nothing else references it, so it breaks silently and th
 it breaks is a benchmark host part-way through a sweep.
 
 The standard-library-only rule is the other half of the same contract, and it is just as
-invisible: one import of `kira`, or of `httpx`, would pass every test here and fail only
+invisible: one import of `maver`, or of `httpx`, would pass every test here and fail only
 where it matters.
 """
 
@@ -20,7 +20,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[4]
 ENTRY = ROOT / "scripts" / "aiopslab-driver.py"
-HOST = ROOT / "src" / "kira" / "adapters" / "aiopslab" / "host"
+HOST = ROOT / "src" / "maver" / "adapters" / "aiopslab" / "host"
 
 ALLOWED_THIRD_PARTY = {"aiopslab"}
 """The harness's own package, which is by definition importable where this runs, and is

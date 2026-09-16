@@ -23,10 +23,10 @@ from typing import Any
 import httpx
 import pytest
 
-from kira.api.app import build_deployment, create_app
-from kira.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
-from kira.orchestration import jobs
-from kira.settings.root import load_settings, reset_settings
+from maver.api.app import build_deployment, create_app
+from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
+from maver.orchestration import jobs
+from maver.settings.root import load_settings, reset_settings
 
 # Deliberately unmarked. The `integration` marker means a live cluster, database or
 # model endpoint, and this needs none: the binary it calls is a shell script it writes
@@ -153,12 +153,12 @@ def deployment(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setenv("PATH", f"{binary.parent}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("TEST_KUBECTL_LOG", str(tmp_path / "kubectl.log"))
 
-    monkeypatch.setenv("KIRA_SERVER__WORKDIR", str(tmp_path / "workspace"))
-    monkeypatch.setenv("KIRA_MEMORY__ENABLED", "false")
-    monkeypatch.setenv("KIRA_MEMORY__LEARNING_ENABLED", "false")
-    monkeypatch.setenv("KIRA_VERIFY__ENABLED", "false")
-    monkeypatch.setenv("KIRA_AUTHORITY__MODE", "auto")
-    monkeypatch.setenv("KIRA_PIPELINE__AUTO_SNAPSHOT", "false")
+    monkeypatch.setenv("MAVER_SERVER__WORKDIR", str(tmp_path / "workspace"))
+    monkeypatch.setenv("MAVER_MEMORY__ENABLED", "false")
+    monkeypatch.setenv("MAVER_MEMORY__LEARNING_ENABLED", "false")
+    monkeypatch.setenv("MAVER_VERIFY__ENABLED", "false")
+    monkeypatch.setenv("MAVER_AUTHORITY__MODE", "auto")
+    monkeypatch.setenv("MAVER_PIPELINE__AUTO_SNAPSHOT", "false")
     reset_settings()
     return replace(build_deployment(load_settings()), completion=ScriptedModel())
 
@@ -170,7 +170,7 @@ async def test_an_incident_runs_end_to_end_on_the_shipped_transport(deployment: 
     assert "kubernetes" in transport.capabilities, "a kubectl on PATH is the whole premise"
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://kira"
+        transport=httpx.ASGITransport(app=app), base_url="http://maver"
     ) as http:
         created = await http.post("/api/v1/incidents", json={"alert": ALERT})
         assert created.status_code == 202, created.text
@@ -227,11 +227,11 @@ async def test_an_incident_runs_end_to_end_on_the_shipped_transport(deployment: 
 @pytest.fixture
 def every_mechanism(deployment: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     """The same composition with the store, the second pass and verification on."""
-    monkeypatch.setenv("KIRA_MEMORY__ENABLED", "true")
-    monkeypatch.setenv("KIRA_MEMORY__SECOND_PASS__ENABLED", "true")
-    monkeypatch.setenv("KIRA_MEMORY__SECOND_PASS__GATE", "quality")
-    monkeypatch.setenv("KIRA_MEMORY__SECOND_PASS__DELIVERY", "context")
-    monkeypatch.setenv("KIRA_VERIFY__ENABLED", "true")
+    monkeypatch.setenv("MAVER_MEMORY__ENABLED", "true")
+    monkeypatch.setenv("MAVER_MEMORY__SECOND_PASS__ENABLED", "true")
+    monkeypatch.setenv("MAVER_MEMORY__SECOND_PASS__GATE", "quality")
+    monkeypatch.setenv("MAVER_MEMORY__SECOND_PASS__DELIVERY", "context")
+    monkeypatch.setenv("MAVER_VERIFY__ENABLED", "true")
     reset_settings()
     return replace(build_deployment(load_settings()), completion=ScriptedModel())
 
@@ -244,7 +244,7 @@ async def test_every_mechanism_composes_on_the_shipped_transport(every_mechanism
     """
     app = create_app(deployment=every_mechanism, schedule_resume=lambda request_id: None)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://kira"
+        transport=httpx.ASGITransport(app=app), base_url="http://maver"
     ) as http:
         created = await http.post("/api/v1/incidents", json={"alert": ALERT})
         session_id = created.json()["session_id"]
@@ -265,7 +265,7 @@ async def test_every_mechanism_composes_on_the_shipped_transport(every_mechanism
 @pytest.fixture
 def prompting(deployment: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     """The same composition, holding every cluster write for a person."""
-    monkeypatch.setenv("KIRA_AUTHORITY__MODE", "prompt")
+    monkeypatch.setenv("MAVER_AUTHORITY__MODE", "prompt")
     reset_settings()
     built = replace(build_deployment(load_settings()), completion=ScriptedModel())
     jobs.bind_deployment(built)
@@ -295,7 +295,7 @@ async def test_a_write_waits_for_a_person_and_then_does_what_they_said(
     app = create_app(deployment=prompting, schedule_resume=resumed.append)
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://kira"
+        transport=httpx.ASGITransport(app=app), base_url="http://maver"
     ) as http:
         created = await http.post("/api/v1/incidents", json={"alert": ALERT})
         session_id = created.json()["session_id"]

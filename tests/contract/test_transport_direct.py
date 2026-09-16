@@ -27,8 +27,8 @@ from transport_contract import (
     ToolTransportContract,
 )
 
-from kira.settings.groups import TransportSettings
-from kira.tools.transport.direct import DirectTransport
+from maver.settings.groups import TransportSettings
+from maver.tools.transport.direct import DirectTransport
 
 PROMETHEUS = "http://prometheus.contract.test"
 LOKI = "http://loki.contract.test"

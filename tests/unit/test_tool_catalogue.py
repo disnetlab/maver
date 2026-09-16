@@ -6,14 +6,14 @@ from typing import Any
 import pytest
 import yaml
 
-from kira.prompts.loader import compose_role_prompt, read_runtime
-from kira.settings.root import known_env_names
-from kira.tools.allowlists import RETRIEVAL_TOOLS, ROLE_TOOLSETS
-from kira.tools.context import DEFAULT_KUBECTL_ROUTE, KUBECTL_ROUTES
-from kira.tools.registry import ToolSpec, validate_registry
+from maver.prompts.loader import compose_role_prompt, read_runtime
+from maver.settings.root import known_env_names
+from maver.tools.allowlists import RETRIEVAL_TOOLS, ROLE_TOOLSETS
+from maver.tools.context import DEFAULT_KUBECTL_ROUTE, KUBECTL_ROUTES
+from maver.tools.registry import ToolSpec, validate_registry
 
 DESCRIPTIONS: dict[str, Any] = yaml.safe_load(
-    files("kira.tools").joinpath("descriptions.yaml").read_text(encoding="utf-8")
+    files("maver.tools").joinpath("descriptions.yaml").read_text(encoding="utf-8")
 )
 
 
@@ -44,7 +44,7 @@ def test_the_shipped_catalogue_satisfies_every_registry_rule() -> None:
 
     The registry here is built from the description keys rather than from the live one,
     so this checks the two files against each other. The full bijection against the
-    registered tools is enforced at import of ``kira.tools`` once the capability modules
+    registered tools is enforced at import of ``maver.tools`` once the capability modules
     that declare them land.
     """
     registry = {name: stand_in(name) for name in DESCRIPTIONS}
