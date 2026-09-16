@@ -210,6 +210,7 @@ class InterventionEvent(BaseModel):
         "repeat_breaker",
         "finalizer_rescue",
         "submit_guard",
+        "submit_normalization",
         "tool_choice",
         "turn_limit",
         "timeout",

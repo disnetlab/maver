@@ -25,12 +25,14 @@ class PlanningAgent(Agent):
 class ExecutionAgent(Agent):
     """The existing execution agent and its serialized write behaviour."""
 
+    version = "2"
     role_spec = EXECUTION
 
 
 class VerifyAgent(Agent):
     """The existing blind verifier and deployment health checks."""
 
+    version = "2"
     role_spec = VERIFY
 
 

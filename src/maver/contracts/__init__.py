@@ -35,7 +35,7 @@ from maver.contracts.events import (
 from maver.contracts.lifecycle import LifecycleState, RunStatus
 from maver.contracts.state import IncidentState, TargetStage
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 """Version of the submission schemas and the event contract, together.
 
 One number for both, because both are read back from stored results and neither moves

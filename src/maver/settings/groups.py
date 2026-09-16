@@ -752,6 +752,16 @@ class VerifySettings(SettingsGroup):
         "VERIFY_HEALTH_GATE",
         description="Enforce a computed namespace-health floor before accepting recovery.",
     )
+    handback_retries: Annotated[int | None, Field(ge=0)] = setting(
+        None,
+        "MAVER_VERIFY__HANDBACK_RETRIES",
+        description=(
+            "Maximum Verify returns to RCA or Planning, within the shared remediation "
+            "budget. Unset inherits pipeline.remediation_retries; zero allows recovery "
+            "checks but no Verify hand-backs. Execution replans and inconclusive "
+            "rechecks do not spend this allowance."
+        ),
+    )
     inconclusive_retries: int = setting(
         1,
         "MAVER_VERIFY__INCONCLUSIVE_RETRIES",

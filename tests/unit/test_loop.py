@@ -5,8 +5,11 @@ import pathlib
 import pytest
 
 from maver.audit.journal import Journal, ListSink
+from maver.audit.store_sink import StoreSink
 from maver.contracts.events import InterventionEvent, SubmissionEvent, ToolCallEvent
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, ToolResult, ToolSpec, Usage
+from maver.memory.factory import build_storage
+from maver.memory.ports import AgentRunRecord
 from maver.middleware.authority import ApprovalPending
 from maver.middleware.base import MiddlewareStack, ToolHandler, ToolRequest
 from maver.roles.loop import run_until_submit
@@ -19,7 +22,8 @@ from maver.roles.policy import (
     no_tool_nudge_message,
     repeat_breaker_message,
 )
-from maver.settings.groups import PipelineSettings, RuntimeSettings
+from maver.settings.groups import MemorySettings, PipelineSettings, RuntimeSettings, ServerSettings
+from maver.settings.root import Settings
 from maver.tools.context import ToolContext
 from maver.tools.errors import call_failed
 from maver.tools.execution import _run
@@ -944,3 +948,97 @@ async def test_a_tool_that_hit_its_bound_is_recorded_as_an_intervention(
     ]
     assert timeout.action == "refused"
     assert timeout.detail.startswith("blocks: error: command timed out after")
+
+
+async def test_submission_normalizer_precedes_guard_and_persists_both_payloads(
+    tmp_path: pathlib.Path,
+) -> None:
+    settings = Settings(
+        server=ServerSettings(workdir=tmp_path),
+        memory=MemorySettings(enabled=False, learning_enabled=False),
+    )
+    storage = build_storage(settings)
+    storage.runs.start_run(
+        AgentRunRecord(
+            agent_run_id="normalizer-run",
+            pipeline_id="s1",
+            agent_name="rca",
+            attempt=1,
+            status="running",
+            started_at="2026-09-17T00:00:00Z",
+        )
+    )
+    sink = StoreSink(storage.runs)
+    journal = Journal(sink, session_id="s1", stage="rca", run_id="normalizer-run")
+    raw = {"summary": "observed"}
+    repaired = {**raw, "anchor": "completed tool result"}
+    order = []
+
+    def normalize(arguments, transcript):
+        order.append("normalize")
+        assert arguments == raw
+        return repaired, [{"field": "anchor", "source": "completed_tool"}]
+
+    def guard(arguments, calls, transcript):
+        order.append("guard")
+        assert arguments == repaired
+        return None
+
+    def validate(arguments):
+        order.append("validate")
+        assert arguments == repaired
+
+    try:
+        result = await run_until_submit(
+            model=FakeModel([turn(call(SUBMIT, raw))]),
+            role="rca",
+            system="sys",
+            tools=TOOLS,
+            dispatch=DISPATCH,
+            submit_tool=SUBMIT,
+            messages=[],
+            journal=journal,
+            submit_args_normalizer=normalize,
+            submit_guard=guard,
+            submit_validator=validate,
+        )
+        sink.close()
+        assert result.submission == repaired
+        assert order == ["normalize", "guard", "validate"]
+        stored = storage.runs.events_for("normalizer-run")
+        (event,) = [e.payload for e in stored if e.payload.get("control") == "submit_normalization"]
+        detail = json.loads(event["detail"])
+        assert detail["raw_arguments"] == raw
+        assert detail["normalized_arguments"] == repaired
+        assert detail["call_id"] == "c1"
+        assert json.loads(result.transcript[0]["tool_calls"][0]["function"]["arguments"]) == raw
+    finally:
+        sink.close()
+        storage.close()
+
+
+async def test_a_failed_normalizer_preserves_raw_payload_and_records_the_bypass() -> None:
+    sink = ListSink()
+    raw = {"nested": {"evidence": "original"}}
+
+    def broken(arguments, messages):
+        arguments["nested"]["evidence"] = "mutated"
+        messages.clear()
+        raise RuntimeError("normalizer unavailable")
+
+    result = await run_until_submit(
+        model=FakeModel([turn(call(SUBMIT, raw))]),
+        role="rca",
+        system="sys",
+        tools=TOOLS,
+        dispatch=DISPATCH,
+        submit_tool=SUBMIT,
+        messages=[{"role": "user", "content": "original task"}],
+        journal=Journal(sink, session_id="s1", stage="rca"),
+        submit_args_normalizer=broken,
+    )
+    assert result.submission == {"nested": {"evidence": "original"}}
+    assert result.transcript[0]["content"] == "original task"
+    (event,) = [e.payload for e in sink.events if isinstance(e.payload, InterventionEvent)]
+    assert event.control == "submit_normalization" and event.action == "bypassed"
+    assert "normalizer unavailable" in json.loads(event.detail)["error"]

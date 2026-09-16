@@ -69,6 +69,58 @@ store. `enabled: false` disables it for that agent; `true` cannot create a store
 the deployment has disabled memory. Storage backends and credentials remain
 deployment resources.
 
+## Bound Verify hand-backs
+
+The built-in `multi` workflow can limit how many times Verify sends an incident
+back to RCA or Planning. Set the deployment ceiling in the environment:
+
+```sh
+export MAVER_VERIFY__ENABLED=true
+export MAVER_PIPELINE__REMEDIATION_RETRIES=2
+export MAVER_VERIFY__HANDBACK_RETRIES=1
+```
+
+`MAVER_VERIFY__HANDBACK_RETRIES` replaces the prototype's `VERIFY_HANDBACK_RETRIES`.
+The old flat name is not an alias for this new setting. Omit it to inherit the
+shared remediation limit. Zero prohibits Verify hand-backs; one permits one.
+The shared remediation budget still applies, so this cap can only shorten a run.
+An Execution-driven replan spends only the shared budget. An inconclusive Verify
+recheck spends only `MAVER_VERIFY__INCONCLUSIVE_RETRIES`.
+
+Individual pipelines may impose a tighter limit:
+
+```yaml
+pipelines:
+  recovery:
+    implementation: multi
+    config:
+      verify_handback_retries: 1
+  one_pass:
+    implementation: multi
+    config:
+      verify_handback_retries: 0
+default_pipeline: recovery
+```
+
+Omitted agent bindings use the registered defaults. Omitted or null pipeline caps
+inherit the deployment cap; a larger pipeline value cannot raise that ceiling.
+These limits control returns after verification, not whether verification runs:
+enable Verify at deployment level as above. Custom Python workflows can inherit
+`MultiWorkflowConfig` and reuse the built-in transitions, or use
+`RoutingPolicy.verify_handback_limit` in their own routing.
+
+The incident counter `verify_handbacks` and the completion audit field
+`verify_handbacks_taken` count returns actually taken. They survive approval pauses
+and new remediation cycles. The prototype instead counted hand-back verdicts,
+including a final verdict that its cap refused; the permitted routes are the same.
+
+Execution now confirms that each planned change applied at the resource level.
+It does not turn a successful apply into a replan merely because the incident's
+symptom remains. Verify independently judges recovery. Verify submission repair
+fills only missing fields from recorded probe results or the model's submitted
+evidence; it retains the model's verdict, preserves the raw transcript, and records
+the repair before the existing submission checks run.
+
 ## Add behaviour by Python inheritance
 
 Subclass an existing agent and its configuration model. The example defines:
@@ -197,6 +249,9 @@ Bump an agent's `version`, a middleware registration's `version`, or the workflo
 version when changing Python behaviour; configuration changes are detected directly.
 Changing only the deployment's default selection does not reroute an admitted run.
 
-The measured research arms keep their existing settings, prompts, tool order and
-behaviour. New customisations are explicit experiment configurations and should be
-recorded as such; these extension points do not constitute parity sign-off.
+Frozen research-arm files and historical prompt fixtures retain their original
+bytes. The current default Execution prompt and Verify submission repairs adopt
+later prototype behavior, as recorded in [the changelog](../CHANGELOG.md). Historical
+composition tests replay the earlier Execution prompt through the override mechanism.
+New customisations and migrated behavior must be recorded as experimental conditions;
+these extension points do not constitute parity sign-off.

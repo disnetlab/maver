@@ -7,14 +7,15 @@ files, so an asset added without a prototype counterpart fails instead of passin
 unnoticed.
 
 The prototype is not part of this repository, so the assets compared against are
-frozen under ``tests/fixtures/prototype``; see :mod:`prototype_tree` for the copy and
-for the environment name that compares against a live checkout instead.
+frozen under ``tests/fixtures/prototype``. Later adopted revisions are recorded
+separately under ``tests/fixtures/prompt_revisions``; see :mod:`prototype_tree` for
+the environment name that compares against a live checkout instead.
 """
 
 from pathlib import Path
 
 import pytest
-from prototype_tree import prototype_root
+from prototype_tree import FROZEN, prototype_root
 
 pytestmark = pytest.mark.parity
 """Prototype-pinned throughout: see the module docstring for where the data came from."""
@@ -32,6 +33,15 @@ ADAPTER_TREES = {
 }
 
 PROTOTYPE = prototype_root() / "agent" / "prompts"
+
+# Later measured prompt revisions have their own source snapshots. Keep the original
+# frozen tree intact: historical composition tests still replay its Execution prompt.
+# A named live prototype remains an independent check against that checkout's assets.
+REVISED_ASSETS = {
+    Path("roles/execution.txt"): (
+        REPO_ROOT / "tests/fixtures/prompt_revisions/cb1ed3b/execution.txt"
+    ),
+}
 
 # Composition markers were renamed on the way in, and only in the role system prompts.
 # Runtime blocks carry their own markers, including a {{MEMORY_GUIDANCE}} that names a
@@ -163,7 +173,10 @@ def test_every_shipped_asset_is_byte_identical_to_the_prototype(relative: Path) 
         pytest.skip("carried from prototype Python; no prompt file to diff against")
     if relative in DELIBERATELY_DIVERGED:
         pytest.skip(DELIBERATELY_DIVERGED[relative])
-    expected = _prototype_source(relative).read_bytes()
+    source = _prototype_source(relative)
+    if relative in REVISED_ASSETS and PROTOTYPE == FROZEN / "agent" / "prompts":
+        source = REVISED_ASSETS[relative]
+    expected = source.read_bytes()
     if relative.parts[0] == "roles":
         text = expected.decode("utf-8")
         for old, new in ROLE_MARKER_RENAMES.items():

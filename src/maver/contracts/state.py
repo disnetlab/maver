@@ -97,6 +97,10 @@ class IncidentState(TypedDict, total=False):
     # tell" ends the incident with recovery unconfirmed.
     verify_retries: int
 
+    # Verify back-edges actually taken. This subset of remediation_retries survives
+    # new remediation cycles and approval pauses; a refused verdict spends nothing.
+    verify_handbacks: int
+
     prior_attempts: list[dict[str, Any]]
     prior_plans: list[dict[str, Any]]
 

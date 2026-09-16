@@ -15,9 +15,11 @@ tracing, prompt shaping — go through the hook stack instead.
 
 import asyncio
 import inspect
+import json
 import logging
 import textwrap
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -55,12 +57,28 @@ from maver.roles.policy import (
 from maver.tools.errors import call_failed, call_timed_out
 from maver.tools.registry import RETRIEVAL_PROVENANCE, ToolOutput
 
-__all__ = ["GuardRecord", "LoopResult", "SubmitGuard", "ToolFn", "run_until_submit"]
+__all__ = [
+    "GuardRecord",
+    "LoopResult",
+    "SubmitArgsNormalizer",
+    "SubmitGuard",
+    "ToolFn",
+    "run_until_submit",
+]
 
 _log = logging.getLogger(__name__)
 
 ToolFn = Callable[..., Awaitable[Any]]
 """A dispatchable tool. Called with the model's arguments, minus the rationale."""
+
+SubmitArgsNormalizer = Callable[
+    [dict[str, Any], list[Message]], tuple[dict[str, Any], list[dict[str, Any]]]
+]
+"""A synchronous, deterministic repair using evidence already in the transcript.
+
+The callback returns normalized arguments and an explicit description of each repair.
+The loop audits both payloads and leaves the model's original transcript intact.
+"""
 
 # Re-exported from the adapter contract, which owns the type because an environment
 # supplies one through its role overlay. Text starting with ``note:`` is passed to the
@@ -223,6 +241,54 @@ def _hand_back(
         rescue.append_results(rendered)
 
 
+def _normalize_submission(
+    call: ToolCall,
+    messages: list[Message],
+    normalizer: SubmitArgsNormalizer,
+    log: Journal,
+) -> dict[str, Any]:
+    """Audit role-local repairs before the unchanged guard and schema checks.
+
+    A broken normalizer leaves the original payload available to those checks.
+    Copies protect the transcript and raw audit payload even if a callback mutates
+    its inputs before failing.
+    """
+    original = deepcopy(call.arguments)
+    try:
+        normalized, repairs = normalizer(deepcopy(original), deepcopy(messages))
+        if not repairs:
+            return dict(call.arguments)
+        detail = json.dumps(
+            {
+                "call_id": call.id,
+                "tool": call.name,
+                "raw_arguments": original,
+                "normalized_arguments": normalized,
+                "repairs": repairs,
+            },
+            sort_keys=True,
+        )
+    except Exception as exc:
+        _log.warning("submit normalizer failed for %s: %s", call.name, exc)
+        log.record(
+            InterventionEvent(
+                control="submit_normalization",
+                action="bypassed",
+                detail=json.dumps(
+                    {
+                        "call_id": call.id,
+                        "tool": call.name,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                    sort_keys=True,
+                ),
+            )
+        )
+        return dict(call.arguments)
+    log.record(InterventionEvent(control="submit_normalization", action="rescued", detail=detail))
+    return normalized
+
+
 async def run_until_submit(
     *,
     model: Completion,
@@ -238,6 +304,7 @@ async def run_until_submit(
     middleware: MiddlewareStack | None = None,
     submit_validator: Callable[[dict[str, Any]], Any] | None = None,
     submit_guard: SubmitGuard | None = None,
+    submit_args_normalizer: SubmitArgsNormalizer | None = None,
     serial_tool_calls: bool = False,
     keep_reasoning: bool = False,
     initial_tool_choice: ToolChoice | None = None,
@@ -259,6 +326,8 @@ async def run_until_submit(
         middleware: Cross-cutting hooks.
         submit_validator: Validates a submission, raising to reject it.
         submit_guard: Stage policy consulted before validation.
+        submit_args_normalizer: Evidence-backed mechanical repairs before the guard;
+            each repair records both payloads without rewriting the transcript.
         serial_tool_calls: Run a turn's calls one at a time. Required wherever calls
             mutate a cluster, since concurrent writes to one namespace are not ordered.
         keep_reasoning: Carry a bounded tail of the reasoning channel between turns.
@@ -755,6 +824,12 @@ async def run_until_submit(
                     )
                 continue
 
+            arguments = (
+                _normalize_submission(call_, state.transcript, submit_args_normalizer, log)
+                if submit_args_normalizer is not None
+                else dict(call_.arguments)
+            )
+
             # The guard runs before schema validation on purpose: it expresses stage
             # policy, and letting it answer first means an incomplete-but-recognisable
             # submission can be turned into useful feedback instead of consuming the
@@ -781,7 +856,7 @@ async def run_until_submit(
                     )
                 else:
                     verdict = await _maybe_await(
-                        submit_guard(dict(call_.arguments), state.tool_calls_made, state.transcript)
+                        submit_guard(dict(arguments), state.tool_calls_made, state.transcript)
                     )
                     if verdict:
                         state.guard_rejections += 1
@@ -801,7 +876,7 @@ async def run_until_submit(
             # Repair the narrow slips that are worth repairing before validating. A
             # confidence of 1.4 is a formatting mistake, not a failure to diagnose, and
             # handing it back spends one of three shared retries.
-            arguments, repairs = repair_submission(call_.arguments)
+            arguments, repairs = repair_submission(arguments)
             if repairs:
                 log.record(
                     SubmissionEvent(

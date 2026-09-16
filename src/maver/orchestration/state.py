@@ -59,6 +59,7 @@ def initial_state(
         remediation_retries=0,
         reassessment_count=0,
         verify_retries=0,
+        verify_handbacks=0,
         prior_attempts=[],
         prior_plans=[],
         error=None,

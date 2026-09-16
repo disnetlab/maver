@@ -70,7 +70,10 @@ mechanisms behind those numbers, and its parity checks pin them against the prot
 behaviour one mechanism at a time (`make test-parity`). A paired parity run on the
 benchmark is the gate before this code is used to measure anything, and it has not been
 run. The limitations section below repeats this where a reader looking for caveats will
-find it.
+find it. Later adopted behavior, including the Execution prompt and Verify
+submission repairs, is identified in [the changelog](CHANGELOG.md); historical
+prompt fixtures remain available and do not imply that the current defaults match
+every earlier campaign.
 
 ## Running it
 
@@ -119,6 +122,10 @@ add explicitly scoped prompt context without exposing run metadata automatically
 A request selects a configured pipeline, optional selector middleware can choose when
 no explicit name is supplied, and the deployment supplies a default. Approval resumes
 retain the selected composition. Customisation requires no separately packaged plugin.
+
+Verify returns can be bounded with `MAVER_VERIFY__HANDBACK_RETRIES`; individual
+`multi` pipelines can tighten that cap through `config.verify_handback_retries`.
+The shared remediation budget still applies, and approval resumes retain the count.
 
 See [the customisation guide](docs/customisation.md), or run the complete offline
 example with `uv run python examples/customisation.py`. It exercises agent inheritance,

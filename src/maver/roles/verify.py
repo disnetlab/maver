@@ -19,12 +19,13 @@ symptom routes to re-diagnosis. That was the dominant route regardless.
 The verdict's own consistency — recovery needs an entry-point observation and a check
 that exercises the request path, a not-recovered verdict must name a direction back, the
 two hand-back flags are exclusive — is enforced by the schema rather than here. The
-prototype filled several of those fields in code when the model left them blank; the
-schema rejects the submission instead, so the model answers for its own verdict.
+normalizer fills only mechanical omissions using observed probe results or the
+model's own submitted evidence. The verdict, guards and artifact schema remain authoritative.
 """
 
 import logging
-from typing import Any
+import re
+from typing import Any, cast
 
 from maver.contracts.artifacts import VerifyResult
 from maver.llm.types import Message
@@ -45,6 +46,111 @@ from maver.roles.registry import role
 __all__ = ["VERIFY"]
 
 _log = logging.getLogger(__name__)
+
+
+_HTTP_SUCCESS_PROBE = re.compile(
+    r"\bHTTP\s+(?:2\d\d|3\d\d)\s+via\s+service/[a-z0-9-]+(?::\d+)?[^\s]*",
+    re.IGNORECASE,
+)
+
+
+def _latest_successful_probe_status(messages: list[Message]) -> str | None:
+    """Return the last successful Verify-only HTTP probe recorded in the transcript."""
+    tool_names: dict[str, str] = {}
+    successful: str | None = None
+    for message in messages:
+        if message.get("role") == "assistant":
+            for call in message.get("tool_calls") or []:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function") or {}
+                call_id = call.get("id")
+                if isinstance(call_id, str) and isinstance(function, dict):
+                    name = function.get("name")
+                    if isinstance(name, str):
+                        tool_names[call_id] = name
+        elif (
+            message.get("role") == "tool"
+            and tool_names.get(cast(str, message.get("tool_call_id"))) == "probe_service"
+        ):
+            content = str(message.get("content") or "").strip()
+            if content.startswith("error:"):
+                continue
+            match = _HTTP_SUCCESS_PROBE.search(content)
+            if match:
+                successful = match.group(0)
+    return successful
+
+
+def _submitted_evidence(args: dict[str, Any]) -> str:
+    """Bounded restatement of the model's own evidence for an RCA hand-back."""
+    parts = [str(args.get("summary") or "").strip()]
+    checks = args.get("checks")
+    if isinstance(checks, list):
+        parts.extend(str(check).strip() for check in checks[:3] if str(check).strip())
+    evidence = " ".join(part for part in parts if part)
+    return evidence[:1800]
+
+
+def _normalize_verify_submit_args(
+    args: dict[str, Any], messages: list[Message]
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Fill only mechanical Verify finalizer omissions from already-observed facts.
+
+    The model retains ownership of the recovery verdict. A claimed recovery gets
+    an entry-point field only when its transcript contains a successful HTTP
+    `probe_service` result; a not-recovered verdict without a route uses the
+    prompt's conservative RCA-reassessment route and repeats the model's own
+    submitted evidence. Repairs are returned for durable audit by the loop.
+    """
+    normalized = dict(args)
+    repairs: list[dict[str, Any]] = []
+    recovered = bool(normalized.get("recovered")) and (
+        str(normalized.get("verdict") or "").strip().lower() == "recovered"
+    )
+    if recovered and not str(normalized.get("entry_point_status") or "").strip():
+        status = _latest_successful_probe_status(messages)
+        if status:
+            normalized["entry_point_status"] = status
+            repairs.append(
+                {
+                    "field": "entry_point_status",
+                    "source": "last_successful_probe_service_result",
+                }
+            )
+
+    if str(normalized.get("verdict") or "").strip().lower() == "not_recovered":
+        has_replan = bool(normalized.get("needs_replan"))
+        has_reassessment = bool(normalized.get("needs_reassessment"))
+        if not has_replan and not has_reassessment:
+            normalized["needs_reassessment"] = True
+            normalized["reassessment_reason"] = (
+                "Verify submitted not_recovered. Evidence from its own checks: "
+                f"{_submitted_evidence(normalized)}"
+            )
+            repairs.append(
+                {
+                    "field": "needs_reassessment,reassessment_reason",
+                    "source": "not_recovered_default_to_rca_with_submitted_evidence",
+                }
+            )
+        elif has_replan and not str(normalized.get("replan_reason") or "").strip():
+            normalized["replan_reason"] = _submitted_evidence(normalized)
+            repairs.append(
+                {
+                    "field": "replan_reason",
+                    "source": "submitted_summary_and_checks",
+                }
+            )
+        elif has_reassessment and not str(normalized.get("reassessment_reason") or "").strip():
+            normalized["reassessment_reason"] = _submitted_evidence(normalized)
+            repairs.append(
+                {
+                    "field": "reassessment_reason",
+                    "source": "submitted_summary_and_checks",
+                }
+            )
+    return normalized, repairs
 
 
 def _build_submit_guard(gate: HealthGate) -> SubmitGuard:
@@ -143,6 +249,7 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
         keep_reasoning=ctx.profile.quirks.keep_reasoning,
         submit_validator=ctx.spec.submit_model.model_validate,
         submit_guard=overlay_guard(_build_submit_guard(gate), ctx.overlay),
+        submit_args_normalizer=_normalize_verify_submit_args,
         serial_tool_calls=ctx.spec.serial_tool_calls,
     )
 

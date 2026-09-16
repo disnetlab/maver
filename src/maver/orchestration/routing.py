@@ -34,6 +34,17 @@ class RoutingPolicy:
     verify_enabled: bool
     remediation_retries: int
     inconclusive_retries: int
+    verify_handback_retries: int | None = None
+
+    @property
+    def verify_handback_limit(self) -> int:
+        """Resolve the Verify subset cap without widening the shared budget."""
+        requested = self.verify_handback_retries
+        return (
+            self.remediation_retries
+            if requested is None
+            else min(self.remediation_retries, requested)
+        )
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "RoutingPolicy":
@@ -49,6 +60,7 @@ class RoutingPolicy:
             verify_enabled=settings.verify.enabled,
             remediation_retries=settings.pipeline.remediation_retries,
             inconclusive_retries=settings.verify.inconclusive_retries,
+            verify_handback_retries=settings.verify.handback_retries,
         )
 
 
@@ -132,7 +144,7 @@ def after_verify(state: IncidentState, policy: RoutingPolicy) -> Route:
     budget = RetryBudget.of(state, policy)
     if result.verdict == "inconclusive":
         return Route.VERIFY if budget.recheck_left else Route.END
-    if not budget.remediation_left:
+    if not budget.remediation_left or not budget.verify_handback_left:
         return Route.END
     if result.needs_reassessment:
         return Route.RCA
@@ -197,6 +209,8 @@ def apply_handback(state: IncidentState, handback: HandBack, policy: RoutingPoli
     """
     budget = RetryBudget.of(state, policy)
     delta: dict[str, object] = {}
+    if handback.kind in {"reassessment", "replan_from_verify"}:
+        budget = budget.spend_verify_handback()
 
     if handback.kind == "reassessment":
         budget = budget.spend_reassessment().reset_rechecks()

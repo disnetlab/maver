@@ -1347,6 +1347,7 @@ def _record_completion(
                     "remediation_retries": budget.remediation_spent,
                     "reassessments": budget.reassessments,
                     "verify_rechecks": budget.verify_rechecks,
+                    "verify_handbacks_taken": budget.verify_handbacks,
                     "assistant_turns": turns,
                 },
                 sort_keys=True,

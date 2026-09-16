@@ -1,3 +1,7 @@
+from dataclasses import replace
+
+import pytest
+
 from maver.contracts.artifacts import ExecutionResult, Plan, PlanStep, RootCause, VerifyResult
 from maver.contracts.routing import Route
 from maver.contracts.state import IncidentState
@@ -208,9 +212,82 @@ def test_a_hand_back_is_charged_where_it_is_applied() -> None:
     delta = apply_handback(handed, hb, POLICY)
     assert delta["remediation_retries"] == 1
     assert delta["reassessment_count"] == 1
+    assert delta["verify_handbacks"] == 1
     assert delta["verify_retries"] == 0
     assert len(delta["prior_attempts"]) == 1
 
 
 def test_a_first_entry_carries_no_hand_back() -> None:
     assert pending_handback(state(root_cause=root_cause())) is None
+
+
+@pytest.mark.parametrize(
+    ("cap", "verify_spent", "shared_spent", "allowed"),
+    [
+        (0, 0, 0, False),
+        (1, 0, 0, True),
+        (1, 1, 1, False),
+        (None, 1, 1, True),
+        (None, 2, 2, False),
+        (5, 0, 2, False),
+    ],
+)
+def test_verify_handback_cap_bounds_both_destinations_without_charging_a_verdict(
+    cap: int | None, verify_spent: int, shared_spent: int, allowed: bool
+) -> None:
+    policy = replace(POLICY, verify_handback_retries=cap)
+    for flag, destination in (("needs_reassessment", Route.RCA), ("needs_replan", Route.PLANNING)):
+        incident = state(
+            root_cause=root_cause(),
+            verify_result=verify(
+                recovered=False, verdict="not_recovered", summary="still failing", **{flag: True}
+            ),
+            remediation_retries=shared_spent,
+            verify_handbacks=verify_spent,
+        )
+        assert after_verify(incident, policy) is (destination if allowed else Route.END)
+        # Inspecting a verdict is not taking its back-edge, including a refused one.
+        assert incident["verify_handbacks"] == verify_spent
+        assert incident["remediation_retries"] == shared_spent
+
+
+def test_only_taken_verify_handbacks_spend_the_subset_allowance() -> None:
+    policy = replace(POLICY, remediation_retries=3, verify_handback_retries=1)
+    incident = state(
+        root_cause=root_cause(),
+        plan=plan(),
+        verify_result=verify(
+            recovered=False, verdict="not_recovered", summary="still failing", needs_replan=True
+        ),
+    )
+    assert after_verify(incident, policy) is Route.PLANNING
+    handback = pending_handback(incident)
+    assert handback is not None and handback.kind == "replan_from_verify"
+    taken = apply_handback(incident, handback, policy)
+    assert taken["verify_handbacks"] == 1
+    assert taken["remediation_retries"] == 1
+    incident.update(taken)
+    incident["verify_result"] = verify(
+        recovered=False, verdict="not_recovered", summary="still failing", needs_replan=True
+    )
+    assert after_verify(incident, policy) is Route.END
+    assert incident["verify_handbacks"] == 1
+    assert incident["remediation_retries"] == 1
+
+
+def test_zero_verify_handbacks_still_allows_execution_replans_and_inconclusive_rechecks() -> None:
+    policy = replace(POLICY, verify_handback_retries=0)
+    failed_apply = state(execution_result=execution(False, needs_replan=True))
+    assert after_execution(failed_apply, policy) is Route.PLANNING
+    handback = pending_handback(failed_apply)
+    assert handback is not None and handback.kind == "replan_from_execution"
+    charged = apply_handback(failed_apply, handback, policy)
+    assert charged["remediation_retries"] == 1
+    assert charged["verify_handbacks"] == 0
+    unsure = state(**charged)
+    unsure["verify_result"] = verify(recovered=False, verdict="inconclusive", summary="no signal")
+    assert after_verify(unsure, policy) is Route.VERIFY
+    rechecked = RetryBudget.of(unsure, policy).spend_recheck()
+    assert rechecked.verify_handbacks == 0
+    assert rechecked.remediation_spent == 1
+    assert rechecked.verify_rechecks == 1

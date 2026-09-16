@@ -6,6 +6,7 @@ from hashlib import sha256
 from pathlib import Path
 
 import pytest
+from prototype_tree import FROZEN
 
 from maver.prompts.loader import (
     PromptError,
@@ -234,7 +235,9 @@ COMPOSED = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "composed_
 @pytest.mark.parity
 @pytest.mark.parametrize("role", SHIPPED_ROLES)
 @pytest.mark.parametrize("retrieval_enabled", [True, False])
-def test_composition_is_byte_identical_to_the_prototype(role: str, retrieval_enabled: bool) -> None:
+def test_composition_is_byte_identical_to_the_prototype(
+    role: str, retrieval_enabled: bool, tmp_path: Path
+) -> None:
     """The composed system prompt is a held-constant input, down to its whitespace.
 
     The fixtures are produced by replaying the prototype's own composition over its own
@@ -244,7 +247,27 @@ def test_composition_is_byte_identical_to_the_prototype(role: str, retrieval_ena
     expected = (
         COMPOSED / f"{role}.{'memory_on' if retrieval_enabled else 'memory_off'}.txt"
     ).read_text(encoding="utf-8")
-    assert compose_role_prompt(role, retrieval_enabled=retrieval_enabled) == expected
+    override_dir = None
+    if role == "execution":
+        # cb1ed3b changed the default. Reproduce the earlier measured prompt through
+        # the public override path, without rewriting its frozen source or output.
+        override_dir = tmp_path
+        (override_dir / "roles").mkdir()
+        # Packaged assets are stripped on load; overrides retain literal whitespace.
+        historical = (FROZEN / "agent/prompts/minimal/execution.txt").read_text().strip()
+        (override_dir / "roles/execution.txt").write_text(
+            historical.replace("{{KUBECTL_MODE_PROMPT}}", "{{KUBECTL_GUIDANCE}}")
+        )
+    assert (
+        compose_role_prompt(role, retrieval_enabled=retrieval_enabled, override_dir=override_dir)
+        == expected
+    )
+
+
+@pytest.mark.parity
+def test_current_execution_composition_matches_its_recorded_revision() -> None:
+    expected = (COMPOSED.parent / "prompt_revisions/cb1ed3b/execution.composed.txt").read_text()
+    assert compose_role_prompt("execution", retrieval_enabled=False) == expected
 
 
 def test_a_replaced_prompt_reaches_the_run_that_used_it(

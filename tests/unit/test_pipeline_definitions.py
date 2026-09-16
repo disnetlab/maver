@@ -9,14 +9,14 @@ from pydantic import Field, ValidationError
 
 from maver.agents import AgentDefinition
 from maver.agents import builtin_registry as agent_registry
-from maver.contracts.artifacts import Plan, RootCause
+from maver.contracts.artifacts import ExecutionResult, Plan, PlanStep, RootCause, VerifyResult
 from maver.contracts.lifecycle import LifecycleState, RunStatus
 from maver.contracts.runtime import RunState
 from maver.contracts.state import IncidentState
 from maver.orchestration.engine import LangGraphEngine, SequentialEngine, StepLimitExceeded
 from maver.orchestration.graph import build_graph
 from maver.orchestration.outcomes import Outcome, OutcomeRecord, resolve_outcome
-from maver.orchestration.routing import RoutingPolicy
+from maver.orchestration.routing import RoutingPolicy, apply_handback, pending_handback
 from maver.pipelines import (
     MULTI,
     PipelineCatalog,
@@ -512,3 +512,87 @@ def test_selecting_diagnose_finishes_without_a_separate_target_stage_flag(
     assert pipelines["diagnose"].workflow.post_hooks is False
     assert state["target_stage"] == "full"
     assert pipelines["diagnose"].resolve_outcome({}).run_status is RunStatus.FAILED
+
+
+@pytest.mark.parametrize("engine", ["sequential", "langgraph"])
+async def test_yaml_verify_cap_stops_both_engines_before_the_shared_budget_is_spent(
+    agents: Mapping[str, AgentDefinition], engine: str
+) -> None:
+    registry = builtin_registry()
+    pipeline = registry.resolve(
+        "bounded",
+        {"implementation": "multi", "config": {"verify_handback_retries": 1}},
+        agents=agents,
+    )
+    with pytest.raises(ValidationError):
+        registry.resolve(
+            "invalid",
+            {"implementation": "multi", "config": {"verify_handback_retries": -1}},
+            agents=agents,
+        )
+    policy = replace(POLICY, remediation_retries=5, verify_handback_retries=5)
+    seen: list[str] = []
+    diagnosis = RootCause(
+        fault_type="misconfiguration",
+        affected_resource="service/web",
+        confidence=0.8,
+        evidence=["no endpoints"],
+        summary="incorrect port",
+    )
+    repair = Plan(
+        steps=[PlanStep(action="patch", target="service/web", justification="correct the port")],
+        expected_outcome="serving",
+        confidence=0.8,
+    )
+    failed_verification = VerifyResult(
+        recovered=False,
+        verdict="not_recovered",
+        checks=["request failed"],
+        summary="still failing",
+        confidence=0.8,
+        needs_replan=True,
+        replan_reason="the port fix did not restore service",
+    )
+
+    async def rca(state: IncidentState) -> dict[str, Any]:
+        seen.append("rca")
+        return {"root_cause": diagnosis}
+
+    async def planning(state: IncidentState) -> dict[str, Any]:
+        seen.append("planning")
+        handback = pending_handback(state)
+        charge = apply_handback(state, handback, policy) if handback is not None else {}
+        return {**charge, "plan": repair}
+
+    async def execution(state: IncidentState) -> dict[str, Any]:
+        seen.append("execution")
+        return {
+            "execution_result": ExecutionResult(
+                succeeded=True, steps=[], final_state_summary="patched", confidence=0.8
+            )
+        }
+
+    async def verify(state: IncidentState) -> dict[str, Any]:
+        seen.append("verify")
+        return {"verify_result": failed_verification}
+
+    nodes = {"rca": rca, "planning": planning, "execution": execution, "verify": verify}
+    runner = (
+        SequentialEngine(nodes, policy, pipeline)
+        if engine == "sequential"
+        else LangGraphEngine(build_graph(nodes, policy, pipeline), pipeline)
+    )
+    result = await runner.run({})
+    assert seen == ["rca", "planning", "execution", "verify", "planning", "execution", "verify"]
+    assert result["verify_handbacks"] == 1
+    assert result["remediation_retries"] == 1
+    assert result["verify_result"] == failed_verification
+    # YAML may tighten the deployment's cap, but cannot grant extra retries.
+    assert (
+        pipeline.next_stage(
+            "verify",
+            {"verify_result": failed_verification},
+            replace(policy, verify_handback_retries=0),
+        )
+        is None
+    )

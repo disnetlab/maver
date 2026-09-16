@@ -11,14 +11,17 @@ import json
 import pathlib
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
 import respx
 
 from maver.audit.journal import ListSink, SequenceRegistry
+from maver.contracts.artifacts import VerifyResult
 from maver.contracts.lifecycle import RunStatus
+from maver.contracts.routing import Route
+from maver.contracts.state import IncidentState
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from maver.memory.factory import build_storage
 from maver.memory.ports import ApprovalRecord
@@ -30,7 +33,9 @@ from maver.orchestration.resume import (
     denial_result,
     load_checkpoint,
     restored_state,
+    save_checkpoint,
 )
+from maver.orchestration.routing import RoutingPolicy, after_verify
 from maver.orchestration.runner import Deployment, resume_after_decision, run_incident
 from maver.settings.authority import AuthorityRule, AuthoritySettings
 from maver.settings.groups import (
@@ -997,3 +1002,45 @@ async def test_the_replayed_decision_names_the_call_it_decided(tmp_path: pathlib
     )
     assert decision.call_id == checkpoint.tool_call_id
     assert call.call_id == checkpoint.tool_call_id
+
+
+async def test_a_spent_verify_handback_survives_approval_save_and_load(
+    tmp_path: pathlib.Path,
+) -> None:
+    deploy, _ = deployment(tmp_path)
+    session = deploy.storage.sessions.create_session(ALERT)
+    with pytest.raises(ApprovalPending) as parked:
+        await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+    pending = parked.value
+    carried = cast(
+        IncidentState, {**pending.state, "verify_handbacks": 1, "remediation_retries": 1}
+    )
+    save_checkpoint(deploy.storage.sessions, carried, pending)
+    deploy.storage.approvals.decide(
+        pending.request_id, status="approved", decided_by="operator", reason="continue this attempt"
+    )
+    loaded = load_checkpoint(deploy.storage.sessions, deploy.storage.approvals, pending.request_id)
+    assert not isinstance(loaded, str)
+    checkpoint, _ = loaded
+    assert checkpoint.verify_handbacks == 1
+    restored = restored_state(checkpoint)
+    assert restored["verify_handbacks"] == 1
+    assert restored["remediation_retries"] == 1
+    restored["verify_result"] = VerifyResult(
+        recovered=False,
+        verdict="not_recovered",
+        checks=["request failed"],
+        summary="still failing",
+        confidence=0.8,
+        needs_replan=True,
+        replan_reason="the repair was insufficient",
+    )
+    policy = RoutingPolicy(
+        verify_enabled=True,
+        remediation_retries=3,
+        inconclusive_retries=1,
+        verify_handback_retries=1,
+    )
+    assert after_verify(restored, policy) is Route.END
+    assert after_verify(restored, replace(policy, verify_handback_retries=None)) is Route.PLANNING
+    deploy.storage.close()

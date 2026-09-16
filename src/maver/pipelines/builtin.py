@@ -4,6 +4,10 @@ Each multi-agent transition delegates to the existing pure predicate. Registrati
 changes composition, never the retry or verification rules those predicates encode.
 """
 
+from dataclasses import replace
+
+from pydantic import Field
+
 from maver.contracts.artifacts import ExecutionResult, Plan, RootCause, SingleResult, VerifyResult
 from maver.contracts.routing import Route
 from maver.contracts.state import IncidentState
@@ -23,7 +27,13 @@ from maver.pipelines.definitions import (
     WorkflowDefinition,
 )
 
-__all__ = ["DIAGNOSE", "MULTI", "SINGLE", "builtin_registry"]
+__all__ = ["DIAGNOSE", "MULTI", "SINGLE", "MultiWorkflowConfig", "builtin_registry"]
+
+
+class MultiWorkflowConfig(WorkflowConfig):
+    """Per-pipeline limits that may narrow the deployment's recovery loop."""
+
+    verify_handback_retries: int | None = Field(default=None, ge=0)
 
 
 def _destination(route: Route) -> str | None:
@@ -47,7 +57,14 @@ def _execution(state: IncidentState, config: WorkflowConfig, policy: RoutingPoli
 
 
 def _verify(state: IncidentState, config: WorkflowConfig, policy: RoutingPolicy) -> str | None:
-    """Delegate the verification transition without changing its conditions."""
+    """Apply the workflow's optional tighter cap to the shared recovery policy."""
+    if isinstance(config, MultiWorkflowConfig) and config.verify_handback_retries is not None:
+        policy = replace(
+            policy,
+            verify_handback_retries=min(
+                policy.verify_handback_limit, config.verify_handback_retries
+            ),
+        )
     return _destination(after_verify(state, policy))
 
 
@@ -65,7 +82,8 @@ _RCA = StageDefinition("rca", "rca", RootCause, "root_cause", "rca")
 
 MULTI = WorkflowDefinition(
     name="multi",
-    version="1",
+    version="2",
+    config_type=MultiWorkflowConfig,
     entry="rca",
     stages=(
         _RCA,

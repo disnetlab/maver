@@ -5,7 +5,10 @@ diagnosis, an insufficient plan returning to planning — and they draw on one b
 than three. Separate budgets would let an incident cycle far longer than any single number
 suggests, and the published description of the system states one bound.
 
-A value over three keys of the state, never stored as an object. Reconstructing it from
+Verify may impose a tighter subset cap on its two back-edges. It grants no extra
+attempts and does not charge Execution replans or read-only inconclusive rechecks.
+
+A value over the counter keys of the state, never stored as an object. Reconstructing it from
 the state on each use is what makes a run resumed from a database reach the same
 conclusion as one that never stopped.
 """
@@ -32,6 +35,9 @@ class RetryBudget:
     verify_rechecks: int
     max_remediation: int
     max_rechecks: int
+    verify_handbacks: int
+    """Verify back-edges taken, excluding the verdict refused by the cap."""
+    max_verify_handbacks: int
 
     @classmethod
     def of(cls, state: IncidentState, policy: "RoutingPolicy") -> "RetryBudget":
@@ -50,18 +56,21 @@ class RetryBudget:
             verify_rechecks=state.get("verify_retries", 0),
             max_remediation=policy.remediation_retries,
             max_rechecks=policy.inconclusive_retries,
+            verify_handbacks=state.get("verify_handbacks", 0),
+            max_verify_handbacks=policy.verify_handback_limit,
         )
 
     def to_state(self) -> StateDelta:
         """Render the budget back as a state delta.
 
         Returns:
-            The three counter keys.
+            The incident counter keys.
         """
         return {
             "remediation_retries": self.remediation_spent,
             "reassessment_count": self.reassessments,
             "verify_retries": self.verify_rechecks,
+            "verify_handbacks": self.verify_handbacks,
         }
 
     @property
@@ -72,6 +81,15 @@ class RetryBudget:
             True while the shared budget is unspent.
         """
         return self.remediation_spent < self.max_remediation
+
+    @property
+    def verify_handback_left(self) -> bool:
+        """Whether Verify may request another remediation attempt."""
+        return self.verify_handbacks < self.max_verify_handbacks
+
+    def spend_verify_handback(self) -> "RetryBudget":
+        """Count a taken Verify back-edge alongside its shared-budget charge."""
+        return replace(self, verify_handbacks=self.verify_handbacks + 1)
 
     @property
     def recheck_left(self) -> bool:

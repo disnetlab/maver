@@ -89,6 +89,7 @@ class ApprovalCheckpoint(BaseModel):
     remediation_retries: int
     reassessment_count: int
     verify_retries: int
+    verify_handbacks: int = 0
     """Carried, not reset. An approval must not buy a fresh budget."""
 
     mode: str = "multi"
@@ -166,6 +167,7 @@ def save_checkpoint(
         remediation_retries=state.get("remediation_retries", 0),
         reassessment_count=state.get("reassessment_count", 0),
         verify_retries=state.get("verify_retries", 0),
+        verify_handbacks=state.get("verify_handbacks", 0),
         sequence=sequence,
         mode=mode,
         target_stage=target_stage,
@@ -303,6 +305,7 @@ def restored_state(checkpoint: ApprovalCheckpoint) -> IncidentState:
     state["remediation_retries"] = checkpoint.remediation_retries
     state["reassessment_count"] = checkpoint.reassessment_count
     state["verify_retries"] = checkpoint.verify_retries
+    state["verify_handbacks"] = checkpoint.verify_handbacks
     state["run_ids"] = list(checkpoint.run_ids)
     return cast(IncidentState, state)
 

@@ -9,6 +9,43 @@ published comparisons, which are single-variable only while the schema does not 
 with the configuration. The procedure is in STYLE_GUIDE.md, "Typed artifacts are
 frozen".
 
+## Execution scope and bounded Verify hand-backs
+
+Migrate prototype revisions `cb1ed3b6462feaa090c4c7b3c273753c7aece20b`
+(Execution prompt, 2026-09-11) and `00e37eadbc13bdaa8e9dec8794bd4bf3fa9270a6`
+(Verify hand-back cap and submission repair, 2026-09-16) at the author's request.
+The source commit supplies the Verify normalizer; the loop hook and wiring were
+still in the prototype working tree. MAVER supplies its own integration and audit record.
+
+- Execution's default prompt now limits success to mechanical confirmation that
+  planned changes applied. Persistent symptoms alone do not justify replanning.
+  The earlier prototype and composed-prompt fixtures remain unchanged for historical
+  reproduction; the new prompt is pinned separately to its source revision.
+- `verify.handback_retries` / `MAVER_VERIFY__HANDBACK_RETRIES` caps Verify's returns
+  within the shared remediation budget. Unset inherits that budget; zero disallows
+  Verify returns. `multi` pipeline YAML may set `config.verify_handback_retries`
+  to tighten the deployment ceiling. Execution replans and inconclusive rechecks
+  retain their existing budgets. Counts persist across approval pauses and are
+  audited as `verify_handbacks_taken`, excluding the verdict denied by the cap.
+- Verify repairs missing entry-point status only from a successful recorded
+  `probe_service` result; missing not-recovered routing fields use its submitted
+  summary/checks. The model's verdict and raw transcript remain unchanged, and
+  health/shape guards still run after repairs.
+
+These are behavioral changes, not claims of parity with the earlier measured
+campaigns. Existing results retain their original prompts and control policy; new
+runs must record the changed condition. No measured campaign or deployment was run
+as part of this migration. Execution and Verify implementations and the built-in
+multi workflow advance their versions so pinned approvals cannot silently continue
+under changed behavior. Frozen experiment-arm files and artifact schemas are unchanged.
+
+### Schema version 3: audited submission repair
+
+`InterventionEvent` adds `control="submit_normalization"` with the existing
+`action="rescued"`. Its detail records original/normalized arguments and the repair
+sources. Older strict audit readers must accept this control value. Submission
+artifact schemas are unchanged.
+
 ## Customisable agents and workflows
 
 Python agent subclasses now expose typed settings to final named YAML agents.

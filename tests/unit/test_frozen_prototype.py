@@ -30,7 +30,11 @@ DATE = re.compile(r"^date: (\d{4}-\d{2}-\d{2})$", re.MULTILINE)
 
 
 def _prompt_assets() -> set[Path]:
-    """The prototype prompt files test_prompt_assets actually opens."""
+    """Prototype assets read by parity or historical composition replay.
+
+    Execution's original source is still replayed by test_prompt_loader after a later
+    revision became the default; its presence here remains a tested obligation.
+    """
     unread = test_prompt_assets.CARRIED_FROM_PROTOTYPE_CODE | set(
         test_prompt_assets.DELIBERATELY_DIVERGED
     )

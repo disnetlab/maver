@@ -1,0 +1,28 @@
+Execution prompt revision
+=========================
+
+source: k8s-agentic-operator (private)
+commit: cb1ed3b6462feaa090c4c7b3c273753c7aece20b
+date: 2026-09-11
+
+execution.txt is copied byte-for-byte from the committed
+agent/prompts/minimal/execution.txt at this revision, not its working tree.
+The shipped roles/execution.txt changes only {{KUBECTL_MODE_PROMPT}} to
+{{KUBECTL_GUIDANCE}}, the marker rename used by the original migration.
+
+execution.composed.txt is rendered from that source prompt with the same revision's
+agent/prompts/shared/kubectl/safe.execution.txt: strip both texts, replace
+{{KUBECTL_MODE_PROMPT}} with the block, and add no newline. No MAVER loader is used
+to generate this expected output. Execution declares no memory marker, so this
+output applies with memory both enabled and disabled.
+
+This revision confines Execution to confirming that the planned mutations landed.
+Application recovery is judged separately; a successfully applied plan cannot be
+handed back merely because the incident persists. The prompt is therefore a changed
+experimental input, not a correction to the record of earlier measurements.
+
+The preceding prompt remains byte-for-byte in
+tests/fixtures/prototype/agent/prompts/minimal/execution.txt and its composed outputs
+remain in tests/fixtures/composed_prompts/execution.memory_{on,off}.txt. Historical
+composition tests replay that prompt through override_dir; new-default tests use
+the versioned files here. Do not replace those historical fixtures in a refreeze.

@@ -10,9 +10,11 @@ import pytest
 import yaml
 from pydantic import SecretStr, ValidationError
 
+from maver.orchestration.routing import RoutingPolicy
 from maver.settings import Settings, VerifySettings, legacy_names_in_use, load_settings
 from maver.settings.arms import arm_digest, load_arm
 from maver.settings.authority import AuthorityRule, AuthoritySettings
+from maver.settings.groups import PipelineSettings
 from maver.settings.root import (
     AliasedField,
     _iter_aliases,
@@ -786,3 +788,18 @@ class TestAFrozenArmAndTheSamplingKnobs:
         reset_settings()
 
         assert load_settings().sampling_overrides() == {"temperature": 0.0}
+
+
+def test_verify_handback_setting_inherits_or_tightens_the_shared_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(pipeline=PipelineSettings(remediation_retries=4))
+    assert settings.verify.handback_retries is None
+    assert RoutingPolicy.from_settings(settings).verify_handback_limit == 4
+    monkeypatch.setenv("MAVER_VERIFY__HANDBACK_RETRIES", "1")
+    configured = Settings(pipeline=PipelineSettings(remediation_retries=4))
+    assert RoutingPolicy.from_settings(configured).verify_handback_limit == 1
+    raised = configured.model_copy(update={"verify": VerifySettings(handback_retries=9)})
+    assert RoutingPolicy.from_settings(raised).verify_handback_limit == 4
+    with pytest.raises(ValidationError):
+        VerifySettings(handback_retries=-1)

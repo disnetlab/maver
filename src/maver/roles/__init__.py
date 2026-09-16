@@ -14,7 +14,7 @@ from maver.roles import (  # noqa: F401 - imported for their registrations
     verify,
 )
 from maver.roles.base import RoleContext, RoleOutcome, RoleSpec, StateDelta
-from maver.roles.loop import LoopResult, SubmitGuard, ToolFn, run_until_submit
+from maver.roles.loop import LoopResult, SubmitArgsNormalizer, SubmitGuard, ToolFn, run_until_submit
 from maver.roles.policy import LoopLimits, RepeatDecision, RepeatedCallTracker, repair_submission
 from maver.roles.registry import (
     RoleRegistryError,
@@ -36,6 +36,7 @@ __all__ = [
     "RoleRegistryError",
     "RoleSpec",
     "StateDelta",
+    "SubmitArgsNormalizer",
     "SubmitGuard",
     "ToolFn",
     "build_trace_summary",

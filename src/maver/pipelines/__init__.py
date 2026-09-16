@@ -1,6 +1,6 @@
 """Python workflows, YAML compositions, and once-per-incident selection."""
 
-from maver.pipelines.builtin import DIAGNOSE, MULTI, SINGLE, builtin_registry
+from maver.pipelines.builtin import DIAGNOSE, MULTI, SINGLE, MultiWorkflowConfig, builtin_registry
 from maver.pipelines.definitions import (
     PipelineConfig,
     PipelineRegistry,
@@ -24,6 +24,7 @@ __all__ = [
     "DIAGNOSE",
     "MULTI",
     "SINGLE",
+    "MultiWorkflowConfig",
     "PipelineCatalog",
     "PipelineChangedError",
     "PipelineConfig",
