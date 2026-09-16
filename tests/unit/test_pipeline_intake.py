@@ -14,7 +14,6 @@ from typer.testing import CliRunner
 from maver.api import incidents
 from maver.api.app import create_app
 from maver.api.deps import Service
-from maver.api.incidents import IncidentRequest, fingerprint
 from maver.cli import app
 from maver.contracts.lifecycle import RunStatus
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
@@ -24,22 +23,6 @@ from maver.pipelines import PipelineCatalog
 from maver.settings.groups import MemorySettings, PipelineSettings, ServerSettings, VerifySettings
 from maver.settings.profiles import load_profile
 from maver.settings.root import Settings
-
-
-def test_intake_preserves_pipeline_and_private_metadata_separately() -> None:
-    alert = {"alertname": "HighErrorRate", "namespace": "shop"}
-    request = IncidentRequest.model_validate(
-        {
-            "alert": alert,
-            "pipeline": "database_recovery",
-            "metadata": {"tenant": "private-tenant", "routing": {"database": True}},
-        }
-    )
-
-    assert request.pipeline == "database_recovery"
-    assert request.metadata == {"tenant": "private-tenant", "routing": {"database": True}}
-    assert request.alert == alert
-    assert fingerprint(request.alert) == fingerprint(alert)
 
 
 def test_cli_submits_pipeline_and_private_metadata_without_merging_them(

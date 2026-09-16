@@ -68,14 +68,6 @@ def test_the_manifest_names_the_commit_it_was_frozen_from() -> None:
 
 
 @pytest.mark.parity
-@pytest.mark.parametrize("relative", COMPARED, ids=str)
-def test_every_compared_file_is_in_the_frozen_copy(relative: Path) -> None:
-    """A file the checks read that no one froze skips no test: it fails a check that
-    passes on the author's machine and nowhere else."""
-    assert (FROZEN / relative).is_file()
-
-
-@pytest.mark.parity
 def test_the_frozen_copy_holds_exactly_what_the_checks_read() -> None:
     """Vendoring more than the checks read makes the copy a second prototype to keep
     current, and the extra text ages without anything noticing."""

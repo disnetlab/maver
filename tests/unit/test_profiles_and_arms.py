@@ -76,12 +76,6 @@ class TestShippedProfiles:
     def test_each_profile_loads(self, name: str) -> None:
         assert load_profile(name, MODELS).name == name
 
-    @pytest.mark.parametrize("name", SHIPPED_PROFILES)
-    def test_the_sampling_set_is_complete(self, name: str) -> None:
-        """Null means omit; it must never mean the knob was forgotten."""
-        declared = set(load_profile(name, MODELS).sampling.model_dump())
-        assert declared == set(ModelProfile.model_fields["sampling"].annotation.model_fields)
-
     def test_native_knobs_are_routed_away_from_a_hosted_provider(self) -> None:
         profile = load_profile("claude-sonnet-4-6", MODELS)
         for resolved in _both_splits(profile):

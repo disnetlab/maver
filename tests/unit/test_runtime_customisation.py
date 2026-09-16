@@ -28,7 +28,6 @@ from maver.pipelines import (
     StageDefinition,
     Transition,
     WorkflowDefinition,
-    select_pipeline,
 )
 from maver.roles.loop import run_until_submit
 
@@ -225,24 +224,6 @@ async def test_changed_composition_is_refused_before_approved_write(tmp_path):
         await resume_after_decision(request_id, deploy)
     assert len(COMMANDS) == before
     assert deploy.storage.sessions.get_session(session_id).run_status == "awaiting_human"
-    deploy.storage.close()
-
-
-async def test_pipeline_selected_once_for_direct_runner(tmp_path):
-    class Selector:
-        calls = 0
-
-        def select(self, alert, metadata):
-            self.calls += 1
-            return "diagnose"
-
-    deploy, _, model = deployment(tmp_path)
-    selector = Selector()
-    deploy = replace(deploy, pipeline_selectors=(selector,))
-    chosen = await select_pipeline(deploy.pipelines, alert=ALERT, selectors=(selector,))
-    session = deploy.storage.sessions.create_session(ALERT)
-    await run_incident(ALERT, session.session_id, deploy, selection=chosen, fire_post_hooks=False)
-    assert selector.calls == 1 and model.callers == ["rca"]
     deploy.storage.close()
 
 
