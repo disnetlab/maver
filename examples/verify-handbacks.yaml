@@ -1,0 +1,20 @@
+# Uses built-in agents; no custom Python registration is required.
+# From the repository root:
+#   export MAVER_CUSTOMISATION=examples/verify-handbacks.yaml
+#   export MAVER_VERIFY__ENABLED=true
+#   uv run maver config check
+#   uv run maver serve
+#
+# The shared remediation budget still applies (default 2). Optional deployment
+# MAVER_VERIFY__HANDBACK_RETRIES may tighten it; these pipeline caps cannot raise it.
+pipelines:
+  recovery:
+    implementation: multi
+    config:
+      verify_handback_retries: 1
+  one_pass:
+    implementation: multi
+    config:
+      verify_handback_retries: 0
+
+default_pipeline: recovery

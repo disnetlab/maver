@@ -46,6 +46,28 @@ when the profile changes.
 `base/secret.example.yaml` is a template and is **not** in `kustomization.yaml`, so
 `apply -k` cannot overwrite a real Secret with its placeholders.
 
+## Configure recovery verification
+
+Add the following keys under `data` in your overlay's `configmap-patch.yaml`:
+
+```yaml
+data:
+  MAVER_VERIFY__ENABLED: "true"
+  MAVER_VERIFY__HANDBACK_RETRIES: "1"
+```
+
+Apply the complete overlay with `-k` and restart the deployment to reload its
+environment; changing this static ConfigMap alone does not restart existing pods.
+The cap permits one Verify return to RCA or Planning within the shared remediation
+budget. Zero permits none; omitting the cap inherits the shared limit. Execution
+replans and inconclusive rechecks keep their own accounting.
+
+To select named pipelines, mount a YAML file and set `MAVER_CUSTOMISATION` to its
+container path. The [built-in example](../../examples/verify-handbacks.yaml) defines
+two pipelines with different caps. Custom Python implementations must be included
+in the image and registered through `maver/custom.py`. See
+[the customisation guide](../../docs/customisation.md) for configuration and selection.
+
 ## Granting access to a workload namespace
 
 The base grants nothing inside any workload namespace. Nothing is diagnosable until you
@@ -126,7 +148,7 @@ and an inert policy that looks enforced is worse than an absent one.
 ## Validating a change
 
 ```bash
-make test PYTEST_FLAGS=tests/unit/test_deploy.py   # renders both overlays, no cluster
+uv run pytest tests/unit/test_deploy.py   # renders both overlays, no cluster
 kubectl kustomize deploy/k8s/overlays/production | kubeconform -strict -summary
 ```
 

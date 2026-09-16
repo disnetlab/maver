@@ -99,9 +99,11 @@ def test_every_declared_deferral_is_disclosed(deferral: str) -> None:
 
 
 def test_the_provenance_statement_sits_with_the_claims() -> None:
-    """The claims table is where the numbers are read, so it is where the sentence that
-    says none of them were measured here has to be; a reader who stops after the table
-    must not leave believing this code produced them."""
-    where = README.lower().find("no measured campaign has been run on this code")
+    """Attribute paper results to the prototype beside the claims table.
+
+    Earlier smoke checks do not make this build the source of the manuscript's numbers.
+    The statement must remain visible to a reader who stops after the claims.
+    """
+    where = README.lower().find("the manuscript's results come from the research prototype")
     assert where != -1, "the provenance sentence is gone"
     assert where < _limitations_start(), "it belongs with the claims, not only below them"

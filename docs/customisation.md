@@ -87,7 +87,9 @@ The shared remediation budget still applies, so this cap can only shorten a run.
 An Execution-driven replan spends only the shared budget. An inconclusive Verify
 recheck spends only `MAVER_VERIFY__INCONCLUSIVE_RETRIES`.
 
-Individual pipelines may impose a tighter limit:
+Individual pipelines may impose a tighter limit. The following configuration is
+available as [examples/verify-handbacks.yaml](../examples/verify-handbacks.yaml);
+set `MAVER_CUSTOMISATION` to that file to use it:
 
 ```yaml
 pipelines:
@@ -119,7 +121,14 @@ It does not turn a successful apply into a replan merely because the incident's
 symptom remains. Verify independently judges recovery. Verify submission repair
 fills only missing fields from recorded probe results or the model's submitted
 evidence; it retains the model's verdict, preserves the raw transcript, and records
-the repair before the existing submission checks run.
+the repair before the existing submission checks run. If the normalizer fails,
+the original arguments still go through those checks and the audit records a bypass.
+
+The audit contract is version **3**: repairs appear as
+`InterventionEvent(control="submit_normalization", action="rescued")`, with original
+and normalized arguments, the tool-call ID and repair sources in its JSON `detail`.
+Normalizer failures use `action="bypassed"`. This version is independent of the
+arm/model YAML schema versions and the session-store layout version.
 
 ## Add behaviour by Python inheritance
 

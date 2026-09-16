@@ -45,7 +45,7 @@ the data archive, not here.
 | A stage-aware gate classifies read, write, exec and blocked, and refuses a write outside the stages that may issue one | D | `uv run pytest tests/unit/test_write_gate.py tests/unit/test_kubernetes_tool.py` |
 | Any write can be held for a person: the run parks durably, and a decision resumes the same incident from the role that was interrupted | D | `uv run pytest tests/unit/test_approval_pause.py` |
 | Execution opens on a forced read, and a submission with no command behind it is refused for the submit guard's budget of two rejections; a third is accepted, recorded as a bypass on the run row and in the event log | D | `uv run pytest tests/unit/test_roles_execution.py tests/unit/test_loop.py` |
-| Verification hands back to planning on an insufficient fix and to diagnosis on a wrong cause, under one shared budget | D | `uv run pytest tests/unit/test_routing.py tests/unit/test_roles_verify.py` |
+| Verification returns to planning or diagnosis within the shared remediation budget and an optional tighter Verify cap | D | `uv run pytest tests/unit/test_routing.py tests/unit/test_roles_verify.py` |
 | Records carry lifecycle states, and retrieval demotes an invalidated record without hiding it | D | `uv run pytest tests/unit/test_lifecycle.py` |
 | Distillation writes bounded evidence and lesson projections; a raw transcript never enters retrieval | D | `uv run pytest tests/unit/test_projections.py tests/unit/test_distil.py` |
 | The gated second opinion: a retrieval-free first diagnosis, a bounded gate that sees only the candidate, precedents retrieved by a harness-built query, a blind second diagnosis, a label-shuffled selector, and a fall back to the first answer on any failure | D | `uv run pytest tests/unit/test_secondpass.py tests/unit/test_secondpass_wiring.py` |
@@ -63,17 +63,17 @@ person.** What is demonstrated above is that the mechanism works — it parks, p
 and resumes the same incident on a decision, and that path is tested. It is not a claim
 that a human approved anything during the measurements.
 
-**No measured campaign has been run on this code.** Every number in the manuscript was
-produced by the research prototype and is recomputed from the data archive that
-accompanies the paper, not from anything here. What this repository reproduces is the
-mechanisms behind those numbers, and its parity checks pin them against the prototype's
-behaviour one mechanism at a time (`make test-parity`). A paired parity run on the
-benchmark is the gate before this code is used to measure anything, and it has not been
-run. The limitations section below repeats this where a reader looking for caveats will
-find it. Later adopted behavior, including the Execution prompt and Verify
-submission repairs, is identified in [the changelog](CHANGELOG.md); historical
-prompt fixtures remain available and do not imply that the current defaults match
-every earlier campaign.
+**The manuscript's results come from the research prototype.** They are recomputed
+from its data archive. Earlier MAVER builds, then named Kira, completed a ten-pair
+SREGym smoke comparison and small memory-mechanism checks on 2026-09-08/09. Those
+checks establish implementation evidence for those builds, not new paper results,
+comparative-effect estimates, or sign-off for the current build.
+
+Local parity checks pin individual inputs and mechanisms (`make test-parity`). Later
+adopted behavior, including the Execution prompt and Verify submission repairs, is
+identified in [the changelog](CHANGELOG.md). Historical prompt fixtures remain
+available; the current defaults do not reproduce every earlier campaign. The current
+behavior still requires its own validation before use in a measured campaign.
 
 ## Running it
 
@@ -126,6 +126,8 @@ retain the selected composition. Customisation requires no separately packaged p
 Verify returns can be bounded with `MAVER_VERIFY__HANDBACK_RETRIES`; individual
 `multi` pipelines can tighten that cap through `config.verify_handback_retries`.
 The shared remediation budget still applies, and approval resumes retain the count.
+[examples/verify-handbacks.yaml](examples/verify-handbacks.yaml) configures two built-in
+recovery pipelines without requiring custom Python registrations.
 
 See [the customisation guide](docs/customisation.md), or run the complete offline
 example with `uv run python examples/customisation.py`. It exercises agent inheritance,
@@ -189,8 +191,8 @@ rule that keeps the graph library replaceable.
 
 ## Limitations and known issues
 
-The provenance statement above is the first of these: no number reported anywhere was
-measured on this code.
+The manuscript's numbers remain prototype results. The earlier smoke and mechanism
+checks do not validate subsequent behavior changes or establish comparative effects.
 
 **Deferred deliberately.** Each of these is tracked, and what stands in for it today is
 named so an adopter can judge the risk themselves.

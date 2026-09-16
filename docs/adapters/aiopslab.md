@@ -80,11 +80,11 @@ read-only at `/run/secrets/aiopslab-bridge-token`. It waits for `/healthz` and t
 | `AIOPSLAB_AGENT_DATA_DIR` | `/var/lib/aiopslab/agent-workspace` | the workspace volume |
 | `AIOPSLAB_AGENT_CONFIG_DIR` | `/var/lib/aiopslab/agent-config` | the token and environment file |
 
-`ma-v` is the default because it is the prototype's final AIOpsLab arm: the pipeline with
-the verification role on, its retry budget at two, verification blind to the diagnosis, no
-health gate, one inconclusive retry, and memory off. A different arm is a different
-experiment; deploy it into a fresh `AIOPSLAB_AGENT_DATA_DIR` so the two do not share a
-workspace.
+`ma-v` enables verification with a shared remediation budget of two, verification
+blind to the diagnosis, no health gate, one inconclusive retry, and memory off.
+With no explicit Verify cap, its hand-backs share that limit of two. A different arm
+is a different experiment; deploy it into a fresh `AIOPSLAB_AGENT_DATA_DIR` so the
+two do not share a workspace.
 
 What the script writes into the environment file, which is also what a hand-written
 `docker run` needs:
@@ -111,6 +111,29 @@ Do not carry the prototype's `agent.env` across wholesale. It set
 AIOpsLab run had the RCA configuration snapshot on; MAVER honours that name as an alias,
 which would switch the snapshot off and make a new sweep incomparable with the archive.
 The deploy script names `MAVER_PIPELINE__AUTO_SNAPSHOT=true` for that reason.
+
+## Verify hand-back cap and current behavior
+
+The agent accepts `MAVER_VERIFY__HANDBACK_RETRIES=1` to permit at most one Verify
+return to RCA or Planning, still within the shared remediation budget. Zero permits
+none; unset inherits the shared limit. The prototype's `VERIFY_HANDBACK_RETRIES`
+spelling is not an alias. Inconclusive checks and Execution replans retain their
+existing accounting.
+
+The shipped deployment script writes a fixed environment file and does not forward
+arbitrary host variables. To configure this cap with that script, add the setting
+to its environment-generation block when adapting it locally. For your own
+`docker run`, put it in the container's `--env-file` and recreate the container.
+Editing a file alone does not change a running container's environment.
+
+The current Execution prompt confirms applied changes at the resource level;
+Verify judges recovery. Verify can fill a missing recovery entry-point field from
+this adapter's successful `probe_service` result, and missing hand-back fields from
+its submitted evidence. Those repairs preserve the verdict and raw transcript and
+are audited under schema version 3. See [the migration record](../../CHANGELOG.md)
+and [configuration guide](../customisation.md#bound-verify-hand-backs). New behavior
+defines a new experimental condition; a historical arm name does not restore older
+prompt or control behavior.
 
 ## Run one problem
 

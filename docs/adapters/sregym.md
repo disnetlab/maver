@@ -11,8 +11,29 @@ kubectl MCP server; telemetry still arrives over MCP. The README's "Under SREGym
 describes that route and why it is the route rather than an option. The settings that
 address it are `adapters.sregym.kubectl_proxy_url` and the three timeouts beside it.
 
-This page covers the other half: running the memory arms against a corpus that was
-distilled by an earlier system.
+This page covers recovery-loop configuration and running the memory arms against
+a corpus distilled by an earlier system.
+
+## Recovery-loop configuration
+
+For a new verification-enabled run, set these in the agent container's environment
+(`deploy/docker/maver.env` for the evaluation Compose deployment):
+
+```dotenv
+MAVER_VERIFY__ENABLED=true
+MAVER_VERIFY__HANDBACK_RETRIES=1
+```
+
+The cap permits one Verify return to RCA or Planning within the shared remediation
+budget. Zero permits none; unset inherits the shared limit. Execution replans and
+inconclusive rechecks keep their existing budgets. The prototype's flat
+`VERIFY_HANDBACK_RETRIES` spelling is not read by MAVER.
+
+Recreate the container after changing its environment file. Per-pipeline YAML can
+impose a tighter cap; see [the configuration guide](../customisation.md#bound-verify-hand-backs).
+The current Execution prompt and Verify submission repairs adopt later prototype
+behavior. Record the revision and effective settings for new runs; selecting a
+historical arm name alone does not restore the older prompt or control policy.
 
 ## Loading an archived corpus
 

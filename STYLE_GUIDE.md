@@ -151,9 +151,8 @@ that catches its own exception and calls `handler(request)` anyway.
 - Settings are **nested pydantic-settings groups**, not a flat namespace of accessor
   functions. The prototype reached 198 environment variables across a 1,272-line
   module; roughly half of them existed so that one experiment could run once.
-- **New knobs fail closed.** A missing or unparseable value resolves to the
-  conservative default, and the process says so at startup rather than at incident
-  time.
+- **New knobs fail closed.** Unset values use documented defaults; invalid
+  configured values fail validation at startup rather than being silently replaced.
 - A knob ships with its settings group, its default and its documentation **in the
   same commit**. A live variable declared in no config file is invisible to everyone
   but its author.
@@ -177,9 +176,11 @@ that catches its own exception and calls `handler(request)` anyway.
   checkpoints restore it; they do not rerun selectors or substitute a new default.
 - Local Python is trusted deployment code, not sandboxed third-party code. Mandatory
   runtime authority, budget and persistence mechanisms remain outside optional hooks.
-- Keep the measured default behaviour intact. New components require explicit
-  configuration and provenance. Bump implementation versions when Python behaviour
-  changes so a saved approval cannot silently resume under different code.
+- Preserve measured inputs and their provenance. An explicitly approved migration
+  may advance the default behavior; retain historical fixtures and record the source
+  revision and changed experimental condition in CHANGELOG.md. New components require
+  explicit configuration. Bump implementation versions when Python behavior changes
+  so a saved approval cannot silently resume under different code.
 
 Workflow definitions may reuse the pure routing and outcome policies in
 `orchestration/`; they do not import the runner or construct deployment resources.
