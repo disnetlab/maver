@@ -13,6 +13,7 @@ from maver.roles.verify import VERIFY
 class RCAAgent(Agent):
     """The existing diagnostic agent, including its prompt and context builders."""
 
+    version = "2"
     role_spec = RCA
 
 
@@ -32,7 +33,7 @@ class ExecutionAgent(Agent):
 class VerifyAgent(Agent):
     """The existing blind verifier and deployment health checks."""
 
-    version = "2"
+    version = "3"
     role_spec = VERIFY
 
 

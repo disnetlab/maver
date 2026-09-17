@@ -8,15 +8,21 @@ the headers are asserted literally here rather than through a helper that could 
 with a mistake.
 """
 
+import asyncio
 import json
 from collections.abc import Iterator
+from contextvars import ContextVar
+from types import SimpleNamespace
 from typing import Any
+from uuid import UUID
 
 import httpx
 import pytest
 import respx
 
+from maver.adapters.aiopslab import transport as transport_module
 from maver.adapters.aiopslab.transport import AiopsLabTransport
+from maver.audit.context import CallContext, ToolObservation, bind_call
 from maver.audit.journal import Journal
 from maver.tools.context import ToolContext
 from maver.tools.metrics import _parse_alerts
@@ -46,6 +52,18 @@ def transport(**kwargs: Any) -> AiopsLabTransport:
     bound.namespace = NAMESPACE
     bound.stage = "rca"
     return bound
+
+
+def call_context() -> CallContext:
+    return CallContext(
+        invocation_id="attempt-1",
+        call_id="provider-1",
+        run_id="run-1",
+        stage="rca",
+        session_id=SESSION,
+        observation=ToolObservation(),
+        journal=Journal(session_id=SESSION, stage="rca"),
+    )
 
 
 def sent(router: respx.Router) -> httpx.Request:
@@ -202,29 +220,42 @@ async def test_a_kubectl_read_is_returned_exactly_as_the_command_wrote_it() -> N
 
 
 async def test_an_ordinary_bridge_action_keeps_its_display_bound() -> None:
-    """Unstructured direct actions retain their existing display bound."""
-    with respx.mock(assert_all_called=False) as router:
+    """Unstructured direct actions retain their bound and preserve complete audit evidence."""
+    call = call_context()
+    with bind_call(call), respx.mock(assert_all_called=False) as router:
         router.post(ACTION).mock(
             return_value=httpx.Response(200, json={"ok": True, "result": "x" * 12_000})
         )
         answer = await transport().action(
             "kubectl", "exec_kubectl_cmd_safely", {"cmd": "kubectl get events"}
         )
+        request_id = sent(router).headers["X-MAVER-Request-ID"]
 
     assert answer == "x" * 10_000 + "… [truncated]"
+    assert call.observation.upstream_truncated and call.observation.incomplete
+    (artifact,) = call.observation.output_artifacts
+    assert artifact["source"] == "aiopslab"
+    assert artifact["inline"]["body"] == {"ok": True, "result": "x" * 12_000}
+    assert artifact["inline"]["request_id"] == request_id
+    assert "Authorization" not in json.dumps(artifact)
 
 
 @pytest.mark.parametrize("status", [200, 400])
 async def test_kubectl_failures_keep_the_bound_even_when_success_output_is_complete(
     status: int,
 ) -> None:
-    with respx.mock as router:
+    call = call_context()
+    with bind_call(call), respx.mock as router:
         router.post(ACTION).mock(
             return_value=httpx.Response(status, json={"ok": False, "result": "E" * 12_000})
         )
         answer = await transport().kubectl(["get", "pods"])
 
     assert answer == "error: " + "E" * 10_000 + "… [truncated]"
+    assert call.observation.upstream_truncated and call.observation.incomplete
+    (artifact,) = call.observation.output_artifacts
+    assert artifact["inline"]["status"] == status
+    assert artifact["inline"]["body"] == {"ok": False, "result": "E" * 12_000}
 
 
 async def test_every_call_opens_and_closes_its_own_client(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -293,3 +324,45 @@ def test_no_role_is_offered_a_log_tool_under_this_transport(tmp_path: Any) -> No
             name: reason for name, reason in resolved.dropped.items() if name in expected
         } == dict.fromkeys(expected, "transport lacks logs")
         assert "get_metrics" in offered and "get_services" in offered
+
+
+async def test_parallel_actions_carry_invocation_identity_and_unique_backend_requests(
+    bridge: respx.Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    active = ContextVar("test_bridge_call", default=None)
+    monkeypatch.setattr(transport_module, "current_call", active.get, raising=False)
+    bound = transport(session_id=SESSION)
+
+    async def invoke(label):
+        token = active.set(
+            SimpleNamespace(
+                invocation_id=f"attempt-{label}",
+                call_id=f"provider-{label}",
+                run_id=f"run-{label}",
+                stage=f"role-{label}",
+                session_id=SESSION,
+                observation=ToolObservation(),
+                journal=Journal(session_id=SESSION, stage=f"role-{label}"),
+            )
+        )
+        try:
+            await bound.query_metrics(f"up_{label}")
+            await bound.action("aiopslab", "probe_service", {"service": label}, stage="verify")
+        finally:
+            active.reset(token)
+
+    await asyncio.gather(invoke("a"), invoke("b"))
+
+    requests = [call.request for call in bridge.calls]
+    assert len({str(UUID(r.headers["X-MAVER-Request-ID"])) for r in requests}) == 4
+    for request in requests:
+        payload = json.loads(request.content)
+        label = payload["arguments"].get("service") or payload["arguments"]["query"][-1]
+        assert request.headers["X-MAVER-Invocation-ID"] == f"attempt-{label}"
+        assert request.headers["X-MAVER-Call-ID"] == f"provider-{label}"
+        assert request.headers["X-MAVER-Run-ID"] == f"run-{label}"
+        assert request.headers["X-MAVER-Session"] == SESSION
+        assert payload["stage"] == (
+            "verify" if payload["server"] == "aiopslab" else f"role-{label}"
+        )
+    assert bound.stage == "rca"

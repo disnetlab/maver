@@ -5,9 +5,12 @@ Everything here runs without a cluster: the two places that would touch one,
 real server binds an ephemeral loopback port and talks to itself.
 """
 
+import io
 import json
 import subprocess
 from http.client import RemoteDisconnected
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -428,3 +431,96 @@ def test_an_empty_token_is_refused_before_the_server_binds() -> None:
         serve_bridge(BridgeBackend(NAMESPACE), ""),
     ):
         pass  # pragma: no cover - serve_bridge raises before the body runs
+
+
+def test_dispatch_is_recorded_before_execution_and_after_a_client_disconnect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = bridge_module.AccessLog(tmp_path / "bridge.log")
+    payload = kubectl("kubectl get pods")
+    dispatched = []
+
+    def dispatch(arguments):
+        rows = [json.loads(line) for line in (tmp_path / "bridge.log").read_text().splitlines()]
+        assert [row["event"] for row in rows] == ["received"]
+        assert json.loads((tmp_path / rows[0]["request"]["path"]).read_text()) == payload
+        dispatched.append(arguments)
+        return "pod/x"
+
+    def disconnected(*args):
+        raise BrokenPipeError("client left")
+
+    handler = object.__new__(bridge_module._BridgeHandler)
+    handler.path = "/v1/action"
+    encoded = json.dumps(payload).encode()
+    handler.headers = {"Authorization": "Bearer test-token", "Content-Length": str(len(encoded))}
+    handler.rfile = io.BytesIO(encoded)
+    handler.server = SimpleNamespace(
+        token="test-token",
+        backend=SimpleNamespace(dispatch=dispatch),
+        access_log=log,
+        server_address=("127.0.0.1", 0),
+    )
+    monkeypatch.setattr(handler, "_json", disconnected)
+
+    handler.do_POST()
+
+    assert dispatched == [payload]
+    rows = [json.loads(line) for line in (tmp_path / "bridge.log").read_text().splitlines()]
+    assert [row["event"] for row in rows] == ["received", "finished"]
+    assert rows[-1]["decision"] == "served"
+    assert rows[-1]["status"] == 200
+    assert "BrokenPipeError" in rows[-1]["delivery_error"]
+    assert (tmp_path / rows[-1]["result"]["path"]).read_text() == "pod/x"
+
+
+@pytest.mark.parametrize("failed_label", ["request.json", "response.txt"])
+def test_audit_capture_failure_is_reported_without_repeating_or_hiding_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_label: str
+) -> None:
+    log = bridge_module.AccessLog(tmp_path / "bridge.log")
+    original_capture = log.capture
+    captures = []
+    dispatched = []
+    delivered = []
+
+    def capture(receipt_id, label, content):
+        captures.append(label)
+        if label == failed_label:
+            raise OSError("disk full")
+        return original_capture(receipt_id, label, content)
+
+    def dispatch(payload):
+        dispatched.append(payload)
+        return "pod/x"
+
+    monkeypatch.setattr(log, "capture", capture)
+    handler = object.__new__(bridge_module._BridgeHandler)
+    handler.path = "/v1/action"
+    encoded = json.dumps(kubectl("kubectl get pods")).encode()
+    handler.headers = {"Authorization": "Bearer test-token", "Content-Length": str(len(encoded))}
+    handler.rfile = io.BytesIO(encoded)
+    handler.server = SimpleNamespace(
+        token="test-token",
+        backend=SimpleNamespace(dispatch=dispatch),
+        access_log=log,
+        server_address=("127.0.0.1", 0),
+    )
+    monkeypatch.setattr(handler, "_json", lambda status, body: delivered.append((status, body)))
+
+    handler.do_POST()
+
+    assert captures == ["request.json", "response.txt"]
+    rows = [json.loads(line) for line in (tmp_path / "bridge.log").read_text().splitlines()]
+    assert rows[-1]["event"] == "finished"
+    assert "disk full" in rows[-1]["audit_errors"][0]
+    if failed_label == "request.json":
+        assert dispatched == []
+        assert delivered[0][0] == 500
+        assert "disk full" in delivered[0][1]["result"]
+        assert rows[-1]["decision"] == "failed"
+    else:
+        assert len(dispatched) == 1
+        assert delivered == [(200, {"ok": True, "result": "pod/x"})]
+        assert rows[-1]["decision"] == "served"
+        assert rows[-1]["result"] is None

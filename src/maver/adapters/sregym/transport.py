@@ -38,6 +38,7 @@ from mcp import ClientSession
 from mcp.client.sse import sse_client
 
 from maver.adapters.sregym.conductor import SSID_HEADER
+from maver.audit.context import current_call
 from maver.tools.errors import tool_error
 from maver.tools.kubectl_proxy import ProxyRoute, run_via_proxy
 from maver.tools.kubernetes import leading_verb
@@ -414,4 +415,19 @@ def _rendered(result: Any) -> str:
     failed = getattr(result, "is_error", None)
     if failed is None:
         failed = getattr(result, "isError", False)
-    return f"error: {out}" if failed else out
+    if failed or out.startswith(
+        (
+            "[prom_mcp] Error querying ",
+            "[loki_mcp] Error querying ",
+            "[ob_mcp] Error querying ",
+            "Query failed:",
+        )
+    ):
+        return out if out.startswith("error:") else f"error: {out}"
+    if out.endswith(("... [truncated]", "… [truncated]")):
+        if call := current_call():
+            call.observation.incomplete = True
+            call.observation.upstream_truncated = True
+            call.observation.errors.append("MCP response was truncated upstream")
+        return f"error: MCP response was truncated upstream; partial output follows:\n{out}"
+    return out

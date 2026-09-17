@@ -1074,13 +1074,19 @@ class ObservabilitySettings(SettingsGroup):
         True,
         "MAVER_OBSERVABILITY__EVENT_LOG_ENABLED",
         "JSONL_EVENT_LOG_ENABLED",
-        description="Write the ordered per-incident event log.",
+        description=(
+            "Legacy compatibility field; ignored by the service composition root. "
+            "The service always records audit evidence under server.workdir/audit."
+        ),
     )
     event_log_path: Path | None = setting(
         None,
         "MAVER_OBSERVABILITY__EVENT_LOG_PATH",
         "JSONL_EVENT_LOG_PATH",
-        description="Where the event log is written. Defaults under the workspace.",
+        description=(
+            "Legacy compatibility field; ignored. The service audit directory is "
+            "server.workdir/audit; custom applications select their own sink."
+        ),
     )
 
 

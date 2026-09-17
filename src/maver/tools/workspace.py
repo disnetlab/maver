@@ -89,8 +89,14 @@ class SessionWorkspace:
         if len(content) <= limit:
             return content
         body, ext = _normalise_for_file(content)
-        name = f"{tool_name}_{next(self._sequence):04d}.{ext}"
-        (self.outputs / name).write_text(body, encoding="utf-8")
+        while True:
+            name = f"{tool_name}_{next(self._sequence):04d}.{ext}"
+            try:
+                with (self.outputs / name).open("x", encoding="utf-8") as output:
+                    output.write(body)
+                break
+            except FileExistsError:
+                continue
         hint = " (valid JSON — json.load it)" if ext == "json" else ""
         return (
             content[:limit] + f"\n\n[Output truncated ({len(content)} chars). "

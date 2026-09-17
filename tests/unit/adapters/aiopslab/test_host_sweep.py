@@ -10,6 +10,7 @@ that will write them on a host.
 import argparse
 import fcntl
 import json
+import stat
 import subprocess
 import sys
 import types
@@ -209,6 +210,10 @@ def post_action(port: int, payload: dict[str, Any], token: str = TOKEN) -> None:
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "X-MAVER-Session": "sess-1",
+            "X-MAVER-Request-ID": "backend-1",
+            "X-MAVER-Invocation-ID": "attempt-1",
+            "X-MAVER-Call-ID": "provider-call-1",
+            "X-MAVER-Run-ID": "run-1",
         },
         method="POST",
     )
@@ -230,7 +235,7 @@ def test_the_bridge_records_every_action_it_was_asked_for(
     monkeypatch.setattr(
         bridge_module.subprocess,
         "run",
-        lambda *_a, **_k: subprocess.CompletedProcess([], 0, "pod/x\n", ""),
+        lambda *_a, **_k: subprocess.CompletedProcess([], 0, "pod/x\n" + "z" * 12000, ""),
     )
     access_log = tmp_path / "bridge.log"
 
@@ -240,6 +245,7 @@ def test_the_bridge_records_every_action_it_was_asked_for(
             "server": "kubectl",
             "tool": "exec_kubectl_cmd_safely",
             "arguments": {"cmd": "kubectl get pods"},
+            "stage": "rca",
         }
 
     with serve_bridge(BridgeBackend(NAMESPACE), TOKEN, port=0, access_log=access_log) as server:
@@ -250,16 +256,36 @@ def test_the_bridge_records_every_action_it_was_asked_for(
 
     lines = [json.loads(line) for line in access_log.read_text(encoding="utf-8").splitlines()]
 
-    assert [line["decision"] for line in lines] == ["served", "refused", "unauthorized"]
-    assert [line["status"] for line in lines] == [200, 400, 401]
-    assert lines[0]["op"] == "kubectl.exec_kubectl_cmd_safely"
-    assert lines[0]["namespace"] == NAMESPACE
-    assert lines[0]["session"] == "sess-1"
-    assert lines[0]["port"] == port
-    assert lines[0]["timestamp"].endswith("Z")
-    assert isinstance(lines[0]["duration_ms"], float)
-    # Not the arguments: they are large, and the agent's audit log already holds them.
-    assert "kubectl get pods" not in access_log.read_text(encoding="utf-8")
+    assert [line["event"] for line in lines] == ["received", "finished"] * 3
+    finished = [line for line in lines if line["event"] == "finished"]
+    assert [line["decision"] for line in finished] == ["served", "refused", "unauthorized"]
+    assert [line["status"] for line in finished] == [200, 400, 401]
+    first = finished[0]
+    assert first["op"] == "kubectl.exec_kubectl_cmd_safely"
+    assert first["namespace"] == NAMESPACE
+    assert first["stage"] == "rca"
+    assert first["session"] == "sess-1"
+    assert first["request_id"] == "backend-1"
+    assert first["invocation_id"] == "attempt-1"
+    assert first["call_id"] == "provider-call-1"
+    assert first["run_id"] == "run-1"
+    assert first["port"] == port
+    assert first["timestamp"].endswith("Z")
+    assert isinstance(first["duration_ms"], float)
+    assert first["receipt_id"] == lines[0]["receipt_id"]
+    assert len({line["receipt_id"] for line in finished}) == 3
+    request = json.loads((tmp_path / first["request"]["path"]).read_text())
+    assert request["arguments"] == {"cmd": "kubectl get pods"}
+    result_path = tmp_path / first["result"]["path"]
+    assert result_path.read_text() == "pod/x\n" + "z" * 12000
+    assert len(first["result_preview"]) <= 2048
+    assert finished[1]["error"] and "does not match" in finished[1]["error"]
+    assert stat.S_IMODE(result_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(result_path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(access_log.stat().st_mode) == 0o600
+    all_text = access_log.read_text() + "".join(p.read_text() for p in result_path.parent.iterdir())
+    assert TOKEN not in all_text and "wrong-token" not in all_text
+    assert "Authorization" not in all_text
     assert "GET /" not in capfd.readouterr().err
 
 

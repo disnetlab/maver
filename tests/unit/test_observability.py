@@ -1,17 +1,24 @@
 """Counting every model call, and the spans that go with them."""
 
 import asyncio
+import json
 import pathlib
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from pydantic import SecretStr
 
 from maver.audit.journal import AuditEvent, Journal, ListSink
 from maver.llm.client import LLMClient, prompt_digest
 from maver.llm.sampling import resolve_sampling
-from maver.llm.types import ModelRequest, ModelResponse, Usage
+from maver.llm.types import ModelRequest, ModelResponse, ToolSpec, Usage
 from maver.observability.tracing import span
 from maver.observability.usage import RecordingCompletion
+from maver.settings.groups import ModelSettings
 from maver.settings.profiles import load_profile
 from maver.settings.root import Settings
 
@@ -84,6 +91,12 @@ async def test_a_call_is_recorded_before_it_is_made() -> None:
     started, completed = sink.events
     assert started.payload.kind == "model_call_started"
     assert completed.payload.kind == "model_call"
+    assert started.payload.call_id == completed.payload.call_id
+    assert started.payload.call_id is not None
+    manifest = started.payload.request["inline"]
+    assert manifest["capture_layer"] == "neutral_request"
+    assert manifest["neutral"]["system"]["inline"] == "s"
+    assert completed.payload.response["inline"]["normalised"]["text"] == "{}"
     assert started.payload.caller == "secondpass.gate"
     assert started.payload.message_count == 1
     assert started.payload.digest == prompt_digest("s", [{"role": "user", "content": "hi"}])
@@ -286,7 +299,9 @@ async def test_a_retried_call_records_what_the_caller_waited(
         attempts += 1
         await asyncio.sleep(0.05)
         if attempts < 3:
-            raise ConnectionError("endpoint refused the connection")
+            failure = ConnectionError("endpoint refused the connection")
+            failure.usage = SimpleNamespace(prompt_tokens=7, completion_tokens=3)
+            raise failure
         return _Raw()
 
     sink = ListSink()
@@ -307,3 +322,192 @@ async def test_a_retried_call_records_what_the_caller_waited(
     # its last attempt. Comparing the two measurements as a ratio flaked whenever the
     # scheduler stretched the last attempt more than the earlier ones.
     assert recorded.duration_ms >= recorded.last_attempt_ms + 95
+    attempts_recorded = [
+        event.payload for event in sink.events if event.payload.kind == "model_attempt"
+    ]
+    assert [event.status for event in attempts_recorded] == ["failed", "failed", "succeeded"]
+    assert [event.attempt for event in attempts_recorded] == [1, 2, 3]
+    assert all(event.call_id == recorded.call_id for event in attempts_recorded)
+    assert attempts_recorded[0].usage["prompt_tokens"] == 7
+    assert attempts_recorded[0].usage["completion_tokens"] == 3
+    assert recorded.usage_scope == "final_attempt"
+    assert recorded.prompt_tokens is None
+
+
+async def test_effective_request_response_and_cancellation_are_linked_without_credentials() -> None:
+    """Schemas and provider options are evidence; credentials are not model input."""
+    sink = ListSink()
+    entered = asyncio.Event()
+    settings = Settings(model=ModelSettings(api_key=SecretStr("audit-test-credential")))
+
+    async def provider(**kwargs: Any) -> Any:
+        assert kwargs["api_key"] == "audit-test-credential"
+        assert sink.events[-1].payload.kind == "model_call_started"
+        entered.set()
+        await asyncio.sleep(30)
+
+    client = LLMClient(PROFILE, settings, completion=provider)
+    recorder = RecordingCompletion(
+        client, Journal(sink, session_id="s1", stage="rca"), PROFILE, RESOLVED
+    )
+    tool = ToolSpec(
+        "inspect",
+        "Inspect the application",
+        {"type": "object", "properties": {"namespace": {"type": "string"}}},
+    )
+    model_request = ModelRequest(
+        system="private local prompt",
+        messages=({"role": "user", "content": "investigate"},),
+        tools=(tool,),
+        tool_choice={"type": "function", "function": {"name": "inspect"}},
+        suppress_reasoning=True,
+    )
+    task = asyncio.create_task(recorder.complete(model_request, caller="rca"))
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    started, attempt, completed = [event.payload for event in sink.events]
+    assert started.call_id == attempt.call_id == completed.call_id
+    assert attempt.kind == "model_attempt" and attempt.status == "cancelled"
+    assert completed.error == "cancelled"
+    manifest = started.request["inline"]
+    assert manifest["capture_layer"] == "litellm_invocation"
+    invocation = manifest["provider"]
+    assert invocation["tool_choice"] == model_request.tool_choice
+    assert invocation["tools"][0]["inline"]["function"]["parameters"] == tool.parameters
+    assert invocation["messages"][0]["inline"] == {
+        "role": "system",
+        "content": "private local prompt",
+    }
+    assert invocation["extra_body"]["chat_template_kwargs"]["enable_thinking"] is False
+    assert invocation["credentials_excluded"] == ["api_key"]
+    assert "audit-test-credential" not in json.dumps(
+        [event.model_dump(mode="json") for event in sink.events]
+    )
+
+
+async def test_concurrent_calls_keep_provider_attempts_with_their_incident() -> None:
+    """The shared provider client must not capture another incident's response."""
+    ready = asyncio.Event()
+    arrived = 0
+
+    async def provider(**kwargs: Any) -> Any:
+        nonlocal arrived
+        arrived += 1
+        if arrived == 2:
+            ready.set()
+        await ready.wait()
+        raw = _Raw()
+        raw.choices[0].message.content = kwargs["messages"][-1]["content"]
+        return raw
+
+    client = LLMClient(PROFILE, Settings(), completion=provider)
+    sinks = [ListSink(), ListSink()]
+    recorders = [
+        RecordingCompletion(
+            client, Journal(sink, session_id=f"s{index}", stage="rca"), PROFILE, RESOLVED
+        )
+        for index, sink in enumerate(sinks)
+    ]
+    await asyncio.gather(
+        *(
+            recorder.complete(
+                ModelRequest(
+                    system="s", messages=({"role": "user", "content": f"incident-{index}"},)
+                ),
+                caller="rca",
+            )
+            for index, recorder in enumerate(recorders)
+        )
+    )
+    ids = set()
+    for index, sink in enumerate(sinks):
+        started, attempt, completed = [event.payload for event in sink.events]
+        assert started.call_id == attempt.call_id == completed.call_id
+        ids.add(started.call_id)
+        captured = completed.response["inline"]
+        assert captured["normalised"]["text"] == f"incident-{index}"
+        assert captured["provider_body"]["choices"][0]["message"]["content"] == f"incident-{index}"
+        assert attempt.response == completed.response
+    assert len(ids) == 2
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        RuntimeError("local-only secret payload"),
+        asyncio.CancelledError("private cancellation context"),
+    ],
+)
+def test_exported_spans_keep_exception_type_without_payload(monkeypatch, failure) -> None:
+    """OTLP is an external export; detailed exception evidence stays in local audit."""
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(
+        "maver.observability.tracing.trace.get_tracer", lambda _: provider.get_tracer("test")
+    )
+    with pytest.raises(type(failure)), span("maver.test"):
+        raise failure
+    [recorded] = exporter.get_finished_spans()
+    assert recorded.status.description == type(failure).__name__
+    assert recorded.events == ()
+    assert str(failure) not in recorded.to_json()
+    provider.shutdown()
+
+
+async def test_provider_failure_keeps_details_without_the_resolved_api_key() -> None:
+    """Provider exceptions sometimes echo authentication arguments into their message."""
+    secret = "failure-audit-test-credential"
+    settings = Settings(model=ModelSettings(api_key=SecretStr(secret)))
+    sink = ListSink()
+
+    async def provider(**kwargs):
+        raise ValueError(f"request rejected using api_key={kwargs['api_key']}")
+
+    recorder = RecordingCompletion(
+        LLMClient(PROFILE, settings, completion=provider),
+        Journal(sink, session_id="s1", stage="rca"),
+        PROFILE,
+        RESOLVED,
+    )
+    with pytest.raises(Exception, match="REDACTED"):
+        await recorder.complete(request(), caller="rca")
+    recorded = cost_of(sink).payload
+    assert recorded.attempts_observed == 1
+    assert recorded.error_detail["inline"]["type"] == "ValueError"
+    assert "[REDACTED]" in recorded.error_detail["inline"]["message"]
+    assert secret not in json.dumps([event.model_dump(mode="json") for event in sink.events])
+
+
+async def test_normalisation_failure_retains_provider_usage_without_retrying() -> None:
+    """A local parsing error must retain its old exception and never become a provider retry."""
+    calls = 0
+
+    async def provider(**kwargs):
+        nonlocal calls
+        calls += 1
+        raw = _Raw()
+        raw.choices = []
+        raw.usage = SimpleNamespace(prompt_tokens=11, completion_tokens=4)
+        return raw
+
+    sink = ListSink()
+    recorder = RecordingCompletion(
+        LLMClient(PROFILE, Settings(), completion=provider),
+        Journal(sink, session_id="s1", stage="rca"),
+        PROFILE,
+        RESOLVED,
+    )
+    with pytest.raises(IndexError):
+        await recorder.complete(request(), caller="rca")
+    assert calls == 1
+    [attempt] = [event.payload for event in sink.events if event.payload.kind == "model_attempt"]
+    assert attempt.error["inline"]["phase"] == "normalisation"
+    assert attempt.response["inline"]["choices"] == []
+    assert attempt.usage["prompt_tokens"] == 11
+    assert cost_of(sink).payload.prompt_tokens == 11
+    assert cost_of(sink).payload.completion_tokens == 4

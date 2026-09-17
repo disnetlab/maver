@@ -10,11 +10,13 @@ write still executes; it simply is not reconstructible, which is a deployment ch
 rather than something the loop should have to branch on.
 """
 
+import json
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
+from maver.audit.files import encoded, reference
 from maver.contracts.events import AuditEvent, EventPayload
 
 __all__ = [
@@ -81,13 +83,15 @@ class SequenceAllocator:
     verifies.
     """
 
-    def __init__(self, start: int = 0) -> None:
+    def __init__(self, start: int = 0, reserve: Callable[[int], int] | None = None) -> None:
         """Continue an existing order, or begin one.
 
         Args:
             start: The last position already handed out. The next is one past it.
+            reserve: Optional durable allocator receiving the current sequence floor.
         """
         self._last = start
+        self._reserve = reserve
 
     @property
     def last(self) -> int:
@@ -104,7 +108,7 @@ class SequenceAllocator:
         Returns:
             The position, one past the last handed out.
         """
-        self._last += 1
+        self._last = self._reserve(self._last) if self._reserve is not None else self._last + 1
         return self._last
 
 
@@ -114,15 +118,14 @@ class SequenceRegistry:
     Held by the deployment rather than in a module global, so two deployments in one
     process are genuinely independent — the same reason the write lock lives there.
 
-    A resume continues the order: the run that parked recorded its last position on the
-    checkpoint, so the continuation seeds its allocator from that rather than restarting
-    at 1. A distilling job started from nothing but a session id has no such record and
-    does begin a new order. No port exposes a session's highest stored position, and the
-    only read that would produce one is an unindexed scan of a JSON field in both
-    backends, which is a large price for a job whose events are read on their own.
+    Production reserves positions through the durable audit store, so resumed,
+    asynchronous and restarted writers share one incident order. In-memory sinks keep
+    the supplied checkpoint floor and process-local ordering.
     """
 
-    def __init__(self, capacity: int = 256) -> None:
+    def __init__(
+        self, capacity: int = 256, reserve: Callable[[str, int], int] | None = None
+    ) -> None:
         """Start empty.
 
         Args:
@@ -130,8 +133,10 @@ class SequenceRegistry:
                 concurrency, so what is evicted is a session that stopped emitting
                 thousands of incidents ago; an unbounded map in a served process is the
                 alternative.
+            reserve: Optional durable allocator receiving a session and sequence floor.
         """
         self._capacity = capacity
+        self._reserve = reserve
         self._allocators: dict[str, SequenceAllocator] = {}
 
     def for_session(self, session_id: str, *, start: int = 0) -> SequenceAllocator:
@@ -148,7 +153,11 @@ class SequenceRegistry:
         """
         allocator = self._allocators.get(session_id)
         if allocator is None:
-            allocator = SequenceAllocator(start)
+            reserve = self._reserve
+            allocator = SequenceAllocator(
+                start,
+                (lambda minimum: reserve(session_id, minimum)) if reserve is not None else None,
+            )
             self._allocators[session_id] = allocator
             while len(self._allocators) > self._capacity:
                 self._allocators.pop(next(iter(self._allocators)))
@@ -201,6 +210,33 @@ class Journal:
             The position, or zero before anything is written.
         """
         return self._last
+
+    @property
+    def run_id(self) -> str | None:
+        """Return the owning role run, when the event has one."""
+        return self._run_id
+
+    @property
+    def session_id(self) -> str:
+        """Return the incident this journal records."""
+        return self._session_id
+
+    @property
+    def stage(self) -> str:
+        """Return the calling role or mechanism."""
+        return self._stage
+
+    def capture(self, kind: str, value: Any) -> dict[str, Any]:
+        """Preserve full evidence, with an inline fallback if durable capture fails."""
+        value = json.loads(encoded(value))
+        capture = getattr(self._sink, "capture", None)
+        if capture is not None:
+            try:
+                return dict(capture(kind, value))
+            except Exception as exc:
+                _log.error("audit evidence capture failed: %s", exc, exc_info=exc)
+                return {**reference(kind, value), "inline": value, "capture_error": str(exc)}
+        return {**reference(kind, value), "inline": value}
 
     def record(self, payload: EventPayload) -> AuditEvent:
         """Write one event.

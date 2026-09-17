@@ -103,6 +103,8 @@ class HealthGate:
     error: str | None = None
     namespace: str = ""
     observations: tuple[str, ...] = ()
+    unavailable: tuple[str, ...] = ()
+    """Pod observations that could not be evaluated, distinct from observed failures."""
 
     @property
     def blocks_recovered(self) -> bool:
@@ -142,9 +144,12 @@ class HealthGate:
                     "FAILURES": _bullets(self.failures, "  "),
                 },
             )
+        elif self.unavailable:
+            body = "Namespace health is unknown: some pod observations are unavailable."
         else:
             body = read_runtime("verify", "health_gate_healthy.txt")
         notes = [f"  note: {observation}" for observation in self.observations]
+        notes.extend(f"  unknown: {reason}" for reason in self.unavailable)
         return "\n".join([header, *_indent(body), *notes])
 
     def rejection_text(self) -> str:
@@ -171,6 +176,8 @@ class HealthGate:
         """
         return {
             "checked": self.checked,
+            "complete": self.checked and not self.unavailable,
+            "unavailable": list(self.unavailable),
             "namespace": self.namespace,
             "failure_count": len(self.failures),
             "failures": list(self.failures[:_AUDIT_FAILURES]),
@@ -227,27 +234,34 @@ def _waiting_reason(statuses: list[Any]) -> str:
     return ""
 
 
-def _pod_failures(raw: str, now: datetime | None = None) -> tuple[list[str] | None, list[str]]:
+def _pod_failures(
+    raw: str, now: datetime | None = None
+) -> tuple[list[str] | None, list[str], list[str]]:
     """Extract the unhealthy pods from ``kubectl get pods -o json``.
 
     ``now`` is injectable so the transient-state grace period is testable without sleeping.
 
     Returns:
-        The failure lines and any notes, or None for the failures when the inventory
+        The failure lines, notes and unavailable observations, or None for the failures when the inventory
         could not be read at all — which is not the same as an inventory with nothing
         wrong in it.
     """
     items, note = _parse_items(raw)
     if items is None:
-        return None, [note]
+        return None, [note], [note]
 
     failures: list[str] = []
     notes: list[str] = []
-    for item in items:
+    unavailable: list[str] = []
+    for index, item in enumerate(items):
         if not isinstance(item, dict):
+            unavailable.append(f"pod item {index} is not an object")
             continue
-        meta = item.get("metadata") or {}
-        status = item.get("status") or {}
+        meta = item.get("metadata")
+        status = item.get("status")
+        if not isinstance(meta, dict) or not isinstance(status, dict):
+            unavailable.append(f"pod item {index} has no usable metadata/status")
+            continue
         name = meta.get("name") or "<unnamed>"
         # A pod being deleted is mid-rollout, not a fault.
         if meta.get("deletionTimestamp"):
@@ -255,9 +269,31 @@ def _pod_failures(raw: str, now: datetime | None = None) -> tuple[list[str] | No
         phase = status.get("phase")
         if phase == "Succeeded":
             continue
-        statuses = status.get("containerStatuses") or []
+        statuses = status.get("containerStatuses")
+        if not isinstance(statuses, list):
+            statuses = []
+        if not isinstance(phase, str):
+            unavailable.append(f"pod {name} has no observed phase")
+            continue
+        if phase == "Running" and (
+            not statuses
+            or any(
+                not isinstance(container, dict)
+                or not isinstance(container.get("ready"), bool)
+                or not isinstance(container.get("restartCount"), int)
+                for container in statuses
+            )
+        ):
+            unavailable.append(
+                f"pod {name} has incomplete container readiness/restart observations"
+            )
         restarts = max(
-            (c.get("restartCount", 0) for c in statuses if isinstance(c, dict)), default=0
+            (
+                c["restartCount"]
+                for c in statuses
+                if isinstance(c, dict) and isinstance(c.get("restartCount"), int)
+            ),
+            default=0,
         )
         if phase != "Running":
             reason = _waiting_reason(statuses)
@@ -272,7 +308,7 @@ def _pod_failures(raw: str, now: datetime | None = None) -> tuple[list[str] | No
             failures.append(f"pod {name} is {phase}{suffix}, not Running")
             continue
         not_ready = [
-            c.get("name") for c in statuses if isinstance(c, dict) and not c.get("ready", False)
+            c.get("name") for c in statuses if isinstance(c, dict) and c.get("ready") is False
         ]
         if not_ready:
             failures.append(
@@ -285,7 +321,15 @@ def _pod_failures(raw: str, now: datetime | None = None) -> tuple[list[str] | No
                 f"pod {name} is Ready but has restarted {restarts} times — a container that "
                 "keeps restarting is not a recovered workload"
             )
-    return failures, notes
+    return failures, notes, unavailable
+
+
+def _mark_unknown(ctx: ToolContext, reasons: list[str]) -> None:
+    """Preserve observation gaps in the optional per-call audit collector."""
+    if reasons and ctx.observation is not None:
+        ctx.observation.incomplete = True
+        ctx.observation.unavailable.extend(reasons)
+        ctx.observation.errors.extend(reasons)
 
 
 async def sweep_namespace_health(ctx: ToolContext, namespace: str) -> HealthGate:
@@ -309,20 +353,23 @@ async def sweep_namespace_health(ctx: ToolContext, namespace: str) -> HealthGate
     ns = namespace.strip()
     if not ns:
         _log.warning("health gate: no incident namespace supplied — gate inert")
+        _mark_unknown(ctx, ["no incident namespace in scope"])
         return HealthGate(checked=False, error="no incident namespace in scope")
     try:
         raw = await read_kubectl(ctx, f"kubectl get pods -n {ns} -o json")
     except Exception as exc:  # a gate that raised would take the verdict down with it
         _log.warning("health gate: pod sweep failed for ns=%s: %s", ns, exc, exc_info=exc)
+        _mark_unknown(ctx, [f"{type(exc).__name__}: {exc}"])
         return HealthGate(checked=False, error=f"{type(exc).__name__}: {exc}"[:200], namespace=ns)
     # Both failure shapes, not just the prefix. A read that ran and exited non-zero says so
     # with its exit code, and reading past that left the gate on the fail-open path with
     # `checked=True`: an assertion of health about a namespace it had never seen.
     if call_failed(raw.strip()):
         _log.warning("health gate: pod sweep could not read ns=%s: %s", ns, raw.strip()[:160])
+        _mark_unknown(ctx, [raw.strip()])
         return HealthGate(checked=False, error=raw.strip()[:200], namespace=ns)
 
-    failures, notes = _pod_failures(raw)
+    failures, notes, unavailable = _pod_failures(raw)
     if failures is None:
         # A body it could not read is a sweep that did not happen. Counting it as one
         # that did kept the gate off the blocking path, which was the intent, but it
@@ -330,12 +377,15 @@ async def sweep_namespace_health(ctx: ToolContext, namespace: str) -> HealthGate
         # every pod was Running and Ready on the strength of an unparsed response, and
         # the audit row recorded a gate that ran and found a clean namespace.
         _log.warning("health gate: pod inventory unreadable for ns=%s: %s", ns, notes[0][:160])
+        _mark_unknown(ctx, notes)
         return HealthGate(checked=False, error=notes[0][:200], namespace=ns)
 
+    _mark_unknown(ctx, unavailable)
     _log.info("health gate: ns=%s swept, %d failure(s)", ns, len(failures))
     return HealthGate(
         checked=True,
         failures=tuple(failures),
         namespace=ns,
         observations=tuple(notes),
+        unavailable=tuple(unavailable),
     )

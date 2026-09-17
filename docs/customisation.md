@@ -124,7 +124,8 @@ evidence; it retains the model's verdict, preserves the raw transcript, and reco
 the repair before the existing submission checks run. If the normalizer fails,
 the original arguments still go through those checks and the audit records a bypass.
 
-The audit contract is version **3**: repairs appear as
+The audit contract is version **4** (see [audit evidence](audit.md)). Submission
+repairs, introduced in version 3, appear as
 `InterventionEvent(control="submit_normalization", action="rescued")`, with original
 and normalized arguments, the tool-call ID and repair sources in its JSON `detail`.
 Normalizer failures use `action="bypassed"`. This version is independent of the

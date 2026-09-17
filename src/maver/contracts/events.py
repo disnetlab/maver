@@ -10,11 +10,10 @@ selectors rather than by a role. The research prototype counted only role-issued
 calls, so its published cost figures had to disclose the gap; ``ModelCallEvent.caller``
 exists specifically to close it.
 
-An event says what happened; whether it also carries what that thing *contained*
-follows one rule. Text is recorded here only where it exists nowhere else. A run keeps
-its transcript, so a turn that sent the transcript is described by a count and a digest
-over it, and a control that sends something *other* than the transcript records what it
-sent, because after the run there is no other copy of it.
+Large request, response and transcript bodies are captured in a private local artifact
+store. Events reference content-addressed manifests; repeated messages and tool schemas
+share their captured bodies. The short legacy prompt digest remains useful for matching
+old records, while the request reference captures the complete effective input layer.
 
 The log is append-only. Records are never rewritten, so a correction is a new event.
 """
@@ -29,6 +28,7 @@ __all__ = [
     "EnvironmentEvent",
     "EventPayload",
     "InterventionEvent",
+    "ModelAttemptEvent",
     "ModelCallEvent",
     "ModelCallStartedEvent",
     "PolicyDecisionEvent",
@@ -36,6 +36,7 @@ __all__ = [
     "StageEvent",
     "SubmissionEvent",
     "ToolCallEvent",
+    "ToolCallStartedEvent",
 ]
 
 
@@ -49,14 +50,20 @@ class ModelCallStartedEvent(BaseModel):
     itself: :class:`ModelCallEvent` reports what came back and what it cost, never what
     went out.
 
-    Together the pair is what makes a run replayable. A started row with no ``model_call``
-    after it in the same journal is where the process stopped. A started row whose digest
-    matches a prefix of the run's transcript is a turn that sent that transcript; one that
-    matches no prefix was sent something else, and the control that replaced the
-    transcript is the row carrying what that was.
+    ``call_id`` joins the started record, provider attempts and terminal summary.
+    ``request`` references ordered message and tool-schema blocks, plus provider options
+    when the client exposes them. Capture identifies the SDK invocation or neutral
+    request layer explicitly; it does not claim to record the HTTP wire payload.
+    The legacy ``digest`` covers only system and messages and remains compatible with
+    earlier records. The captured manifest has its own full SHA-256 identity.
     """
 
     kind: Literal["model_call_started"] = "model_call_started"
+    call_id: str | None = None
+    request: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Reference to the captured request manifest; SDK API-key options excluded.",
+    )
     caller: str = Field(description="What issued the call, as on the completion event.")
     model: str = Field(description="The resolved model identifier sent to the provider.")
     profile: str = Field(description="The model profile this call was configured from.")
@@ -64,8 +71,8 @@ class ModelCallStartedEvent(BaseModel):
         description=(
             "How many messages the request carried, the system prompt aside. It locates "
             "the transcript prefix this request should be; the digest then confirms it. "
-            "The messages are not copied here because the run keeps its transcript, and "
-            "a copy per turn is quadratic in the length of the run."
+            "Full messages are retained through content-addressed blocks in request, "
+            "so repeated transcript prefixes do not duplicate their bodies."
         )
     )
     digest: str = Field(
@@ -78,9 +85,21 @@ class ModelCallStartedEvent(BaseModel):
 
 
 class ModelCallEvent(BaseModel):
-    """One completion request, as reported by the serving endpoint."""
+    """One logical call summary; token counts describe only its final attempt.
+
+    Use model_attempt events for provider usage across retries. Never sum both event
+    kinds together; their separate durations and token counts describe overlapping work.
+    """
 
     kind: Literal["model_call"] = "model_call"
+    call_id: str | None = None
+    response: dict[str, Any] = Field(default_factory=dict)
+    error_detail: dict[str, Any] = Field(default_factory=dict)
+    usage_scope: Literal["final_attempt"] = "final_attempt"
+    attempts_observed: int | None = Field(
+        default=None,
+        description="Provider attempts captured separately; zero when a custom client exposes no attempt observations.",
+    )
     caller: str = Field(
         description=(
             "What issued the call. A role name for the main loop, or the mechanism "
@@ -143,6 +162,37 @@ class ModelCallEvent(BaseModel):
     )
 
 
+class ModelAttemptEvent(BaseModel):
+    """One provider attempt; separate from the once-per-logical-call summary.
+
+    Sum this event's usage to include usage reported on failed retries. A null count
+    means unreported; it does not establish that the failed attempt consumed no tokens.
+    """
+
+    kind: Literal["model_attempt"] = "model_attempt"
+    call_id: str
+    caller: str
+    model: str
+    profile: str
+    attempt: int
+    status: Literal["succeeded", "failed", "cancelled"]
+    duration_ms: int
+    usage: dict[str, int | None] = Field(default_factory=dict)
+    response: dict[str, Any] = Field(default_factory=dict)
+    error: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolCallStartedEvent(BaseModel):
+    """A tool attempt recorded before middleware, dispatch or external I/O."""
+
+    kind: Literal["tool_call_started"] = "tool_call_started"
+    tool: str
+    call_id: str | None = None
+    invocation_id: str
+    arguments: dict[str, Any]
+    rationale: str | None = None
+
+
 class ToolCallEvent(BaseModel):
     """One tool invocation and the shape of its result."""
 
@@ -168,8 +218,20 @@ class ToolCallEvent(BaseModel):
     )
     succeeded: bool
     result_chars: int
-    truncated: bool = False
-    duration_ms: int = 0
+    invocation_id: str | None = None
+    status: (
+        Literal["completed", "failed", "incomplete", "refused", "paused", "cancelled"] | None
+    ) = None
+    truncated: bool | None = None
+    duration_ms: int | None = None
+    full_result_chars: int | None = None
+    result: dict[str, Any] = Field(default_factory=dict)
+    output_artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    incomplete: bool = False
+    unavailable: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    upstream_truncated: bool = False
+    error: str | None = None
     transport: str | None = Field(default=None, description="Which transport served the call.")
     retrieval: list[dict[str, Any]] = Field(
         default_factory=list,
@@ -191,6 +253,7 @@ class SubmissionEvent(BaseModel):
     """An attempt by a role to exit through its submission tool."""
 
     kind: Literal["submission"] = "submission"
+    source: Literal["workflow", "role_loop", "learning"] | None = None
     artifact: str = Field(description="The artifact type submitted, e.g. root_cause.")
     accepted: bool
     attempt: int
@@ -265,8 +328,13 @@ class StageEvent(BaseModel):
     """A role entering, leaving, or being handed work back."""
 
     kind: Literal["stage"] = "stage"
+    run: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Captured stage/run manifest, including private transcript and identity references.",
+    )
+    source: Literal["workflow", "role_loop", "learning"] | None = None
     stage: str
-    event: Literal["entered", "exited", "handed_back", "halted", "failed"]
+    event: Literal["entered", "exited", "handed_back", "halted", "failed", "cancelled", "paused"]
     detail: str = ""
 
 
@@ -338,7 +406,9 @@ class EnvironmentEvent(BaseModel):
 EventPayload = Annotated[
     ModelCallStartedEvent
     | ModelCallEvent
+    | ModelAttemptEvent
     | ToolCallEvent
+    | ToolCallStartedEvent
     | SubmissionEvent
     | InterventionEvent
     | PolicyDecisionEvent

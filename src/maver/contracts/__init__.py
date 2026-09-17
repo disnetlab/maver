@@ -24,6 +24,7 @@ from maver.contracts.events import (
     AuditEvent,
     EventPayload,
     InterventionEvent,
+    ModelAttemptEvent,
     ModelCallEvent,
     ModelCallStartedEvent,
     PolicyDecisionEvent,
@@ -31,11 +32,12 @@ from maver.contracts.events import (
     StageEvent,
     SubmissionEvent,
     ToolCallEvent,
+    ToolCallStartedEvent,
 )
 from maver.contracts.lifecycle import LifecycleState, RunStatus
 from maver.contracts.state import IncidentState, TargetStage
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 """Version of the submission schemas and the event contract, together.
 
 One number for both, because both are read back from stored results and neither moves
@@ -60,6 +62,7 @@ __all__ = [
     "LearningPacket",
     "LearningResult",
     "LifecycleState",
+    "ModelAttemptEvent",
     "ModelCallEvent",
     "ModelCallStartedEvent",
     "Plan",
@@ -77,5 +80,6 @@ __all__ = [
     "SubmissionModel",
     "TargetStage",
     "ToolCallEvent",
+    "ToolCallStartedEvent",
     "VerifyResult",
 ]

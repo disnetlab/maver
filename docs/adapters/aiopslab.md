@@ -158,7 +158,7 @@ The current Execution prompt confirms applied changes at the resource level;
 Verify judges recovery. Verify can fill a missing recovery entry-point field from
 this adapter's successful `probe_service` result, and missing hand-back fields from
 its submitted evidence. Those repairs preserve the verdict and raw transcript and
-are audited under schema version 3. See [the migration record](../../CHANGELOG.md)
+were introduced in audit schema version 3; the current audit version is 4. See [the migration record](../../CHANGELOG.md)
 and [configuration guide](../customisation.md#bound-verify-hand-backs). New behavior
 defines a new experimental condition; a historical arm name does not restore older
 prompt or control behavior.
@@ -275,12 +275,16 @@ two arms.
 | `duration_seconds` | (new) |
 | `result_file` | the AIOpsLab result file the grade was read from |
 
-`bridge.log` is the credential-holding process's own account of every action: timestamp,
-the session id the agent's transport sent, the bridge's port, the operation, the
-namespace, the decision (`served`, `failed`, `refused`, `unauthorized`), the HTTP status
-and the duration. Not the arguments or the output, which are large and are already in the
-agent's audit log; the point is a record independent of the process being audited. The
-prototype discarded this entirely.
+`bridge.log` is the credential-holding process's independent account of each action.
+Bridge log schema 2 writes a `received` record before dispatch and a `finished` record
+on completion, refusal or failure, including client disconnection. A bridge receipt ID
+links the pair; session, request, invocation, model tool-call and run IDs are retained
+when supplied. Duration, HTTP status, decision and bounded previews remain in JSONL.
+Full parsed request contracts and response bodies are stored by SHA-256 under
+`bridge.log.artifacts`, with private directory/file permissions (0700/0600). Headers
+and bridge credentials are excluded. Older logs contain a single row per action;
+when counting schema-2 actions, count `finished` rows. A received-only action remains
+explicitly unfinished. See [audit evidence](../audit.md) for export and coverage limits.
 
 `maver-submission.json` holds the alert as posted, the terminal incident record, the
 encoded answer, and — for the analysis task — the answer's provenance: `source` is

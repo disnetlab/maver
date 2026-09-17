@@ -15,7 +15,7 @@ import pytest
 
 from maver.audit.journal import Journal, ListSink
 from maver.contracts import SCHEMA_VERSION
-from maver.contracts.events import InterventionEvent
+from maver.contracts.events import InterventionEvent, StageEvent
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from maver.memory.factory import build_storage
 from maver.orchestration.runner import (
@@ -291,7 +291,7 @@ async def test_a_run_row_records_what_the_model_was_not_offered(
     question its result rests on. The resolved toolset recorded every drop with its
     reason, and the field was read by nothing.
     """
-    deploy, _, _ = deployment(tmp_path)
+    deploy, sink, _ = deployment(tmp_path)
     session = deploy.storage.sessions.create_session(ALERT)
 
     await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
@@ -307,6 +307,19 @@ async def test_a_run_row_records_what_the_model_was_not_offered(
     # being replaced by what the role recorded when it closed.
     assert planning.metadata["after"] == rca.agent_run_id
     assert "tools_withheld" in planning.metadata
+    manifests = [
+        event.payload.run["inline"]
+        for event in sink.events
+        if isinstance(event.payload, StageEvent)
+        and event.payload.run
+        and event.payload.stage == "rca"
+        and event.payload.source == "workflow"
+    ]
+    [manifest] = manifests
+    assert manifest["run_id"] == rca.agent_run_id
+    assert manifest["metadata"]["agent_instance"] == rca.metadata["agent_instance"]
+    assert manifest["metadata"]["transcript"] == rca.metadata["transcript"]
+    assert manifest["output"] == rca.output
     deploy.storage.close()
 
 
@@ -433,3 +446,69 @@ def test_the_auxiliary_sampling_set_is_pinned_at_startup_too(tmp_path: pathlib.P
             profile=profile,
             transport_for=lambda session_id: FakeTransport(),
         )
+
+
+@pytest.mark.parametrize("phase", ["admission", "stage_builder", "outcome"])
+async def test_lifecycle_failures_capture_state_beyond_the_engine(
+    tmp_path, monkeypatch, phase
+) -> None:
+    """Failures before execution and after it must not vanish from the incident audit."""
+    deploy, sink, model = deployment(tmp_path)
+    session = deploy.storage.sessions.create_session(ALERT)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError(f"{phase} failed")
+
+    if phase == "admission":
+        monkeypatch.setattr("maver.orchestration.runner.save_runtime", fail)
+    elif phase == "stage_builder":
+        monkeypatch.setattr("maver.orchestration.runner._nodes", fail)
+    else:
+        monkeypatch.setattr("maver.pipelines.ResolvedPipeline.resolve_outcome", fail)
+    with pytest.raises(RuntimeError, match=f"{phase} failed"):
+        await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+    terminal = sink.events[-1].payload
+    assert isinstance(terminal, StageEvent)
+    assert terminal.stage == "pipeline" and terminal.event == "failed"
+    state = terminal.run["inline"]
+    assert state["session_id"] == session.session_id
+    assert state["runtime"]["selection"]
+    if phase == "outcome":
+        assert state["execution_result"]["succeeded"] is True
+        assert state["runtime"]["agents"]
+    else:
+        assert model.callers == []
+    if phase == "admission":
+        assert any(
+            isinstance(event.payload, StageEvent) and event.payload.stage == "persistence"
+            for event in sink.events
+        )
+    deploy.storage.close()
+
+
+async def test_failed_outcome_projection_keeps_success_and_full_audit_evidence(
+    tmp_path, monkeypatch
+) -> None:
+    """A completed response remains usable when its final database write fails."""
+    deploy, sink, _ = deployment(tmp_path)
+    session = deploy.storage.sessions.create_session(ALERT)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("outcome database unavailable")
+
+    monkeypatch.setattr("maver.orchestration.runner.persist_outcome", fail)
+    final = await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+    assert final["execution_result"].succeeded
+    [failure] = [
+        event.payload
+        for event in sink.events
+        if isinstance(event.payload, StageEvent) and event.payload.stage == "persistence"
+    ]
+    assert failure.event == "failed"
+    assert json.loads(failure.detail)["operation"] == "outcome"
+    assert failure.run["inline"]["execution_result"]["succeeded"] is True
+    terminal = sink.events[-1].payload
+    assert terminal.stage == "pipeline" and terminal.event == "exited"
+    assert terminal.run == failure.run
+    assert deploy.storage.sessions.get_session(session.session_id).run_status == session.run_status
+    deploy.storage.close()

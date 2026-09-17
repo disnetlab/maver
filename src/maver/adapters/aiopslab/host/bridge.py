@@ -15,12 +15,15 @@ weaker one.
 
 So is the access log. The prototype's handler discarded it, so the process holding the
 kubeconfig kept no record of what it was asked to do and the agent's own audit log was
-the only account of every cluster action. :class:`AccessLog` writes one line per action
-from this side of the wire.
+the only account of every cluster action. :class:`AccessLog` records receipt before
+dispatch and completion even after a client disconnect, with complete host-private
+request and response artifacts linked to the agent invocation.
 """
 
 import hmac
 import json
+import logging
+import os
 import re
 import shlex
 import socket
@@ -30,16 +33,20 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
 from .mapping import _bounded_int
 
 __all__ = ["AccessLog", "BridgeBackend", "BridgeHTTPServer", "serve_bridge"]
+
+_log = logging.getLogger(__name__)
 
 _SESSION_HEADER = "X-MAVER-Session"
 """What the agent's transport sends so its audit events join these lines.
@@ -603,34 +610,66 @@ class BridgeBackend:
             process.wait(timeout=5)
 
 
-class AccessLog:
-    """One JSON line per action, written by the process that holds the credential.
+def _sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
-    Appended to under a lock because the server is threaded, and reopened per line so a
-    sweep that is killed part-way through a problem still has every line before it.
+
+class AccessLog:
+    """Append-only request lifecycle records and complete private payload artifacts.
+
+    Files belong to the host process, never the agent workspace. Only operation
+    payloads are captured; bearer tokens and HTTP headers are excluded.
     """
 
     def __init__(self, path: Path | str):
-        """Bind the log to a file.
-
-        Args:
-            path: File to append to. Its directory must already exist.
-        """
+        """Create a private log and artifact directory beside it."""
         self._path = Path(path)
         self._lock = threading.Lock()
-        # Created empty rather than on first use, so an episode in which the agent took
-        # no cluster action is distinguishable from one whose log was never wired up.
-        self._path.touch()
+        self._artifacts = self._path.with_name(self._path.name + ".artifacts")
+        self._artifacts.mkdir(mode=0o700, exist_ok=True)
+        if self._artifacts.is_symlink():
+            raise ValueError("bridge artifact directory must not be a symbolic link")
+        self._artifacts.chmod(0o700)
+        descriptor = os.open(
+            self._path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600
+        )
+        try:
+            os.fchmod(descriptor, 0o600)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        _sync_directory(self._path.parent)
+
+    def capture(self, receipt_id: str, label: str, content: str) -> dict[str, Any]:
+        """Save an entire payload, addressed only by a server-generated identity."""
+        path = self._artifacts / f"{receipt_id}.{label}"
+        encoded = content.encode("utf-8")
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _sync_directory(self._artifacts)
+        return {
+            "path": str(path.relative_to(self._path.parent)),
+            "bytes": len(encoded),
+            "sha256": sha256(encoded).hexdigest(),
+        }
 
     def record(self, **fields: Any) -> None:
-        """Append one line.
-
-        Args:
-            **fields: The line's contents, written as one compact JSON object.
-        """
+        """Append one lifecycle event, closing the file before returning."""
         line = json.dumps(fields, separators=(",", ":"), default=str)
-        with self._lock, self._path.open("a", encoding="utf-8") as handle:
-            handle.write(f"{line}\n")
+        with self._lock:
+            descriptor = os.open(self._path, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
+            with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
+                handle.write(f"{line}\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            _sync_directory(self._path.parent)
 
 
 class _BridgeHandler(BaseHTTPRequestHandler):
@@ -642,59 +681,147 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "namespace": self._server().backend.namespace})
 
     def do_POST(self) -> None:
-        """Authenticate, decode and dispatch one action."""
+        """Authenticate, record, dispatch and finish independently of the client."""
         if self.path != "/v1/action":
             self.send_error(404)
             return
         started = time.monotonic()
-        supplied = self.headers.get("Authorization", "")
-        expected = f"Bearer {self._server().token}"
-        if not hmac.compare_digest(supplied, expected):
-            self._json(401, {"ok": False, "result": "unauthorized"})
-            self._record(started, {}, 401, "unauthorized")
-            return
+        receipt_id = uuid4().hex
         payload: dict[str, Any] = {}
+        request: dict[str, Any] | None = None
+        receipt_attempted = False
+        audit_errors: list[str] = []
+        result, decision, status = "bridge action did not finish", "failed", 500
+        access_log = self._server().access_log
+
+        def audit_failure(phase: str, exc: Exception) -> None:
+            detail = f"{phase}: {type(exc).__name__}: {exc}"
+            audit_errors.append(detail)
+            _log.error("bridge audit recording failed: %s", detail)
+
+        def record_received() -> bool:
+            nonlocal request, receipt_attempted
+            receipt_attempted = True
+            try:
+                if access_log is not None:
+                    request = access_log.capture(
+                        receipt_id, "request.json", json.dumps(payload, sort_keys=True)
+                    )
+                self._record(
+                    started, payload, receipt_id, "received", None, "received", request=request
+                )
+                return True
+            except Exception as exc:
+                audit_failure("receipt", exc)
+                return False
+
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            if length <= 0 or length > 1_000_000:
-                raise ValueError("invalid request size")
-            decoded = json.loads(self.rfile.read(length))
-            if not isinstance(decoded, dict):
-                raise ValueError("request body must be an object")
-            payload = decoded
-            result = self._server().backend.dispatch(payload)
-            served = not result.startswith("error:")
-            self._json(200, {"ok": served, "result": result})
-            self._record(started, payload, 200, "served" if served else "failed")
-        except Exception as exc:  # protocol errors are structured
-            self._json(400, {"ok": False, "result": str(exc)})
-            self._record(started, payload, 400, "refused")
+            supplied = self.headers.get("Authorization", "")
+            expected = f"Bearer {self._server().token}"
+            if not hmac.compare_digest(supplied, expected):
+                result, decision, status = "unauthorized", "unauthorized", 401
+            else:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length <= 0 or length > 1_000_000:
+                    raise ValueError("invalid request size")
+                decoded = json.loads(self.rfile.read(length))
+                if not isinstance(decoded, dict):
+                    raise ValueError("request body must be an object")
+                # Store only the action contract, never authentication or arbitrary
+                # extra body fields a caller may have attached to it.
+                payload = {
+                    key: decoded[key]
+                    for key in ("server", "tool", "namespace", "stage", "arguments")
+                    if key in decoded
+                }
+                if record_received():
+                    result = self._server().backend.dispatch(payload)
+                    decision = "failed" if result.startswith("error:") else "served"
+                    status = 200
+                else:
+                    result = f"bridge audit receipt failed: {audit_errors[-1]}"
+                    decision, status = "failed", 500
+        except Exception as exc:
+            result, decision, status = str(exc), "refused", 400
+        finally:
+            # Never retry an exclusive artifact name after a partially successful
+            # write: preserve the original failure and the actual dispatch outcome.
+            if not receipt_attempted:
+                record_received()
+            result_artifact = None
+            if access_log is not None:
+                try:
+                    result_artifact = access_log.capture(receipt_id, "response.txt", result)
+                except Exception as exc:
+                    audit_failure("result", exc)
+            delivery_error = None
+            try:
+                self._json(status, {"ok": decision == "served", "result": result})
+            except OSError as exc:
+                # A disconnected client changes delivery, not whether dispatch ran.
+                delivery_error = f"{type(exc).__name__}: {exc}"
+            finally:
+                try:
+                    self._record(
+                        started,
+                        payload,
+                        receipt_id,
+                        "finished",
+                        status,
+                        decision,
+                        request=request,
+                        result=result_artifact,
+                        result_preview=result[:2048],
+                        result_chars=len(result),
+                        result_preview_truncated=len(result) > 2048,
+                        error=result[:2048] if decision != "served" else None,
+                        delivery_error=delivery_error,
+                        audit_errors=audit_errors,
+                    )
+                except Exception as exc:
+                    audit_failure("completion", exc)
 
     def log_message(self, _format: str, *_args: Any) -> None:
         """Keep the harness's console for the episode, not for every tool call."""
         return
 
-    def _record(self, started: float, payload: dict[str, Any], status: int, decision: str) -> None:
-        """Write this side's account of one action, if the episode asked for one.
-
-        Deliberately not the arguments or the output: those are large, and the agent's
-        audit log already holds them. What only this side can say is what the process
-        holding the credential was asked to do, and what it decided.
-        """
+    def _record(
+        self,
+        started: float,
+        payload: dict[str, Any],
+        receipt_id: str,
+        event: str,
+        status: int | None,
+        decision: str,
+        **evidence: Any,
+    ) -> None:
+        """Join the host's evidence to one invocation and backend request."""
         access_log = self._server().access_log
         if access_log is None:
             return
         server = str(payload.get("server") or "")
         tool = str(payload.get("tool") or "")
+        arguments = json.dumps(payload.get("arguments") or {}, sort_keys=True)
         access_log.record(
+            schema_version=2,
+            event=event,
+            receipt_id=receipt_id,
             timestamp=datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
             session=self.headers.get(_SESSION_HEADER, ""),
+            request_id=self.headers.get("X-MAVER-Request-ID", "") or receipt_id,
+            invocation_id=self.headers.get("X-MAVER-Invocation-ID", ""),
+            call_id=self.headers.get("X-MAVER-Call-ID", ""),
+            run_id=self.headers.get("X-MAVER-Run-ID", ""),
+            stage=str(payload.get("stage") or ""),
             port=int(self._server().server_address[1]),
             op=f"{server}.{tool}" if server or tool else "",
             namespace=str(payload.get("namespace") or ""),
+            arguments_preview=arguments[:2048],
+            arguments_preview_truncated=len(arguments) > 2048,
             decision=decision,
             status=status,
             duration_ms=round((time.monotonic() - started) * 1000, 1),
+            **evidence,
         )
 
     def _server(self) -> "BridgeHTTPServer":
@@ -753,7 +880,7 @@ def serve_bridge(
         token: The bearer token every action must present.
         host: Address to bind.
         port: Port to bind. Zero takes an ephemeral one, which tests use.
-        access_log: File to append one line per action to. Its directory must exist.
+        access_log: Lifecycle log with private payload files beside it. Its directory must exist.
         poll_interval: How often the serving thread checks for shutdown, in seconds.
             The default is the standard library's; shutdown waits up to one interval,
             so tests that open a bridge per case lower it.

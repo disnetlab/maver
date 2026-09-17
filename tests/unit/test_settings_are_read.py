@@ -48,7 +48,7 @@ DECLARED_FOR_UNBUILT_WORK = {
     "model.num_retries": "the profile's own limit is what the client sends",
     "observability.metric_interval_ms": "no metric exporter is installed",
     "observability.event_log_enabled": "the audit sink is chosen by the composition root",
-    "observability.event_log_path": "the audit sink writes to the store, not a file",
+    "observability.event_log_path": "legacy field; composition fixes the private audit directory",
     "tools.blind_namespaces": "no telemetry wrapper filters on it",
 }
 

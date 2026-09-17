@@ -9,6 +9,34 @@ published comparisons, which are single-variable only while the schema does not 
 with the configuration. The procedure is in STYLE_GUIDE.md, "Typed artifacts are
 frozen".
 
+## Audit schema version 4 and honest telemetry coverage
+
+The 2026-09-17 acceptance records exposed unknown tool measurements represented as
+zero/false, incomplete telemetry represented as healthy, and evidence available only
+in bounded database records or overwriteable workspace files.
+
+Audit version 4 adds model call IDs, per-provider-attempt events, full request/response
+references, tool-start and tool observation fields, and stage source/cancellation
+fields. Unknown tool duration and truncation now default to null. Strict audit readers
+must accept the new event kinds and fields. Submission artifact schemas are unchanged.
+Only instrumented producers populate the new fields; historical records cannot acquire
+missing measurements retroactively.
+
+The service now writes a durable private event/evidence mirror under `server.workdir/audit`
+before offering events to the existing best-effort database sink. `maver audit export`
+collects referenced evidence and optional AIOpsLab bridge artifacts, verifies hashes,
+and reports capture limitations separately from file integrity. Full local bodies are
+separate from OTLP spans, which exclude exception messages and stack traces. AIOpsLab
+bridge log schema 2 records received/finished pairs and complete request/response artifacts.
+
+Malformed telemetry envelopes and unavailable snapshot reads are reported explicitly.
+Health checks distinguish unknown observations from healthy resources, while retaining
+known failures. These change subsequent model observations; RCA and Verify implementation
+versions advance. Generated workspace output names no longer overwrite earlier results
+after recreation or resume. Historical acceptance results retain their original meaning;
+this change does not establish parity or new benchmark performance. See
+[the audit guide](docs/audit.md) for the current capture boundaries.
+
 ## AIOpsLab transport instructions and adapter wording overrides
 
 The 2026-09-17 mitigation record exposed conflicting instructions: the remediation

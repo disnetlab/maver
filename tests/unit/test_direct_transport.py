@@ -8,6 +8,7 @@ downstream cannot read, and a backend failure that escapes as an exception inste
 result the loop can recognise.
 """
 
+import json
 import stat
 import time
 from pathlib import Path
@@ -17,6 +18,7 @@ import pytest
 import respx
 from pydantic import ValidationError
 
+from maver.audit.context import CallContext, ToolObservation, bind_call
 from maver.audit.journal import Journal
 from maver.settings.groups import TransportSettings
 from maver.tools.context import ToolContext
@@ -248,3 +250,91 @@ async def test_a_metric_query_keeps_its_series_labels_and_its_own_clock() -> Non
         f"[{clock}] [pod=cart-9] 3",
     ]
     assert instant.splitlines() == [f"[{clock}] [pod=user-1] 9"]
+
+
+@pytest.mark.parametrize("body", [{}, {"data": None}, {"data": "broken"}])
+async def test_malformed_successful_backend_envelopes_are_not_empty_observations(
+    body: object,
+) -> None:
+    bound = transport(loki_url=LOKI, jaeger_url="http://jaeger.test", prometheus_url=PROMETHEUS)
+    with respx.mock as router:
+        router.route().mock(return_value=httpx.Response(200, json=body))
+        results = [
+            await bound.query_metrics("up"),
+            await bound.query_logs("{}"),
+            await bound.log_labels(),
+            await bound.log_label_values("app"),
+            await bound.query_traces("services"),
+            await bound.query_traces("traces", service="frontend"),
+        ]
+    assert all(result.startswith("error:") for result in results), results
+    assert all("Response:" in result for result in results)
+
+
+async def test_malformed_loki_records_do_not_disappear_from_a_partial_result() -> None:
+    body = {
+        "status": "success",
+        "data": {
+            "resultType": "streams",
+            "result": [
+                {"stream": {"app": "frontend"}, "values": [["1000000000", "observed error"]]},
+                {"stream": {"app": "unknown"}, "values": [None]},
+            ],
+        },
+    }
+    with respx.mock as router:
+        router.get(f"{LOKI}/loki/api/v1/query_range").mock(
+            return_value=httpx.Response(200, json=body)
+        )
+        result = await transport(loki_url=LOKI).query_logs("{}")
+    assert result.startswith("error:")
+    assert "observed error" in result and "unknown" in result
+
+
+async def test_jaeger_backend_error_is_not_a_successful_empty_trace_result() -> None:
+    body = {"data": [], "errors": [{"code": 500, "msg": "storage unavailable"}]}
+    with respx.mock as router:
+        router.route().mock(return_value=httpx.Response(200, json=body))
+        result = await transport(jaeger_url="http://jaeger.test").query_traces(
+            "traces", service="frontend"
+        )
+    assert result.startswith("error:") and "storage unavailable" in result
+
+
+@pytest.mark.parametrize("status", [200, 503])
+async def test_direct_http_audit_retains_complete_envelopes_before_rendering(status: int) -> None:
+    body = {
+        "status": "success",
+        "data": {"resultType": "vector", "result": []},
+        "warnings": ["partial observation " + "x" * 20000],
+    }
+    observation = ToolObservation()
+    call = CallContext(
+        invocation_id="inv",
+        call_id="call",
+        run_id="run",
+        stage="rca",
+        session_id="s1",
+        observation=observation,
+        journal=Journal(session_id="s1", stage="rca"),
+    )
+    with respx.mock as router:
+        router.route().mock(return_value=httpx.Response(status, json=body))
+        with bind_call(call):
+            await transport(prometheus_url=PROMETHEUS).query_metrics("up")
+    assert observation.output_artifacts
+    captured = observation.output_artifacts[0]["inline"]
+    assert captured["status_code"] == status
+    assert json.loads(captured["body"]) == body
+    assert "headers" not in captured and "url" not in captured
+    if status == 200:
+        assert observation.incomplete
+
+
+async def test_invalid_alert_entries_cannot_report_no_firing_alerts() -> None:
+    with respx.mock as router:
+        router.route().mock(
+            return_value=httpx.Response(200, json={"status": "success", "data": {"alerts": [None]}})
+        )
+        result = await transport(prometheus_url=PROMETHEUS).query_alerts()
+    assert result.startswith("error:") and "Response:" in result

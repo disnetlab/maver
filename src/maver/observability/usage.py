@@ -1,30 +1,15 @@
-"""Counting every model call, including the ones no role made.
-
-The rule is that a model call anywhere is counted, and the reason it is a rule is that
-the prototype's second-pass helper calls bypassed its usage log — so its published cost
-figures had to be disclosed with that gap in them. A gate, a nominator and a selector are
-model calls, and they are the ones most easily forgotten because no role issues them.
-
-This wrapper is where the counting happens, so it happens once and in a place no caller
-can route around. It carries the incident and the stage that the client cannot know: the
-client is one object for the process, while an event belongs to one run.
-
-Each call writes two rows, one before and one after. The second is the cost. The first is
-the only durable evidence that a call was ever in flight: a completion event is written
-when the provider answers or raises, so a process killed mid-generation — a restart, an
-OOM kill, an endpoint that wedged and was noticed hours later — records nothing at all
-and the turn it died in disappears from the run. The extra row is small, it is where the
-request is described rather than a bare marker, and one per model call is nothing beside
-the tool results this same log already carries.
-"""
+"""Capture every logical model call and its provider attempts in the incident audit."""
 
 import asyncio
 import time
 from dataclasses import dataclass
+from typing import Any
+from uuid import uuid4
 
 from maver.audit.journal import Journal
-from maver.contracts.events import ModelCallEvent, ModelCallStartedEvent
-from maver.llm.client import prompt_digest, sent_sampling
+from maver.contracts.events import ModelAttemptEvent, ModelCallEvent, ModelCallStartedEvent
+from maver.llm.client import LLMClient, prompt_digest, sent_sampling
+from maver.llm.observations import error_record, observe_calls, public_response, serialisable
 from maver.llm.sampling import SamplingResolution
 from maver.llm.types import Completion, ModelRequest, ModelResponse
 from maver.settings.profiles import ModelProfile
@@ -32,72 +17,178 @@ from maver.settings.profiles import ModelProfile
 __all__ = ["RecordingCompletion"]
 
 
+def _response(journal: Journal, response: ModelResponse) -> dict[str, Any]:
+    """Capture the model-visible response and the SDK body before normalisation."""
+    return journal.capture(
+        "model_response",
+        {
+            "capture_layer": "normalised_response_and_public_provider_body",
+            "normalised": {
+                "text": response.text,
+                "reasoning": response.reasoning,
+                "tool_calls": serialisable(response.tool_calls),
+                "finish_reason": response.finish_reason,
+                "usage": serialisable(response.usage),
+                "notes": list(response.notes),
+                "estimated_cost_usd": response.estimated_cost_usd,
+            },
+            "provider_body": public_response(response.raw) if response.raw is not None else None,
+            "provider_capture": (
+                "sdk_public_body"
+                if isinstance(response.raw, dict)
+                or callable(getattr(response.raw, "model_dump", None))
+                else "public_field_projection"
+                if response.raw is not None
+                else "unavailable"
+            ),
+        },
+    )
+
+
+def _request(
+    journal: Journal, request: ModelRequest, invocation: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Deduplicate messages and schemas; the small manifest describes their order.
+
+    The provider capture is the redacted SDK invocation, not the HTTP payload the SDK
+    subsequently constructs. Custom Completion implementations expose the neutral layer.
+    """
+    neutral = {
+        "system": journal.capture("model_system", request.system),
+        "messages": [journal.capture("model_message", message) for message in request.messages],
+        "tools": [journal.capture("model_tool", serialisable(tool)) for tool in request.tools],
+        "tool_choice": request.tool_choice,
+        "sampling": serialisable(request.sampling),
+        "lite_reasoning": request.lite_reasoning,
+        "suppress_reasoning": request.suppress_reasoning,
+    }
+    provider = None
+    if invocation is not None:
+        provider = {
+            **{key: value for key, value in invocation.items() if key not in {"messages", "tools"}},
+            "messages": [journal.capture("model_message", item) for item in invocation["messages"]],
+            "tools": [journal.capture("model_tool", item) for item in invocation.get("tools", [])],
+        }
+    return journal.capture(
+        "model_request",
+        {
+            "capture_layer": "litellm_invocation" if provider is not None else "neutral_request",
+            "neutral": neutral,
+            "provider": provider,
+        },
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class RecordingCompletion:
-    """Passes a call through and writes what it cost to the incident's log."""
+    """Capture calls, with incident identity and locally stored full request evidence."""
 
     inner: Completion
     journal: Journal
     profile: ModelProfile
     sampling: SamplingResolution
-    """The agent's set as resolved against settings, not as written in the profile.
-
-    Recording ``profile.sampling`` here meant an overridden run logged the file's value
-    and a digest identical to an unoverridden one. That is the drift this event exists
-    to make visible, reproduced inside the mechanism built to catch it.
-    """
 
     async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
-        """Run one completion and record it.
+        """Run one logical call, linking its request, attempts, response and failures."""
+        call_id = str(uuid4())
+        recorded_start = False
+        attempts_observed = 0
+        last_attempt: dict[str, Any] = {}
+        response_ref: dict[str, Any] = {}
 
-        Args:
-            request: The call.
-            caller: What issued it — a role, or a mechanism such as a quality gate.
-
-        Returns:
-            The response.
-        """
-        self.journal.record(
-            ModelCallStartedEvent(
-                caller=caller,
-                model=self.profile.model,
-                profile=self.profile.name,
-                message_count=len(request.messages),
-                digest=prompt_digest(request.system, request.messages),
+        def start(invocation: dict[str, Any] | None = None) -> None:
+            nonlocal recorded_start
+            if recorded_start:
+                return
+            self.journal.record(
+                ModelCallStartedEvent(
+                    call_id=call_id,
+                    caller=caller,
+                    model=self.profile.model,
+                    profile=self.profile.name,
+                    message_count=len(request.messages),
+                    digest=prompt_digest(request.system, request.messages),
+                    request=_request(self.journal, request, invocation),
+                )
             )
-        )
+            recorded_start = True
+
+        def observe(kind: str, detail: dict[str, Any]) -> None:
+            nonlocal last_attempt, response_ref, attempts_observed
+            if kind == "request":
+                start(detail["invocation"])
+                return
+            attempts_observed += 1
+            last_attempt = detail
+            response = detail.get("response")
+            captured_response = {}
+            if isinstance(response, ModelResponse):
+                response_ref = captured_response = _response(self.journal, response)
+            elif detail.get("raw") is not None:
+                captured_response = self.journal.capture(
+                    "model_provider_response", public_response(detail["raw"])
+                )
+            self.journal.record(
+                ModelAttemptEvent(
+                    call_id=call_id,
+                    caller=caller,
+                    model=self.profile.model,
+                    profile=self.profile.name,
+                    attempt=detail["attempt"],
+                    status=detail["status"],
+                    duration_ms=detail["duration_ms"],
+                    usage=serialisable(detail["usage"]),
+                    response=captured_response,
+                    error=self.journal.capture("model_error", detail["error"])
+                    if detail.get("error")
+                    else {},
+                )
+            )
+
+        # A real client reports its actual assembled invocation before sending it.
+        # A custom client cannot promise an SDK/HTTP body, so name the neutral layer.
+        if getattr(self.inner.complete, "__func__", None) is not LLMClient.complete:
+            start()
         started = time.monotonic()
         try:
-            response = await self.inner.complete(request, caller=caller)
+            with observe_calls(observe):
+                response = await self.inner.complete(request, caller=caller)
         except BaseException as exc:
-            # A call that failed is still a call that was made, and this one has already
-            # cost every retry the client spent on it. Recorded rather than raised past,
-            # because the rule is that a model call anywhere is counted — and because a
-            # started row with nothing after it is how the log says the process died,
-            # which a terminal failure is not.
-            #
-            # BaseException, because cancellation is one of the designed outcomes here:
-            # the selector and the distilling pass are each bounded by a wait_for, and a
-            # call cancelled on that bound has already burned a full prefill and
-            # whatever it generated before it. Caught as Exception, those two were the
-            # calls this module exists to stop from escaping accounting, and a routine
-            # timeout was indistinguishable in the log from an OOM kill.
+            start()  # Request assembly can itself fail before reaching the provider.
+            detail = last_attempt.get("error") or error_record(exc)
+            if (
+                isinstance(exc, asyncio.CancelledError)
+                and last_attempt.get("status") != "cancelled"
+            ):
+                detail = {**error_record(exc), "phase": "between_attempts"}
+            usage = serialisable(last_attempt.get("usage")) or {}
             self.journal.record(
                 ModelCallEvent(
+                    attempts_observed=attempts_observed,
+                    call_id=call_id,
                     caller=caller,
                     model=self.profile.model,
                     profile=self.profile.name,
                     sampling=sent_sampling(request, self.profile, self.sampling).as_record(),
                     duration_ms=int((time.monotonic() - started) * 1000),
-                    attempt=getattr(exc, "attempts", 1),
+                    last_attempt_ms=last_attempt.get("duration_ms"),
+                    attempt=last_attempt.get("attempt", getattr(exc, "attempts", 1)),
+                    prompt_tokens=usage.get("prompt_tokens"),
+                    completion_tokens=usage.get("completion_tokens"),
+                    reasoning_tokens=usage.get("reasoning_tokens"),
+                    cached_tokens=usage.get("cached_prompt_tokens"),
                     error="cancelled"
                     if isinstance(exc, asyncio.CancelledError)
-                    else f"{type(exc).__name__}: {exc}",
+                    else f"{detail['type']}: {detail['message']}"[:1000],
+                    error_detail=self.journal.capture("model_error", detail),
                 )
             )
             raise
+        start()
         self.journal.record(
             ModelCallEvent(
+                attempts_observed=attempts_observed,
+                call_id=call_id,
                 caller=caller,
                 model=self.profile.model,
                 profile=self.profile.name,
@@ -106,19 +197,12 @@ class RecordingCompletion:
                 completion_tokens=response.usage.completion_tokens,
                 reasoning_tokens=response.usage.reasoning_tokens,
                 cached_tokens=response.usage.cached_prompt_tokens,
-                # What the caller waited, not what the attempt that answered took.
-                # A call that failed twice and then succeeded recorded 301 ms of the
-                # 907 it had cost, and the same column meant the whole call on the
-                # failure path — so a sum over an incident was neither total nor
-                # per-attempt, and it under-reported most where the endpoint was worst.
                 duration_ms=int((time.monotonic() - started) * 1000),
                 last_attempt_ms=response.duration_ms,
                 finish_reason=response.finish_reason,
-                # One event per completed call, and the attempt count says how many
-                # tries it took. The client's own sink is where a deployment that wants
-                # per-attempt detail gets it; recording both here would double-count.
                 attempt=response.attempts,
                 notes=list(response.notes),
+                response=response_ref or _response(self.journal, response),
             )
         )
         return response

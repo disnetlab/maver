@@ -36,9 +36,11 @@ import logging
 from collections.abc import Mapping, Sequence
 from shlex import join
 from typing import Any
+from uuid import uuid4
 
 import httpx
 
+from maver.audit.context import current_call
 from maver.tools.errors import tool_error
 from maver.tools.transport.base import TraceOperation
 
@@ -335,22 +337,51 @@ class AiopsLabTransport:
         Returns:
             The bridge's text, or the failure as a model-facing string.
         """
+        invocation = current_call()
+        call_stage = invocation.stage if invocation is not None else self.stage
         payload = {
             "server": server,
             "tool": tool,
             "arguments": dict(arguments or {}),
             "namespace": self.namespace,
-            "stage": self.stage if stage is None else stage,
+            "stage": call_stage if stage is None else stage,
         }
-        headers = {"Authorization": f"Bearer {self._token}"}
-        if self.session_id:
-            headers[_SESSION_HEADER] = self.session_id
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "X-MAVER-Request-ID": uuid4().hex,
+        }
+        session_id = invocation.session_id if invocation is not None else self.session_id
+        if session_id:
+            headers[_SESSION_HEADER] = session_id
+        if invocation is not None:
+            headers["X-MAVER-Invocation-ID"] = invocation.invocation_id
+            if invocation.call_id:
+                headers["X-MAVER-Call-ID"] = invocation.call_id
+            if invocation.run_id:
+                headers["X-MAVER-Run-ID"] = invocation.run_id
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.post(
                     f"{self._base_url}/v1/action", json=payload, headers=headers
                 )
-            body = _body(response)
+            body = None
+            try:
+                body = _body(response)
+            finally:
+                if invocation is not None:
+                    captured = invocation.journal.capture(
+                        "transport_response",
+                        {
+                            "request_id": headers["X-MAVER-Request-ID"],
+                            "server": server,
+                            "tool": tool,
+                            "status": response.status_code,
+                            "body": body if body is not None else {"raw": response.text},
+                        },
+                    )
+                    invocation.observation.output_artifacts.append(
+                        {**captured, "source": "aiopslab"}
+                    )
             if not isinstance(body, dict):
                 return tool_error("AIOpsLab bridge returned a non-object response")
             result = _render_output(
@@ -418,6 +449,10 @@ def _render_output(
     text = _as_literal(result, select) if structured else result
     if not bounded or len(text) <= _RESPONSE_LIMIT:
         return text
+    invocation = current_call()
+    if invocation is not None:
+        invocation.observation.upstream_truncated = True
+        invocation.observation.incomplete = True
     return text[:_RESPONSE_LIMIT] + _TRUNCATION_MARKER
 
 

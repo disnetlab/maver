@@ -1044,3 +1044,64 @@ async def test_a_spent_verify_handback_survives_approval_save_and_load(
     assert after_verify(restored, policy) is Route.END
     assert after_verify(restored, replace(policy, verify_handback_retries=None)) is Route.PLANNING
     deploy.storage.close()
+
+
+@pytest.mark.parametrize(
+    "failure", [RuntimeError("resumed model failed"), asyncio.CancelledError()]
+)
+async def test_interrupted_resume_preserves_live_conversation_and_terminal_audit(
+    tmp_path, failure
+) -> None:
+    deploy, session_id, request_id = await parked_with(tmp_path)
+    before = deploy.storage.sessions.get_session(session_id)
+    checkpoint = ApprovalCheckpoint.model_validate(before.checkpoint)
+    deploy.storage.approvals.decide(
+        request_id, status="approved", decided_by="operator", reason="reviewed"
+    )
+
+    class Interrupted:
+        async def complete(self, request, *, caller):
+            raise failure
+
+    deploy = dataclasses.replace(deploy, completion=Interrupted())
+    with pytest.raises(type(failure)):
+        await resume_after_decision(request_id, deploy)
+    stored = deploy.storage.sessions.get_session(session_id)
+    runtime = stored.runtime
+    active = runtime["agents"][runtime["active_agent"]]
+    assert len(active["messages"]) > len(checkpoint.messages)
+    assert any(
+        message.get("role") == "tool" and message.get("tool_call_id") == checkpoint.tool_call_id
+        for message in active["messages"]
+    )
+    terminal = deploy.sink.events[-1].payload
+    assert terminal.stage == "pipeline"
+    assert terminal.event == (
+        "cancelled" if isinstance(failure, asyncio.CancelledError) else "failed"
+    )
+    assert terminal.run["inline"]["runtime"] == runtime
+    deploy.storage.close()
+
+
+async def test_resumed_persistence_failure_has_evidence_without_changing_outcome(
+    tmp_path, monkeypatch
+) -> None:
+    deploy, _session_id, request_id = await parked_with(tmp_path)
+    deploy.storage.approvals.decide(
+        request_id, status="approved", decided_by="operator", reason="reviewed"
+    )
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("resumed projection unavailable")
+
+    monkeypatch.setattr("maver.orchestration.runner.persist_outcome", fail)
+    assert await resume_after_decision(request_id, deploy) == "success"
+    [failure] = [
+        event.payload
+        for event in deploy.sink.events
+        if event.payload.kind == "stage" and event.payload.stage == "persistence"
+    ]
+    assert json.loads(failure.detail)["operation"] == "resumed_outcome"
+    assert failure.run["inline"]["execution_result"]["succeeded"] is True
+    assert deploy.sink.events[-1].payload.run == failure.run
+    deploy.storage.close()

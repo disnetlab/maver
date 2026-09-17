@@ -10,11 +10,13 @@ A role therefore returns an outcome and nothing else. Everything below turns tha
 state delta.
 """
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
+from maver.audit.context import bind_journal
 from maver.audit.journal import Journal
 from maver.contracts.events import StageEvent, SubmissionEvent
 from maver.contracts.routing import HandBack
@@ -26,7 +28,15 @@ from maver.orchestration.routing import RoutingPolicy, apply_handback, pending_h
 from maver.roles.base import RoleContext, RoleOutcome, RoleSpec, StateDelta
 from maver.roles.trace_summary import build_trace_summary
 
-__all__ = ["ContextBuilder", "IncidentDeps", "NodeFn", "RunRecorder", "make_node"]
+__all__ = [
+    "ContextBuilder",
+    "IncidentDeps",
+    "NodeFn",
+    "RunRecorder",
+    "capture_run",
+    "context_metadata",
+    "make_node",
+]
 
 _log = logging.getLogger(__name__)
 
@@ -133,7 +143,8 @@ def make_node(spec: RoleSpec, deps: IncidentDeps, *, stage: str | None = None) -
             # and which one an incident was has to be re-derived from artifact flags.
             deps.journal.record(
                 StageEvent(
-                    stage=spec.name,
+                    source="workflow",
+                    stage=stage_name,
                     event="handed_back",
                     detail=f"{handback.kind}: {handback.reason}",
                 )
@@ -159,10 +170,12 @@ def make_node(spec: RoleSpec, deps: IncidentDeps, *, stage: str | None = None) -
         run_id = deps.runs.start(
             session_id=state.get("session_id", ""), role=stage_name, after=previous
         )
-        deps.journal.record(StageEvent(stage=spec.name, event="entered"))
+        deps.journal.record(StageEvent(source="workflow", stage=stage_name, event="entered"))
 
-        context = deps.build_context(spec, state, handback, run_id)
+        context: RoleContext | None = None
+        outcome: RoleOutcome | None = None
         try:
+            context = deps.build_context(spec, state, handback, run_id)
             with span(
                 f"maver.role.{spec.name}",
                 {
@@ -171,33 +184,146 @@ def make_node(spec: RoleSpec, deps: IncidentDeps, *, stage: str | None = None) -
                     "maver.handback": handback.kind if handback is not None else None,
                 },
             ) as role_span:
-                outcome = await spec.run(context)
+                with bind_journal(context.journal):
+                    outcome = await spec.run(context)
                 role_span.set_attribute("maver.submitted", outcome.artifact is not None)
+            return {**delta, **_merge(spec, state, outcome, run_id, deps, context)}
         except ApprovalPending as pending:
             # Not a failure. The pipeline catches it, checkpoints and exits cleanly, so
-            # the run row stays open for the resume to close. The state and the run are
+            # the run row records the pause and its metadata. The state and the run are
             # attached here because this is the layer that has them: the gate sees one
             # call and the loop sees one transcript.
-            if context.agent_state is not None:
+            if context is not None and context.agent_state is not None:
                 context.agent_state.messages = list(pending.messages)
+            metadata = context_metadata(context, deps.journal)
+            deps.journal.record(
+                StageEvent(
+                    source="workflow",
+                    stage=stage_name,
+                    event="paused",
+                    run=capture_run(
+                        deps.journal,
+                        run_id,
+                        role=spec.name,
+                        status="awaiting_human",
+                        metadata=metadata,
+                        error=str(pending),
+                    ),
+                )
+            )
+            deps.runs.finish(
+                run_id,
+                status="awaiting_human",
+                output=None,
+                trace_summary=None,
+                error=str(pending),
+                metadata=metadata,
+            )
             pending.state = dict(state)
             pending.run_id = run_id
             raise
-        except Exception as exc:
+        except BaseException as exc:
+            cancelled = isinstance(exc, asyncio.CancelledError)
+            status = "cancelled" if cancelled else "failed"
+            error = "cancelled" if cancelled else repr(exc)
+            metadata = context_metadata(
+                context,
+                deps.journal,
+                transcript=outcome.transcript if outcome is not None else None,
+            )
+            output = (
+                outcome.artifact.model_dump(mode="json")
+                if outcome is not None and outcome.artifact is not None
+                else None
+            )
+            deps.journal.record(
+                StageEvent(
+                    source="workflow",
+                    stage=stage_name,
+                    event="cancelled" if cancelled else "failed",
+                    detail=error,
+                    run=capture_run(
+                        deps.journal,
+                        run_id,
+                        role=spec.name,
+                        status=status,
+                        metadata=metadata,
+                        output=output,
+                        error=error,
+                    ),
+                )
+            )
             deps.runs.finish(
                 run_id,
-                status="failed",
-                output=None,
+                status=status,
+                output=output,
                 trace_summary=None,
-                error=repr(exc),
-                metadata={},
+                error=error,
+                metadata=metadata,
             )
-            deps.journal.record(StageEvent(stage=spec.name, event="failed", detail=repr(exc)))
             raise
 
-        return {**delta, **_merge(spec, state, outcome, run_id, deps, context)}
-
     return node
+
+
+def context_metadata(
+    context: RoleContext | None, journal: Journal, *, transcript: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Persist the effective agent identity, toolset and conversation on every exit."""
+    if context is None:
+        return {"context_built": False}
+    agent = context.agent_state
+    messages = (
+        transcript if transcript is not None else (agent.messages if agent is not None else [])
+    )
+    metadata: dict[str, Any] = {
+        "context_built": True,
+        "tools_withheld": dict(context.toolset.dropped),
+        "tools_offered": [tool.name for tool in context.toolset.definitions],
+        "transcript": journal.capture(
+            "agent_transcript", [journal.capture("model_message", message) for message in messages]
+        ),
+    }
+    if agent is not None:
+        metadata.update(
+            agent_instance=agent.id, agent_definition=agent.definition, workflow_stage=agent.stage
+        )
+    if context.overlay is not None and context.overlay.tool_descriptions:
+        metadata["tool_description_overrides"] = {
+            tool.name: tool.description
+            for tool in context.toolset.definitions
+            if tool.name in context.overlay.tool_descriptions
+        }
+    if context.run_label:
+        metadata["run_label"] = context.run_label
+    return metadata
+
+
+def capture_run(
+    journal: Journal,
+    run_id: str,
+    *,
+    role: str,
+    status: str,
+    metadata: Mapping[str, Any],
+    output: Mapping[str, Any] | None = None,
+    trace_summary: Mapping[str, Any] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    """Link a run's private evidence into the event stream for offline export."""
+    return journal.capture(
+        "agent_run",
+        {
+            "run_id": run_id,
+            "session_id": journal.session_id,
+            "role": role,
+            "status": status,
+            "output": output,
+            "trace_summary": trace_summary,
+            "error": error,
+            "metadata": dict(metadata),
+        },
+    )
 
 
 def _merged(state: IncidentState, delta: Mapping[str, Any]) -> IncidentState:
@@ -258,6 +384,10 @@ def _merge(
     status = "succeeded" if artifact is not None else "failed"
     if halted:
         status = "halted"
+    metadata = {
+        **outcome.metadata,
+        **context_metadata(context, deps.journal, transcript=outcome.transcript),
+    }
     deps.runs.finish(
         run_id,
         status=status,
@@ -270,36 +400,13 @@ def _merge(
         # offers different tools on different hosts — and whether a memory arm actually
         # held its retrieval tools is the question its result rests on. And the gated arm
         # runs the diagnosing role twice, where both rows said only `rca`.
-        metadata={
-            **outcome.metadata,
-            **(
-                {
-                    "agent_instance": context.agent_state.id,
-                    "agent_definition": context.agent_state.definition,
-                    "workflow_stage": context.agent_state.stage,
-                }
-                if context.agent_state is not None
-                else {}
-            ),
-            "tools_withheld": dict(context.toolset.dropped),
-            **(
-                {
-                    "tool_description_overrides": {
-                        tool.name: tool.description
-                        for tool in context.toolset.definitions
-                        if tool.name in context.overlay.tool_descriptions
-                    }
-                }
-                if context.overlay is not None and context.overlay.tool_descriptions
-                else {}
-            ),
-            **({"run_label": context.run_label} if context.run_label else {}),
-        },
+        metadata=metadata,
     )
 
     if artifact is not None or outcome.error:
         deps.journal.record(
             SubmissionEvent(
+                source="workflow",
                 artifact=spec.submit_tool,
                 accepted=artifact is not None,
                 attempt=1,
@@ -308,9 +415,20 @@ def _merge(
         )
     deps.journal.record(
         StageEvent(
-            stage=spec.name,
+            source="workflow",
+            stage=context.agent_state.stage if context.agent_state is not None else spec.name,
             event="halted" if halted else "exited",
             detail=outcome.error or "",
+            run=capture_run(
+                deps.journal,
+                run_id,
+                role=spec.name,
+                status=status,
+                metadata=metadata,
+                output=artifact.model_dump(mode="json") if artifact is not None else None,
+                trace_summary=summary.model_dump(mode="json"),
+                error=outcome.error,
+            ),
         )
     )
 

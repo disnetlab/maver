@@ -11,7 +11,9 @@ tools, applies it under a check-and-set discipline. Two optional mechanisms sit 
 that spine: an independent verification role that can hand work back, and a gated
 second diagnostic opinion informed by an experience store of past incidents.
 
-No telemetry leaves the cluster. The model runs on your own infrastructure.
+The intended deployment serves the model on your own infrastructure. Hosted model
+profiles and optional OTLP export are also supported; the selected endpoints and
+network policy determine where data goes.
 
 ## Quick start
 
@@ -53,7 +55,7 @@ the data archive, not here.
 | An ordered per-incident log records every model call with its token counts and the sampling set it actually ran on, every tool call, every submission outcome and every intervention — including the distilling pass, which is a model call like any other | D | `uv run pytest tests/unit/test_store_sink.py tests/unit/test_observability.py tests/unit/test_learning_job.py` |
 | Each experiment arm is a single-variable change over a shared base; naming one configures the run, the environment still outranks it, and an environment that contradicts what the arm holds constant fails at startup | D | `uv run pytest tests/unit/test_profiles_and_arms.py tests/unit/test_settings.py` |
 | An environment's own fault injection is filtered out of every result before the model sees it, not only out of the ones a tool remembered to filter | D | `uv run pytest tests/unit/test_evidence_reaches_every_tool.py tests/unit/test_sregym_adapter.py` |
-| The model is served privately and no telemetry leaves the operator's infrastructure | D | `configs/models/*.yaml` names the endpoint; `deploy/k8s/base/networkpolicy.yaml` is the egress boundary |
+| Private model endpoints and a deployment network policy support keeping telemetry on the operator's infrastructure | D | `configs/models/*.yaml` names the endpoint; `deploy/k8s/base/networkpolicy.yaml` is the egress boundary |
 | The reported recovery rates, the effect of verification, the denser-model comparison, and the throughput figures | A | the data archive that accompanies the manuscript |
 | Any of the archived rows can be re-measured end to end | I | the SREGym adapter, a served model, and a benchmark cluster |
 
@@ -132,6 +134,19 @@ recovery pipelines without requiring custom Python registrations.
 See [the customisation guide](docs/customisation.md), or run the complete offline
 example with `uv run python examples/customisation.py`. It exercises agent inheritance,
 YAML binding, a custom two-stage workflow, middleware and isolated conversations.
+
+## Audit evidence
+
+The service mirrors full audit events and referenced evidence under
+`<workdir>/audit`, separately from incident workspaces. The database remains a
+best-effort query projection. Export an incident with
+`uv run maver audit export INCIDENT_ID --output ./incident-audit`; add
+`--bridge-log /path/to/bridge.log` to include AIOpsLab host evidence.
+
+The export reports file integrity and capture coverage separately. Unavailable
+provider details, uninstrumented tool fields and unfinished calls are limitations,
+not evidence of zero work. See [audit evidence](docs/audit.md) for capture boundaries,
+privacy and historical records.
 
 ## Layout
 

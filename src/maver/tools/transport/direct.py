@@ -41,6 +41,7 @@ from urllib.parse import quote
 
 import httpx
 
+from maver.audit.context import current_call
 from maver.settings.groups import TransportSettings
 from maver.tools.errors import format_exit_result, timed_out, tool_error
 from maver.tools.transport.base import ToolTransport, TraceOperation
@@ -283,8 +284,13 @@ class DirectTransport:
         except _BackendError as failure:
             return failure.rendered
         data = body.get("data") if isinstance(body, dict) else None
-        if data is None:
-            return tool_error("prometheus answered without a data section")
+        if not isinstance(data, dict):
+            return _invalid_response("prometheus", "a data object", body)
+        kind, result = data.get("resultType"), data.get("result")
+        if not isinstance(kind, str) or kind not in {"vector", "matrix", "scalar", "string"}:
+            return _invalid_response("prometheus", "a supported resultType", body)
+        if not isinstance(result, list) or (kind in {"scalar", "string"} and len(result) != 2):
+            return _invalid_response("prometheus", "a valid result", body)
         return str(data)
 
     async def query_alerts(self) -> str:
@@ -305,7 +311,12 @@ class DirectTransport:
         alerts = data.get("alerts") if isinstance(data, dict) else None
         if not isinstance(alerts, list):
             return tool_error("prometheus answered without a list of alerts")
-        firing = [alert for alert in alerts if isinstance(alert, dict) and _is_firing(alert)]
+        if not all(
+            isinstance(alert, dict) and alert.get("state") in ("firing", "pending", "inactive")
+            for alert in alerts
+        ):
+            return _invalid_response("prometheus", "valid alert entries", body)
+        firing = [alert for alert in alerts if _is_firing(alert)]
         return str(firing) if firing else "No firing alerts"
 
     async def log_labels(self) -> str:
@@ -321,7 +332,9 @@ class DirectTransport:
         except _BackendError as failure:
             return failure.rendered
         labels = body.get("data") if isinstance(body, dict) else None
-        names = labels if isinstance(labels, list) else []
+        if not isinstance(labels, list) or not all(isinstance(name, str) for name in labels):
+            return _invalid_response("loki", "a list of label names", body)
+        names = labels
         return "Available labels:\n" + "\n".join(f"  - {name}" for name in names)
 
     async def log_label_values(self, label: str) -> str:
@@ -343,7 +356,9 @@ class DirectTransport:
         except _BackendError as failure:
             return failure.rendered
         data = body.get("data") if isinstance(body, dict) else None
-        values = data if isinstance(data, list) else []
+        if not isinstance(data, list) or not all(isinstance(value, str) for value in data):
+            return _invalid_response("loki", "a list of label values", body)
+        values = data
         if not values:
             return f"No values found for label '{label}'."
         return f"Values for label '{label}':\n" + "\n".join(f"  - {value}" for value in values)
@@ -435,7 +450,7 @@ class DirectTransport:
                     "limit": _TRACE_LIMIT,
                 },
             )
-            return _render_data_list(body)
+            return _render_data_list(body, records=True)
         if operation == "dependencies":
             lookback = max(1, int(kwargs.get("last_n_minutes") or 30)) * 60 * 1000
             body = await self._fetch(
@@ -471,8 +486,23 @@ class DirectTransport:
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.get(url, params=params)
+                if call := current_call():
+                    reference = call.journal.capture(
+                        "transport_http_response",
+                        {
+                            "backend": backend,
+                            "status_code": response.status_code,
+                            "body": response.text,
+                        },
+                    )
+                    call.observation.output_artifacts.append(
+                        {**reference, "label": f"{backend}_http_response"}
+                    )
                 response.raise_for_status()
                 body = response.json()
+                if isinstance(body, dict) and body.get("warnings") and (call := current_call()):
+                    call.observation.incomplete = True
+                    call.observation.errors.append(f"{backend} warnings: {body['warnings']!r}")
         except httpx.HTTPStatusError as exc:
             raise _BackendError(
                 tool_error(
@@ -490,6 +520,8 @@ class DirectTransport:
             ) from exc
         if isinstance(body, dict) and body.get("status") == "error":
             raise _BackendError(tool_error(f"{backend} rejected the query: {_stated_error(body)}"))
+        if backend == "jaeger" and isinstance(body, dict) and body.get("errors"):
+            raise _BackendError(tool_error(f"jaeger reported query errors; Response: {body!r}"))
         return body
 
 
@@ -525,18 +557,27 @@ def _is_firing(alert: Mapping[str, Any]) -> bool:
     return bool(alert.get("state") == "firing")
 
 
-def _render_data_list(body: Any) -> str:
+def _invalid_response(backend: str, expected: str, body: Any) -> str:
+    """Name an unreadable observation and retain its payload for diagnosis."""
+    return tool_error(f"{backend} answered without {expected}. Response: {body!r}")
+
+
+def _render_data_list(body: Any, *, records: bool = False) -> str:
     """Render a backend's ``data`` list, or the empty answer the caller tests for.
 
     Args:
         body: The decoded response.
+        records: Whether list members are trace objects instead of names.
 
     Returns:
         The list as a Python literal, or ``None`` when it holds nothing. The scoping
         layer above compares against that exact string.
     """
     data = body.get("data") if isinstance(body, dict) else None
-    return str(data) if isinstance(data, list) and data else "None"
+    expected_type = dict if records else str
+    if not isinstance(data, list) or not all(isinstance(item, expected_type) for item in data):
+        return _invalid_response("jaeger", "a valid data list", body)
+    return str(data) if data else "None"
 
 
 def _render_log_lines(body: Any) -> str:
@@ -551,8 +592,8 @@ def _render_log_lines(body: Any) -> str:
     """
     data = body.get("data") if isinstance(body, dict) else None
     result = data.get("result") if isinstance(data, dict) else None
-    if not isinstance(result, list) or not result:
-        return "No logs found matching the query."
+    if not isinstance(result, list):
+        return _invalid_response("loki", "a result list", body)
 
     # The same endpoint answers a LogQL metric query — count_over_time, rate, sum by —
     # in a different shape: the series identity sits under `metric` rather than `stream`
@@ -560,7 +601,21 @@ def _render_log_lines(body: Any) -> str:
     # result rendered as bare numbers with every label dropped and every timestamp in
     # 1970, and carried no error prefix to say the read had gone wrong.
     kind = data.get("resultType") if isinstance(data, dict) else None
-    metric = str(kind or "") in {"matrix", "vector"}
+    if not isinstance(kind, str) or kind not in {"streams", "matrix", "vector"}:
+        return _invalid_response("loki", "a supported resultType", body)
+    if not result:
+        return "No logs found matching the query."
+    metric = kind in {"matrix", "vector"}
+    for series in result:
+        if not isinstance(series, dict) or not isinstance(
+            series.get("metric" if metric else "stream"), dict
+        ):
+            return _invalid_response("loki", "valid labelled series", body)
+        samples = [series.get("value")] if kind == "vector" else series.get("values")
+        if not isinstance(samples, list) or not all(
+            isinstance(sample, list) and len(sample) == 2 for sample in samples
+        ):
+            return _invalid_response("loki", "valid timestamp/value entries", body)
     lines = _sample_lines(result) if metric else _entry_lines(result)
     return "\n".join(lines) if lines else "No log entries found."
 

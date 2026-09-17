@@ -1,5 +1,6 @@
 """Distilling a closed incident from what was written down."""
 
+import asyncio
 import json
 import pathlib
 from dataclasses import replace
@@ -133,6 +134,21 @@ async def test_a_closed_incident_becomes_a_record(tmp_path: pathlib.Path) -> Non
     assert deploy.storage.index.open_record(session_id) is not None
     stored = deploy.storage.sessions.get_session(session_id)
     assert stored is not None and stored.distilled is True
+    [learning] = [
+        run for run in deploy.storage.runs.runs_for(session_id) if run.agent_name == "learning"
+    ]
+    assert learning.status == "succeeded"
+    assert learning.output == RESULT
+    assert learning.metadata["agent_instance"] == learning.agent_run_id
+    assert learning.metadata["transcript"]["inline"]
+    assert learning.metadata["distilled"] is True
+    learning_events = [event for event in deploy.sink.events if event.stage == "learning"]
+    assert all(event.run_id == learning.agent_run_id for event in learning_events)
+    assert learning_events[-1].payload.source == "learning"
+    manifest = learning_events[-1].payload.run["inline"]
+    assert manifest["run_id"] == learning.agent_run_id
+    assert manifest["metadata"]["transcript"] == learning.metadata["transcript"]
+    assert manifest["output"] == learning.output
     deploy.storage.close()
 
 
@@ -509,4 +525,35 @@ async def test_learning_checks_deployment_defaults_with_a_manually_supplied_cata
     with pytest.raises(PipelineChangedError, match="deployment behavior changed"):
         await run_learning(session_id, changed)
     assert model.calls == 0
+    deploy.storage.close()
+
+
+async def test_cancelled_learning_keeps_its_run_and_partial_conversation(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An interrupted async invocation must remain joinable to its model-call audit."""
+    deploy, _ = deployment(tmp_path)
+    session_id = closed_incident(deploy)
+    entered = asyncio.Event()
+
+    class Slow:
+        async def complete(self, request, *, caller):
+            entered.set()
+            await asyncio.sleep(30)
+
+    deploy = replace(deploy, completion=Slow())
+    task = asyncio.create_task(run_learning(session_id, deploy))
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    [learning] = [
+        run for run in deploy.storage.runs.runs_for(session_id) if run.agent_name == "learning"
+    ]
+    assert learning.status == "cancelled"
+    assert learning.metadata["transcript"]["inline"]
+    stored = deploy.storage.sessions.get_session(session_id)
+    assert stored is not None and not stored.distilled
+    assert deploy.sink.events[-1].payload.event == "cancelled"
+    assert deploy.sink.events[-1].run_id == learning.agent_run_id
     deploy.storage.close()

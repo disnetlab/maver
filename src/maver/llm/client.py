@@ -21,6 +21,7 @@ from typing import Any
 
 from maver.contracts.events import ModelCallEvent
 from maver.llm.errors import RETRYABLE, ErrorClass, ModelCallError, classify
+from maver.llm.observations import error_record, observe
 from maver.llm.sampling import (
     SamplingResolution,
     applied_sampling,
@@ -518,6 +519,13 @@ class LLMClient:
         # rule: reported from the rule alone, a rescue turn recorded the reasoning
         # effort the profile declares rather than the one it displaced.
         kwargs, applied = self._build_kwargs(request)
+        observe(
+            "request",
+            invocation={
+                **{key: value for key, value in kwargs.items() if key != "api_key"},
+                "credentials_excluded": ["api_key"] if "api_key" in kwargs else [],
+            },
+        )
         attempts = self.profile.limits["num_retries"] + 1
         last: ModelCallError | None = None
         # What the caller waits, which is what a per-incident latency is summed from.
@@ -526,9 +534,24 @@ class LLMClient:
 
         for attempt in range(1, attempts + 1):
             started = time.monotonic()
+            raw = None
             try:
                 raw = await self._call_provider(**kwargs)
-            except Exception as exc:
+            except BaseException as exc:
+                duration_ms = int((time.monotonic() - started) * 1000)
+                detail = error_record(exc, secret=self._api_key)
+                usage = _extract_usage(getattr(exc, "usage", None))
+                observe(
+                    "attempt",
+                    attempt=attempt,
+                    status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+                    duration_ms=duration_ms,
+                    usage=usage,
+                    error=detail,
+                    raw=raw,
+                )
+                if not isinstance(exc, Exception):
+                    raise
                 duration_ms = int((time.monotonic() - started) * 1000)
                 error_class = classify(exc)
                 self._emit(
@@ -539,12 +562,12 @@ class LLMClient:
                     duration_ms=int((time.monotonic() - call_started) * 1000),
                     last_attempt_ms=duration_ms,
                     attempt=attempt,
-                    error=f"{type(exc).__name__}: {exc}",
+                    error=f"{detail['type']}: {detail['message']}",
                 )
                 last = ModelCallError(
                     error_class=error_class,
                     provider_type=type(exc).__name__,
-                    message=str(exc),
+                    message=detail["message"],
                     attempts=attempt,
                     status_code=getattr(exc, "status_code", None),
                 )
@@ -554,7 +577,30 @@ class LLMClient:
                 continue
 
             duration_ms = int((time.monotonic() - started) * 1000)
-            response = self._normalise(raw, duration_ms=duration_ms, attempts=attempt)
+            try:
+                response = self._normalise(raw, duration_ms=duration_ms, attempts=attempt)
+            except BaseException as exc:
+                # Normalisation is local code, not a retryable provider failure.
+                # Retain the response and any reported usage, then preserve the
+                # original exception type and retry behavior.
+                observe(
+                    "attempt",
+                    attempt=attempt,
+                    status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+                    duration_ms=duration_ms,
+                    usage=_extract_usage(getattr(raw, "usage", None)),
+                    error={**error_record(exc, secret=self._api_key), "phase": "normalisation"},
+                    raw=raw,
+                )
+                raise
+            observe(
+                "attempt",
+                attempt=attempt,
+                status="succeeded",
+                duration_ms=duration_ms,
+                usage=response.usage,
+                response=response,
+            )
             self._emit(
                 caller=caller,
                 sampling=applied,

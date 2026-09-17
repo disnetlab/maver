@@ -9,12 +9,14 @@ published measurement were written against.
 
 import json
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from maver.audit.context import ToolObservation
 from maver.audit.journal import Journal
 from maver.tools.context import ToolContext
 from maver.tools.snapshot import namespace_snapshot
@@ -345,3 +347,34 @@ async def test_another_namespace_is_not_dated_against_this_incident(tmp_path: Pa
     ctx.scope.observation_window_start = "2026-08-30T12:00:00Z"
 
     assert "Incident observation boundary" not in await namespace_snapshot(ctx, "other")
+
+
+@pytest.mark.parametrize("payload", ["{}", "null", '{"items":null}', '{"items":[null]}'])
+async def test_malformed_success_is_reported_as_unavailable(tmp_path: Path, payload: str) -> None:
+    reads = empty_reads() | {"events": payload}
+    cluster = FakeCluster(reads)
+    report = await namespace_snapshot(context(tmp_path, cluster), "shop")
+    assert "no Warning events in window" not in report
+    assert "events" in report and "unavailable" in report
+    assert sum("get events" in call for call in cluster.calls) == 2
+
+
+async def test_partial_snapshot_does_not_assert_health_or_resolved_references(
+    tmp_path: Path,
+) -> None:
+    reads = populated_reads() | dict.fromkeys(("pods", "endpoints", "configmaps"), "error: offline")
+    observation = ToolObservation()
+    ctx = replace(context(tmp_path, FakeCluster(reads)), observation=observation)
+    report = await namespace_snapshot(ctx, "shop")
+    assert observation.incomplete
+    assert observation.unavailable == ["pods", "endpoints", "configmaps"]
+    assert len(observation.errors) == 3
+    service = next(line for line in report.splitlines() if "svc/frontend" in line)
+    assert "[OK]" not in service
+    assert "unavailable" in service
+    assert "rst=?" in report and "rst=0" not in report
+    references = [line for line in report.splitlines() if "cm/" in line]
+    assert references and all("unknown" in line for line in references)
+    assert "faulty component is among these" not in report
+    assert "Coverage: 5/8 reads usable" in report
+    assert "pods, endpoints, configmaps" in report

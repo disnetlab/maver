@@ -9,10 +9,14 @@ read, so a transport handing back a Python repr instead of JSON silently disable
 """
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from maver.audit.context import ToolObservation
 from maver.audit.journal import Journal
 from maver.roles.health_gate import HealthGate, sweep_namespace_health
 from maver.tools.context import ToolContext
@@ -197,3 +201,27 @@ async def test_a_read_that_ran_and_failed_is_not_a_clean_sweep(tmp_path: Path) -
     assert gate.blocks_recovered is False
     assert gate.error
     assert gate.context_text() == ""
+
+
+@pytest.mark.parametrize(
+    "unknown", [None, {"metadata": {"name": "unknown"}, "status": {"phase": "Running"}}]
+)
+@pytest.mark.parametrize("include_failure", [False, True])
+async def test_unknown_pods_cannot_be_called_healthy_and_do_not_hide_observed_failures(
+    tmp_path: Path, unknown: object, include_failure: bool
+) -> None:
+    items = [unknown]
+    if include_failure:
+        items.append(pod("broken", phase="Pending", ready=False))
+    observation = ToolObservation()
+    ctx = replace(context(tmp_path, json.dumps({"items": items})), observation=observation)
+    gate = await sweep_namespace_health(ctx, "shop")
+    assert observation.incomplete
+    assert observation.unavailable
+    assert gate.unavailable
+    assert gate.audit()["complete"] is False
+    assert "unknown" in gate.context_text().lower()
+    assert "Every pod" not in gate.context_text()
+    assert gate.blocks_recovered is include_failure
+    if include_failure:
+        assert any("broken" in failure for failure in gate.failures)

@@ -30,6 +30,8 @@ from maver.adapters.base import (
 )
 from maver.adapters.registry import adapter, available_adapters, clear_adapters, get_adapter
 from maver.api.app import build_deployment, create_app
+from maver.audit.durable_sink import DurableAuditSink
+from maver.audit.export import export_incident
 from maver.audit.journal import ListSink
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from maver.memory.factory import build_storage
@@ -760,6 +762,19 @@ async def test_an_adapter_with_no_episode_route_serves_the_generic_intake(
     opening = next(request for caller, request in model.seen if caller == "rca")
     assert "probe_service" in {tool.name for tool in opening.tools}
     assert f"\n\n{PROBE_SUFFIX}\n\n" in str(opening.system)
+
+    # Verify the actual service composition preserves this completed incident offline.
+    assert isinstance(deploy.sink, DurableAuditSink)
+    deploy.sink.close()
+    bundle = export_incident(
+        tmp_path / "audit", accepted.json()["session_id"], tmp_path / "audit-export"
+    )
+    assert bundle["evidence_integrity"] == "complete"
+    assert bundle["event_kinds"]["model_call"] == len(model.seen)
+    assert bundle["started_without_terminal"]["model"] == []
+    assert bundle["database_projection"]["coverage"] == "unknown"
+    assert bundle["artifacts"], "full request and response evidence survives service composition"
+    deploy.storage.close()
 
 
 def test_an_adapter_that_drives_its_own_episodes_is_not_process_bound(

@@ -31,7 +31,7 @@ from maver.adapters.sregym.episode import reduce_feedback
 from maver.adapters.sregym.evidence import EvidenceFilter
 from maver.adapters.sregym.signal import build_diagnosis_solution, build_signal
 from maver.adapters.sregym.tools import adapter_tools
-from maver.adapters.sregym.transport import McpTransport
+from maver.adapters.sregym.transport import McpTransport, _rendered
 from maver.api.app import create_app
 from maver.audit.journal import Journal, ListSink
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
@@ -1044,3 +1044,22 @@ def test_the_benchmarks_roles_are_offered_what_the_archive_offered_them(
 
     assert offered - HOST_RECOVERY == ARCHIVED_TOOLSETS[role] - HOST_RECOVERY
     assert resolved.dropped["exec_kubectl_cmd_safely"] == "withheld by the environment"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[prom_mcp] Error querying get_metrics: offline",
+        "[loki_mcp] Error querying get_logs: offline",
+        "[ob_mcp] Error querying get_traces: offline",
+        "Query failed: backend unavailable",
+        "partial payload... [truncated]",
+    ],
+)
+def test_mcp_in_band_failures_and_truncation_are_not_success(text: str) -> None:
+    result = type(
+        "Result", (), {"content": [type("Block", (), {"text": text})()], "isError": False}
+    )()
+    output = _rendered(result)
+    assert output.startswith("error:")
+    assert text in output

@@ -13,6 +13,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+from maver.audit.context import ToolObservation
 from maver.audit.journal import Journal
 from maver.memory.ports import RunStore, SessionStore
 from maver.memory.retrieval import Retriever
@@ -275,6 +276,8 @@ class ToolContext:
     """Role runs and their traces, when this deployment records them."""
     memory_exclude: tuple[str, ...] = ()
     """Session ids retrieval must withhold, supplied per run by an evaluation harness."""
+    observation: ToolObservation | None = None
+    """Audit-only measurements for the current tool attempt."""
     memory_aliases: dict[str, str] = field(default_factory=dict)
     """Maps the short handles shown to the model back to real session ids.
 

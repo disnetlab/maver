@@ -27,6 +27,7 @@ from maver.adapters.registry import available_adapters
 from maver.api.app import enabled_adapters, validate_deployment
 from maver.api.hitl import request_payload
 from maver.api.incidents import IncidentRequest
+from maver.audit.export import export_incident
 from maver.configuration import Configuration, load_configuration
 from maver.memory.corpus import MalformedRecord, import_records, parse_records
 from maver.memory.factory import build_storage
@@ -48,6 +49,10 @@ approvals_app = typer.Typer(
 )
 memory_app = typer.Typer(help="Load and inspect the experience corpus.", no_args_is_help=True)
 incidents_app = typer.Typer(help="Submit incidents to a running deployment.", no_args_is_help=True)
+audit_app = typer.Typer(
+    help="Export complete private audit evidence offline.", no_args_is_help=True
+)
+app.add_typer(audit_app, name="audit")
 app.add_typer(config_app, name="config")
 app.add_typer(approvals_app, name="approvals")
 app.add_typer(memory_app, name="memory")
@@ -133,6 +138,44 @@ def serve(
         host=bind_host,
         port=bind_port,
         reload=reload,
+    )
+
+
+@audit_app.command("export")
+def audit_export(
+    session: Annotated[str, typer.Argument(help="Incident identifier to export.")],
+    output: Annotated[
+        Path, typer.Option("--output", help="Absent or empty private bundle directory.")
+    ],
+    audit_dir: Annotated[
+        Path | None, typer.Option("--audit-dir", help="Audit root; defaults to WORKDIR/audit.")
+    ] = None,
+    bridge_log: Annotated[
+        Path | None,
+        typer.Option("--bridge-log", help="Optional host bridge log to join by invocation."),
+    ] = None,
+) -> None:
+    """Export an incident without a running server, database, model or cluster."""
+    try:
+        root = audit_dir if audit_dir is not None else load_settings().server.workdir / "audit"
+        manifest = export_incident(root, session, output, bridge_log=bridge_log)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"could not export audit: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        json.dumps(
+            {
+                "output": str(output.resolve()),
+                "session_id": session,
+                "event_count": manifest["event_count"],
+                "evidence_integrity": manifest["evidence_integrity"],
+                "capture_coverage": manifest["capture_coverage"],
+                "database_coverage": manifest["database_projection"]["coverage"],
+                "started_without_terminal": manifest["started_without_terminal"],
+                "database_pending_events": len(manifest["database_pending_event_ids"]),
+            },
+            indent=2,
+        )
     )
 
 

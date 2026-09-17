@@ -17,12 +17,14 @@ survived for as long as it did.
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
+
+from pydantic import BaseModel
 
 from maver.adapters.base import AdapterTool, EnvironmentAdapter
 from maver.agents import AgentDefinition
@@ -78,7 +80,7 @@ from maver.pipelines import (
 )
 from maver.roles.base import RoleContext, RoleSpec, StateDelta, stage_role
 from maver.roles.policy import close_dangling_tool_calls
-from maver.roles.registry import get_role, registered_roles
+from maver.roles.registry import get_role
 from maver.secondpass.audit import JournalEmitter
 from maver.secondpass.runner import SecondPass
 from maver.secondpass.strategies import policy_for
@@ -173,6 +175,8 @@ class Deployment:
         # point builds a Deployment, so a set that cannot be sent fails at startup
         # rather than at the first call, or — the case that actually happened — not at
         # all, with the run completing on a configuration nobody could reconstruct.
+        if reserve := getattr(self.sink, "sequence_reserver", None):
+            object.__setattr__(self, "sequences", SequenceRegistry(reserve=reserve))
         if self.pipelines is None:
             configuration = load_configuration(self.settings, default_profile=self.profile)
             object.__setattr__(self, "pipelines", configuration.pipelines)
@@ -334,6 +338,8 @@ _RUN_STATUS: Mapping[str, AgentRunStatus] = {
     "succeeded": "succeeded",
     "failed": "failed",
     "halted": "halted",
+    "cancelled": "cancelled",
+    "awaiting_human": "awaiting_human",
 }
 """A halt is a role doing its job, so its row records the halt rather than a failure.
 The prototype's row said `failed`, which made a deliberate stop indistinguishable from a
@@ -743,104 +749,170 @@ async def run_incident(
     Raises:
         ValueError: When ``target_stage`` is not one this system runs.
     """
-    if target_stage not in ("full", "diagnose"):
-        raise ValueError(f"unsupported target_stage: {target_stage!r}")
+    state: IncidentState = {"session_id": session_id, "alert": alert, "target_stage": target_stage}
+    journal = Journal(
+        deployment.sink,
+        session_id=session_id,
+        stage="pipeline",
+        sequence=deployment.sequences.for_session(session_id),
+    )
+    with _lifecycle_audit(deployment, journal, state):
+        if target_stage not in ("full", "diagnose"):
+            raise ValueError(f"unsupported target_stage: {target_stage!r}")
 
-    assert deployment.pipelines is not None
-    if selection is None:
-        selection = await select_pipeline(
-            deployment.pipelines,
-            alert=alert,
-            metadata=metadata,
-            explicit="diagnose" if target_stage == "diagnose" else None,
-            selectors=deployment.pipeline_selectors,
+        assert deployment.pipelines is not None
+        if selection is None:
+            selection = await select_pipeline(
+                deployment.pipelines,
+                alert=alert,
+                metadata=metadata,
+                explicit="diagnose" if target_stage == "diagnose" else None,
+                selectors=deployment.pipeline_selectors,
+            )
+        else:
+            # Do not accept a caller binding from a different deployment.
+            selection = restore_selection(deployment.pipelines, selection.manifest())
+        pipeline = selection.pipeline
+        if target_stage == "diagnose" and not (
+            len(pipeline.workflow.stages) == 1 and pipeline.workflow.stages[0].role == "rca"
+        ):
+            raise ValueError("target_stage='diagnose' requires a one-stage RCA workflow")
+        async with incident_context(session_id, alert, deployment) as resources:
+            state.update(
+                initial_state(
+                    session_id=session_id,
+                    alert=alert,
+                    target_stage=target_stage,
+                    incident_dir=resources.incident_dir,
+                    shared_dir=resources.shared_dir,
+                    withheld_record_ids=withheld_record_ids,
+                )
+            )
+            state["runtime"] = RunState(
+                selection=selection.manifest(),
+                metadata=metadata or {},
+                deployment_digest=deployment.runtime_digest,
+            )
+            # Written before any role runs, and first. A campaign is reconstructible only if
+            # the configuration it ran under is in the record beside its result — including
+            # which schemas produced it, which is otherwise inferred from the date.
+            journal.record(
+                StageEvent(
+                    source="workflow",
+                    stage="pipeline",
+                    event="entered",
+                    detail=json.dumps(
+                        {
+                            "schema_version": SCHEMA_VERSION,
+                            "selected_pipeline": selection.manifest(),
+                            # Which environment supplied this run's transport, tools and
+                            # overlays. The settings say which adapters are enabled; this
+                            # says which one was actually bound, and the two differ for an
+                            # adapter that drives its own episodes.
+                            **(
+                                {"environment": deployment.adapter.name}
+                                if deployment.adapter is not None
+                                else {}
+                            ),
+                            **deployment.settings.snapshot(),
+                        },
+                        sort_keys=True,
+                    ),
+                )
+            )
+
+            save_runtime(deployment.storage.sessions, session_id, state["runtime"])
+
+            deps = IncidentDeps(
+                policy=RoutingPolicy.from_settings(deployment.settings),
+                runs=_RunRecorder(deployment.storage),
+                journal=journal,
+                build_context=_context_builder(deployment, resources, pipeline=pipeline),
+            )
+            mode = resolve_mode(target_stage=target_stage, settings=deployment.settings)
+            with span(
+                "maver.incident",
+                {
+                    "session.id": session_id,
+                    "alert.name": str(alert.get("alertname") or ""),
+                    "maver.mode": mode,
+                    "maver.target_stage": target_stage,
+                },
+            ) as incident_span:
+                return await _run_mode(
+                    mode,
+                    state,
+                    deployment,
+                    deps,
+                    resources,
+                    session_id=session_id,
+                    journal=journal,
+                    target_stage=target_stage,
+                    fire_post_hooks=fire_post_hooks,
+                    finalize_run_status=finalize_run_status,
+                    incident_span=incident_span,
+                    pipeline=pipeline,
+                )
+
+
+def _capture_state(journal: Journal, state: IncidentState) -> dict[str, Any]:
+    """Capture complete private state without rendering it into an agent prompt."""
+    return journal.capture(
+        "incident_state",
+        {
+            key: value.model_dump(mode="json") if isinstance(value, BaseModel) else value
+            for key, value in state.items()
+        },
+    )
+
+
+def _record_persistence_failure(
+    journal: Journal, state: IncidentState, exc: BaseException, *, operation: str
+) -> None:
+    """Keep the in-memory result available when its database projection fails."""
+    journal.record(
+        StageEvent(
+            source="workflow",
+            stage="persistence",
+            event="failed",
+            detail=json.dumps({"operation": operation, "error": f"{type(exc).__name__}: {exc}"}),
+            run=_capture_state(journal, state),
         )
-    else:
-        # Do not accept a caller binding from a different deployment.
-        selection = restore_selection(deployment.pipelines, selection.manifest())
-    pipeline = selection.pipeline
-    if target_stage == "diagnose" and not (
-        len(pipeline.workflow.stages) == 1 and pipeline.workflow.stages[0].role == "rca"
-    ):
-        raise ValueError("target_stage='diagnose' requires a one-stage RCA workflow")
-    async with incident_context(session_id, alert, deployment) as resources:
-        state = initial_state(
-            session_id=session_id,
-            alert=alert,
-            target_stage=target_stage,
-            incident_dir=resources.incident_dir,
-            shared_dir=resources.shared_dir,
-            withheld_record_ids=withheld_record_ids,
-        )
-        state["runtime"] = RunState(
-            selection=selection.manifest(),
-            metadata=metadata or {},
-            deployment_digest=deployment.runtime_digest,
-        )
-        save_runtime(deployment.storage.sessions, session_id, state["runtime"])
-        journal = Journal(
-            deployment.sink,
-            session_id=session_id,
-            stage="pipeline",
-            sequence=deployment.sequences.for_session(session_id),
-        )
-        # Written before any role runs, and first. A campaign is reconstructible only if
-        # the configuration it ran under is in the record beside its result — including
-        # which schemas produced it, which is otherwise inferred from the date.
+    )
+
+
+@contextmanager
+def _lifecycle_audit(
+    deployment: Deployment, journal: Journal, state: IncidentState
+) -> Iterator[None]:
+    """Record admission, execution and finalization failures through one boundary.
+
+    ApprovalPending keeps its existing checkpoint flow. The caller continues to own
+    terminal SQL status and environment release; this guard records and re-raises.
+    """
+    try:
+        yield
+    except ApprovalPending:
+        raise
+    except BaseException as exc:
+        runtime = state.get("runtime")
+        if runtime is not None:
+            try:
+                save_runtime(deployment.storage.sessions, journal.session_id, runtime)
+            except Exception as persistence_error:
+                _record_persistence_failure(
+                    journal, state, persistence_error, operation="interrupted_runtime"
+                )
         journal.record(
             StageEvent(
+                source="workflow",
                 stage="pipeline",
-                event="entered",
-                detail=json.dumps(
-                    {
-                        "schema_version": SCHEMA_VERSION,
-                        "selected_pipeline": selection.manifest(),
-                        # Which environment supplied this run's transport, tools and
-                        # overlays. The settings say which adapters are enabled; this
-                        # says which one was actually bound, and the two differ for an
-                        # adapter that drives its own episodes.
-                        **(
-                            {"environment": deployment.adapter.name}
-                            if deployment.adapter is not None
-                            else {}
-                        ),
-                        **deployment.settings.snapshot(),
-                    },
-                    sort_keys=True,
-                ),
+                event="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+                detail=json.dumps({"error": f"{type(exc).__name__}: {exc}"}),
+                run=_capture_state(journal, state),
             )
         )
-
-        deps = IncidentDeps(
-            policy=RoutingPolicy.from_settings(deployment.settings),
-            runs=_RunRecorder(deployment.storage),
-            journal=journal,
-            build_context=_context_builder(deployment, resources, pipeline=pipeline),
-        )
-        mode = resolve_mode(target_stage=target_stage, settings=deployment.settings)
-        with span(
-            "maver.incident",
-            {
-                "session.id": session_id,
-                "alert.name": str(alert.get("alertname") or ""),
-                "maver.mode": mode,
-                "maver.target_stage": target_stage,
-            },
-        ) as incident_span:
-            return await _run_mode(
-                mode,
-                state,
-                deployment,
-                deps,
-                resources,
-                session_id=session_id,
-                journal=journal,
-                target_stage=target_stage,
-                fire_post_hooks=fire_post_hooks,
-                finalize_run_status=finalize_run_status,
-                incident_span=incident_span,
-                pipeline=pipeline,
-            )
+        raise
 
 
 async def _run_mode(
@@ -887,6 +959,8 @@ async def _run_mode(
         )
         raise
 
+    state.update(final_state)
+
     record = (
         pipeline.resolve_outcome(final_state)
         if pipeline is not None
@@ -907,7 +981,8 @@ async def _run_mode(
             deployment.storage.sessions,
             finalize_run_status=finalize_run_status,
         )
-    except Exception:
+    except Exception as exc:
+        _record_persistence_failure(journal, final_state, exc, operation="outcome")
         # A storage failure must never kill a finished pipeline: the caller still
         # reports its outcome from the in-memory state, and an unsanitised byte in
         # an artifact once cost a fully graded run here.
@@ -958,6 +1033,21 @@ def _park(
             status="awaiting_human",
             error=f"awaiting approval request {pending.request_id}",
         )
+    journal = Journal(
+        deployment.sink,
+        session_id=pending.session_id,
+        stage="pipeline",
+        sequence=deployment.sequences.for_session(pending.session_id),
+    )
+    journal.record(
+        StageEvent(
+            source="workflow",
+            stage="pipeline",
+            event="paused",
+            detail=json.dumps({"request_id": pending.request_id, "stage": pending.stage}),
+            run=_capture_state(journal, cast(IncidentState, pending.state)),
+        )
+    )
     save_checkpoint(
         deployment.storage.sessions,
         cast(IncidentState, pending.state),
@@ -1004,161 +1094,165 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
         # racing on one request are ordered by the request's own single decision rather
         # than by this check.
         return "already_resumed"
-    state = restored_state(checkpoint)
-    runtime = state["runtime"]
-    if runtime.deployment_digest and runtime.deployment_digest != deployment.runtime_digest:
-        raise PipelineChangedError(
-            "deployment behavior changed since admission; restore its original configuration before resuming"
-        )
-    assert deployment.pipelines is not None
-    selected = (
-        restore_selection(deployment.pipelines, runtime.selection) if runtime.selection else None
+    state: IncidentState = {"session_id": checkpoint.session_id}
+    journal = Journal(
+        deployment.sink,
+        session_id=checkpoint.session_id,
+        stage=checkpoint.stage,
+        # Where the run that parked left off. A process that did not raise the pause
+        # holds no allocator for this session, and one starting at 1 again would
+        # give the continuation's events the positions the first pass already used.
+        sequence=deployment.sequences.for_session(checkpoint.session_id, start=checkpoint.sequence),
     )
-    pipeline = selected.pipeline if selected is not None else None
-    workflow_stage = runtime.active_stage or stage_role(checkpoint.stage)
-    sessions.set_run_status(
-        checkpoint.session_id,
-        RunStatus.RESUMING,
-        current_stage=checkpoint.stage,
-        checkpoint=checkpoint.model_dump(mode="json"),
-        awaiting_request_id=request_id,
-    )
-
-    alert = dict(state.get("alert") or {})
-    # The stage label may name a phase of a role; everything keyed by role needs the
-    # role. The gate keeps the full label, which is what its write policy is written in.
-    role = stage_role(checkpoint.stage)
-    async with incident_context(checkpoint.session_id, alert, deployment) as resources:
-        journal = Journal(
-            deployment.sink,
-            session_id=checkpoint.session_id,
-            stage=checkpoint.stage,
-            # Where the run that parked left off. A process that did not raise the pause
-            # holds no allocator for this session, and one starting at 1 again would
-            # give the continuation's events the positions the first pass already used.
-            sequence=deployment.sequences.for_session(
-                checkpoint.session_id, start=checkpoint.sequence
-            ),
+    with _lifecycle_audit(deployment, journal, state):
+        state.update(restored_state(checkpoint))
+        runtime = state["runtime"]
+        if runtime.deployment_digest and runtime.deployment_digest != deployment.runtime_digest:
+            raise PipelineChangedError(
+                "deployment behavior changed since admission; restore its original configuration before resuming"
+            )
+        assert deployment.pipelines is not None
+        selected = (
+            restore_selection(deployment.pipelines, runtime.selection)
+            if runtime.selection
+            else None
         )
-        tools = tool_context_for(
-            deployment,
-            resources,
-            role,
+        pipeline = selected.pipeline if selected is not None else None
+        workflow_stage = runtime.active_stage or stage_role(checkpoint.stage)
+        sessions.set_run_status(
             checkpoint.session_id,
-            journal,
-            # Carried across the pause. A continuation that read the floor alone would
-            # finish the run able to retrieve what the first half was denied.
-            withheld=state.get("withheld_record_ids", ()),
+            RunStatus.RESUMING,
+            current_stage=checkpoint.stage,
+            checkpoint=checkpoint.model_dump(mode="json"),
+            awaiting_request_id=request_id,
         )
-        replay_context = None
-        if pipeline is not None:
-            definition = pipeline.agents[workflow_stage]
-            replay_context = _context_builder(
+
+        alert = dict(state.get("alert") or {})
+        # The stage label may name a phase of a role; everything keyed by role needs the
+        # role. The gate keeps the full label, which is what its write policy is written in.
+        role = stage_role(checkpoint.stage)
+        async with incident_context(checkpoint.session_id, alert, deployment) as resources:
+            tools = tool_context_for(
                 deployment,
                 resources,
-                {workflow_stage: checkpoint.messages},
-                resume_stage=checkpoint.stage,
-                pipeline=pipeline,
-            )(definition.spec, state, None, runtime.active_agent or checkpoint.run_id)
-            tools = replay_context.tool_context
-        content = await _replay(checkpoint, record, tools, deployment, journal, replay_context)
-        for event in resume_events(checkpoint, record, result_chars=len(content)):
-            journal.record(event)
-
-        # Everything but the decided call, which the replay above answers. A turn that
-        # paused part-way through its calls leaves the ones it never reached issued and
-        # unanswered, and a server rejects a request carrying a tool_call_id with no
-        # reply, so the continuation would die on the transcript rather than on
-        # anything the operator did.
-        transcript = close_dangling_tool_calls(
-            [
-                *checkpoint.messages,
-                {
-                    "role": "tool",
-                    "tool_call_id": checkpoint.tool_call_id,
-                    "name": checkpoint.tool_name,
-                    "content": content,
-                },
-            ]
-        )
-        deps = IncidentDeps(
-            policy=RoutingPolicy.from_settings(deployment.settings),
-            runs=_RunRecorder(deployment.storage),
-            journal=journal,
-            build_context=_context_builder(
-                deployment,
-                resources,
-                {workflow_stage: transcript},
-                resume_stage=checkpoint.stage,
-                pipeline=pipeline,
-            ),
-        )
-        # The same composition the first pass ran under. Building the roles a second
-        # way here would let a continuation re-enter a diagnosis without the second
-        # opinion the arm is defined by, and the run would silently be two arms.
-        nodes = _nodes(deployment, deps, resources, pipeline)
-        try:
-            # The shape the incident was running, not the graph by assumption. Always on
-            # the sequential executor: the graph executor cannot be entered part-way
-            # without a checkpointer, and not having one is the point.
-            final_state = (
-                await SequentialEngine(nodes, deps.policy, pipeline=pipeline).run(
-                    state, start=workflow_stage
-                )
-                if pipeline is not None
-                else await MODES[checkpoint.mode](
-                    state,
-                    ModeContext(
-                        deps=deps,
-                        engine=SequentialEngine(nodes, deps.policy),
-                        nodes=nodes,
-                        start=role,
-                    ),
-                )
-            )
-        except ApprovalPending as pending:
-            # A second decision is needed. Re-park and leave the hooks alone: the
-            # incident still has not finished.
-            _park(
-                deployment,
-                pending,
-                mode=checkpoint.mode,
-                target_stage=checkpoint.target_stage,
-                fire_post_hooks=checkpoint.fire_post_hooks,
-                finalize_run_status=checkpoint.finalize_run_status,
-            )
-            return "awaiting_human"
-
-        outcome = (
-            pipeline.resolve_outcome(final_state)
-            if pipeline is not None
-            else resolve_outcome(final_state)
-        )
-        try:
-            save_runtime(sessions, checkpoint.session_id, final_state["runtime"])
-            persist_outcome(
-                final_state,
-                outcome,
-                sessions,
-                finalize_run_status=checkpoint.finalize_run_status,
-            )
-        except Exception:
-            _log.exception("persisting the resumed outcome failed; continuing from memory")
-        # Once, at the end, and only if the caller that parked wanted them. An interim
-        # result recorded mid-continuation would be read as terminal, and a driver that
-        # owns the run's ending must not have it closed from underneath.
-        if (
-            checkpoint.fire_post_hooks
-            and checkpoint.target_stage == "full"
-            and (pipeline is None or pipeline.workflow.post_hooks)
-        ):
-            await fire_hooks(
-                outcome.outcome,
+                role,
                 checkpoint.session_id,
-                workdir=deployment.settings.server.workdir,
+                journal,
+                # Carried across the pause. A continuation that read the floor alone would
+                # finish the run able to retrieve what the first half was denied.
+                withheld=state.get("withheld_record_ids", ()),
             )
-        _record_completion(journal, final_state, outcome, deps.policy)
-        return outcome.outcome.value
+            replay_context = None
+            if pipeline is not None:
+                definition = pipeline.agents[workflow_stage]
+                replay_context = _context_builder(
+                    deployment,
+                    resources,
+                    {workflow_stage: checkpoint.messages},
+                    resume_stage=checkpoint.stage,
+                    pipeline=pipeline,
+                )(definition.spec, state, None, runtime.active_agent or checkpoint.run_id)
+                tools = replay_context.tool_context
+            content = await _replay(checkpoint, record, tools, deployment, journal, replay_context)
+            for event in resume_events(checkpoint, record, result_chars=len(content)):
+                journal.record(event)
+
+            # Everything but the decided call, which the replay above answers. A turn that
+            # paused part-way through its calls leaves the ones it never reached issued and
+            # unanswered, and a server rejects a request carrying a tool_call_id with no
+            # reply, so the continuation would die on the transcript rather than on
+            # anything the operator did.
+            transcript = close_dangling_tool_calls(
+                [
+                    *checkpoint.messages,
+                    {
+                        "role": "tool",
+                        "tool_call_id": checkpoint.tool_call_id,
+                        "name": checkpoint.tool_name,
+                        "content": content,
+                    },
+                ]
+            )
+            deps = IncidentDeps(
+                policy=RoutingPolicy.from_settings(deployment.settings),
+                runs=_RunRecorder(deployment.storage),
+                journal=journal,
+                build_context=_context_builder(
+                    deployment,
+                    resources,
+                    {workflow_stage: transcript},
+                    resume_stage=checkpoint.stage,
+                    pipeline=pipeline,
+                ),
+            )
+            # The same composition the first pass ran under. Building the roles a second
+            # way here would let a continuation re-enter a diagnosis without the second
+            # opinion the arm is defined by, and the run would silently be two arms.
+            nodes = _nodes(deployment, deps, resources, pipeline)
+            try:
+                # The shape the incident was running, not the graph by assumption. Always on
+                # the sequential executor: the graph executor cannot be entered part-way
+                # without a checkpointer, and not having one is the point.
+                final_state = (
+                    await SequentialEngine(nodes, deps.policy, pipeline=pipeline).run(
+                        state, start=workflow_stage
+                    )
+                    if pipeline is not None
+                    else await MODES[checkpoint.mode](
+                        state,
+                        ModeContext(
+                            deps=deps,
+                            engine=SequentialEngine(nodes, deps.policy),
+                            nodes=nodes,
+                            start=role,
+                        ),
+                    )
+                )
+            except ApprovalPending as pending:
+                # A second decision is needed. Re-park and leave the hooks alone: the
+                # incident still has not finished.
+                _park(
+                    deployment,
+                    pending,
+                    mode=checkpoint.mode,
+                    target_stage=checkpoint.target_stage,
+                    fire_post_hooks=checkpoint.fire_post_hooks,
+                    finalize_run_status=checkpoint.finalize_run_status,
+                )
+                return "awaiting_human"
+
+            state.update(final_state)
+            outcome = (
+                pipeline.resolve_outcome(final_state)
+                if pipeline is not None
+                else resolve_outcome(final_state)
+            )
+            try:
+                save_runtime(sessions, checkpoint.session_id, final_state["runtime"])
+                persist_outcome(
+                    final_state,
+                    outcome,
+                    sessions,
+                    finalize_run_status=checkpoint.finalize_run_status,
+                )
+            except Exception as exc:
+                _record_persistence_failure(journal, final_state, exc, operation="resumed_outcome")
+                _log.exception("persisting the resumed outcome failed; continuing from memory")
+            # Once, at the end, and only if the caller that parked wanted them. An interim
+            # result recorded mid-continuation would be read as terminal, and a driver that
+            # owns the run's ending must not have it closed from underneath.
+            if (
+                checkpoint.fire_post_hooks
+                and checkpoint.target_stage == "full"
+                and (pipeline is None or pipeline.workflow.post_hooks)
+            ):
+                await fire_hooks(
+                    outcome.outcome,
+                    checkpoint.session_id,
+                    workdir=deployment.settings.server.workdir,
+                )
+            _record_completion(journal, final_state, outcome, deps.policy)
+            return outcome.outcome.value
 
 
 async def _replay(
@@ -1327,15 +1421,22 @@ def _record_completion(
 ) -> None:
     """Close the incident's log with what it cost and what it came to."""
     budget = RetryBudget.of(state, policy)
-    turns = {
-        role: sum(
-            1 for m in state.get("messages", {}).get(role, []) if m.get("role") == "assistant"
-        )
-        for role in registered_roles()
-        if state.get("messages", {}).get(role)
-    }
+    runtime = state.get("runtime")
+    if runtime is not None and runtime.agents:
+        turns: dict[str, int] = {}
+        for agent in runtime.agents.values():
+            turns[agent.role] = turns.get(agent.role, 0) + sum(
+                message.get("role") == "assistant" for message in agent.messages
+            )
+    else:
+        turns = {
+            role: sum(1 for message in messages if message.get("role") == "assistant")
+            for role, messages in state.get("messages", {}).items()
+        }
     journal.record(
         StageEvent(
+            source="workflow",
+            run=_capture_state(journal, state),
             stage="pipeline",
             event="exited",
             detail=json.dumps(

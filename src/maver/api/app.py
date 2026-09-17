@@ -31,6 +31,7 @@ from maver.api.deps import Service
 from maver.api.health import router as health_router
 from maver.api.hitl import router as hitl_router
 from maver.api.incidents import router as incidents_router
+from maver.audit.durable_sink import DurableAuditSink
 from maver.audit.journal import EventSink
 from maver.audit.store_sink import StoreSink
 from maver.configuration import Configuration, load_configuration
@@ -189,7 +190,7 @@ def build_deployment(settings: Settings) -> Deployment:
         # Not the discarding default. Every model call, tool call, submission and
         # authority decision is meant to reach the ordered per-incident log, and a run
         # that built its events and dropped them is a run nobody can audit afterwards.
-        sink=StoreSink(storage.runs),
+        sink=DurableAuditSink(StoreSink(storage.runs), audit_dir=settings.server.workdir / "audit"),
         **bound,
     )
 

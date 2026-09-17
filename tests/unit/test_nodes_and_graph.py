@@ -1,5 +1,7 @@
 import ast
+import asyncio
 import pathlib
+from dataclasses import replace
 
 import pytest
 
@@ -27,12 +29,15 @@ class Recorder:
         return f"run-{len(self.started)}"
 
     def finish(self, run_id, *, status, output, trace_summary, error, metadata) -> None:
-        self.finished.append({"run_id": run_id, "status": status, "error": error})
+        self.finished.append(
+            {"run_id": run_id, "status": status, "error": error, "metadata": metadata}
+        )
 
 
 def deps(recorder: Recorder, sink: ListSink) -> IncidentDeps:
     def build_context(spec, state, handback, run_id):  # type: ignore[no-untyped-def]
         return _Captured(
+            journal=Journal(sink, session_id="s1", stage=spec.name, run_id=run_id),
             spec=spec,
             state=state,
             handback=handback,
@@ -311,3 +316,31 @@ async def test_a_failing_role_closes_its_run_row_before_the_error_escapes() -> N
     assert recorder.finished[-1]["status"] == "failed"
     stages = [e.payload for e in sink.events if isinstance(e.payload, StageEvent)]
     assert [s.event for s in stages] == ["entered", "failed"]
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("context failed"), asyncio.CancelledError()])
+async def test_context_failure_and_cancellation_close_the_workflow_stage(failure) -> None:
+    """Context assembly is part of the stage and cancellation is a terminal exit."""
+    sink, recorder = ListSink(), Recorder()
+
+    async def run(context):
+        raise failure
+
+    role = replace(spec_for("rca", outcome=RoleOutcome(artifact=None, transcript=[])), run=run)
+    dependencies = deps(recorder, sink)
+    if isinstance(failure, RuntimeError):
+
+        def fail_context(*args):
+            raise failure
+
+        dependencies = replace(dependencies, build_context=fail_context)
+    node = make_node(role, dependencies, stage="diagnosis_custom")
+    with pytest.raises(type(failure)):
+        await node({"session_id": "s1"})
+    expected = "cancelled" if isinstance(failure, asyncio.CancelledError) else "failed"
+    assert recorder.finished[-1]["status"] == expected
+    assert recorder.finished[-1]["metadata"]["context_built"] == (expected == "cancelled")
+    assert [(event.stage, event.event, event.source) for event in _stages(sink)] == [
+        ("diagnosis_custom", "entered", "workflow"),
+        ("diagnosis_custom", expected, "workflow"),
+    ]

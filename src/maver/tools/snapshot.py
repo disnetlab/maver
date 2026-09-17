@@ -111,14 +111,24 @@ def _load_items(text: str) -> list[Any] | None:
     except (json.JSONDecodeError, ValueError):
         return None
     if isinstance(data, list):
-        return data
+        return data if all(isinstance(item, dict) for item in data) else None
     if isinstance(data, dict):
-        items = data.get("items")
-        if isinstance(items, list):
-            return items
-        if data.get("kind"):
+        if "items" in data:
+            items = data["items"]
+            return (
+                items
+                if isinstance(items, list) and all(isinstance(item, dict) for item in items)
+                else None
+            )
+        kind = data.get("kind")
+        if (
+            isinstance(kind, str)
+            and kind != "Status"
+            and not kind.endswith("List")
+            and isinstance(data.get("metadata"), dict)
+        ):
             return [data]
-    return []
+    return None
 
 
 def _now() -> datetime:
@@ -373,7 +383,11 @@ def _render(
             template = (spec.get("template") or {}).get("spec") or {}
             images = [c.get("image", "?") for c in template.get("containers") or []]
             image = images[0].split("@")[0] if images else "?"
-            restarts = sum(s["restarts"] for s in by_workload.get(name, []))
+            restarts = (
+                str(sum(s["restarts"] for s in by_workload.get(name, [])))
+                if pods_raw is not None
+                else "?"
+            )
             generation = meta.get("generation")
             observed = status.get("observedGeneration")
             mark = ""
@@ -472,7 +486,14 @@ def _render(
             if selector and eps == 0:
                 marks.append("0 endpoints")
             marks.extend(port_flags)
-            mark = ("  [!] " + "; ".join(marks)) if marks else "  [OK]"
+            unknown = []
+            if endpoints is None:
+                unknown.append("endpoints")
+            if pods_raw is None and selector:
+                unknown.append("pod ports")
+            mark = ("  [!] " + "; ".join(marks)) if marks else ("" if unknown else "  [OK]")
+            if unknown:
+                mark += "  [?] unavailable checks: " + ", ".join(unknown)
             if marks:
                 flags.append(name)
             out.append(
@@ -495,20 +516,24 @@ def _render(
         {(s.get("metadata") or {}).get("name") for s in secrets} if secrets is not None else None
     )
     ok_lines: list[str] = []
+    unknown_lines: list[str] = []
     bad_lines: list[str] = []
     for refs, existing, kindlabel in ((cm_refs, cm_names, "cm"), (sec_refs, sec_names, "secret")):
         for name, who in sorted(refs.items()):
             users = ", ".join(who[:4]) + (" …" if len(who) > 4 else "")
-            if existing is not None and name not in existing:
+            if existing is None:
+                unknown_lines.append(f"  [?] {kindlabel}/{name}  existence unknown  ← {users}")
+            elif name not in existing:
                 bad_lines.append(f"  [!] {kindlabel}/{name}  NOT FOUND  ← {users}")
                 flags.append(name)
             else:
                 ok_lines.append(f"  {kindlabel}/{name}  ← {users}")
     out.extend(bad_lines)
+    out.extend(unknown_lines)
     out.extend(ok_lines[:_MAX_REF_OK])
     if len(ok_lines) > _MAX_REF_OK:
         out.append(f"  … {len(ok_lines) - _MAX_REF_OK} more resolved references")
-    if not bad_lines and not ok_lines:
+    if not bad_lines and not ok_lines and not unknown_lines:
         # References are derived from the workload specs, so a failed workload read
         # yields the same empty result as a namespace that genuinely references nothing.
         # Saying "none found" there is a false negative, not an absence.
@@ -603,13 +628,24 @@ def _render(
         if boundary
         else ""
     )
+    unavailable = [name for name, items in parsed.items() if items is None]
     header = (
         f"NAMESPACE SNAPSHOT: {ns}   (window: last {since_minutes}m; "
         f"{len(set(flags))} component(s) flagged [!])\n"
         + boundary_line
         + "Deterministic read-only facts — generic Kubernetes health flags only, NOT a "
-        "root-cause verdict. The faulty component is among these; localize it yourself.\n"
+        "root-cause verdict. "
+        + (
+            "Unavailable reads may hide affected components.\n"
+            if unavailable
+            else "The faulty component is among these; localize it yourself.\n"
+        )
     )
+    if unavailable:
+        header += (
+            f"Coverage: {len(parsed) - len(unavailable)}/{len(parsed)} reads usable; "
+            f"unavailable: {', '.join(unavailable)}. Health is unknown for unavailable checks.\n"
+        )
     return header + "\n".join(out)
 
 
@@ -666,6 +702,11 @@ async def namespace_snapshot(ctx: ToolContext, namespace: str, since_minutes: in
     # Only when the snapshot is of the incident's own namespace. A boundary belongs to
     # one incident, and labelling another namespace's terminations against it would date
     # them by an event that has nothing to do with them.
+    unavailable = [key for key in keys if _load_items(raw[key]) is None]
+    if unavailable and ctx.observation is not None:
+        ctx.observation.incomplete = True
+        ctx.observation.unavailable.extend(unavailable)
+        ctx.observation.errors.extend(f"{key}: {raw[key]}" for key in unavailable)
     boundary = ctx.scope.observation_window_start if ctx.scope.namespace == ns else None
     return _render(ns, since, raw, boundary)
 

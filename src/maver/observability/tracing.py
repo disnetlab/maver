@@ -83,12 +83,16 @@ def span(name: str, attributes: Mapping[str, Any] | None = None) -> Iterator[Any
         The span, so a caller can add what it learns as it goes.
     """
     tracer = trace.get_tracer(_TRACER_NAME)
-    with tracer.start_as_current_span(name) as current:
+    # The SDK otherwise exports exception text and stack traces automatically. Those
+    # can contain tool output, prompts or credentials; full failures belong locally.
+    with tracer.start_as_current_span(
+        name, record_exception=False, set_status_on_exception=False
+    ) as current:
         for key, value in (attributes or {}).items():
             if value is not None:
                 current.set_attribute(key, value)
         try:
             yield current
-        except Exception as exc:
+        except BaseException as exc:
             current.set_status(Status(StatusCode.ERROR, type(exc).__name__))
             raise

@@ -11,14 +11,21 @@ starts it has nothing but a session identifier, which is the right constraint â€
 that could only be distilled from live state would be lost to any restart.
 """
 
+import asyncio
 import logging
 from dataclasses import replace
+from datetime import UTC, datetime
 from typing import Any
 
+from maver.audit.context import bind_journal
+from maver.audit.journal import Journal
 from maver.contracts.artifacts import LearningPacket, LearningResult, RoleTraceSummary
+from maver.contracts.events import StageEvent
 from maver.contracts.runtime import RunState
 from maver.memory.distil import distil
+from maver.memory.ports import AgentRunRecord
 from maver.orchestration.jobs import bound_deployment
+from maver.orchestration.nodes import capture_run, context_metadata
 from maver.orchestration.runner import (
     Deployment,
     _context_builder,
@@ -26,8 +33,10 @@ from maver.orchestration.runner import (
 )
 from maver.orchestration.runtime import load_runtime, save_runtime
 from maver.pipelines import PipelineChangedError, restore_selection
+from maver.roles.base import RoleContext, RoleOutcome
 from maver.roles.prompting import visible_alert
 from maver.roles.registry import get_role
+from maver.roles.trace_summary import build_trace_summary
 
 __all__ = ["build_packet", "distil_incident", "run_learning"]
 
@@ -119,44 +128,152 @@ async def run_learning(
             return "disabled"
     # Sessions predating configured pipelines retain their original role selection.
     spec = definition.spec if definition is not None else get_role("learning")
+    runs = deployment.storage.runs
     attempt = 1 + sum(agent.role == "learning" for agent in runtime.agents.values())
     run_id = f"{session_id}:learning:{attempt}"
-    while run_id in runtime.agents:
+    while run_id in runtime.agents or runs.get_run(run_id) is not None:
         attempt += 1
         run_id = f"{session_id}:learning:{attempt}"
+    runs.start_run(
+        AgentRunRecord(
+            agent_run_id=run_id,
+            pipeline_id=session_id,
+            agent_name="learning",
+            attempt=attempt,
+            status="running",
+            started_at=datetime.now(UTC).isoformat(),
+            metadata={"asynchronous": True},
+        )
+    )
+    journal = Journal(
+        deployment.sink,
+        session_id=session_id,
+        stage="learning",
+        run_id=run_id,
+        sequence=deployment.sequences.for_session(session_id),
+    )
+    journal.record(StageEvent(source="learning", stage="learning", event="entered"))
     previous_stage, previous_agent = runtime.active_stage, runtime.active_agent
     runtime.active_stage = None
+    context: RoleContext | None = None
+    outcome: RoleOutcome | None = None
+    status = "no_submission"
     try:
-        async with incident_context(session_id, dict(packet.alert), deployment) as resources:
-            context = _context_builder(
-                deployment, resources, retrieval=True, definition_override=definition
-            )(
-                spec,
-                {"session_id": session_id, "alert": dict(packet.alert), "runtime": runtime},
-                None,
-                run_id,
+        try:
+            async with incident_context(session_id, dict(packet.alert), deployment) as resources:
+                context = _context_builder(
+                    deployment, resources, retrieval=True, definition_override=definition
+                )(
+                    spec,
+                    {"session_id": session_id, "alert": dict(packet.alert), "runtime": runtime},
+                    None,
+                    run_id,
+                )
+                with bind_journal(context.journal):
+                    outcome = await spec.run(replace(context, packet=packet))
+                if context.agent_state is not None:
+                    context.agent_state.messages = list(outcome.transcript)
+            if isinstance(outcome.artifact, LearningResult):
+                distil(
+                    packet,
+                    outcome.artifact,
+                    index=deployment.storage.index,
+                    sessions=deployment.storage.sessions,
+                    settings=deployment.settings.memory,
+                )
+                status = "distilled"
+            else:
+                _log.warning("learning produced nothing for %s: %s", session_id, outcome.error)
+        finally:
+            # Learning has its own conversation; it never advances foreground steps.
+            runtime.active_stage, runtime.active_agent = previous_stage, previous_agent
+            save_runtime(deployment.storage.sessions, session_id, runtime)
+    except BaseException as exc:
+        cancelled = isinstance(exc, asyncio.CancelledError)
+        error = "cancelled" if cancelled else repr(exc)
+        metadata = context_metadata(context, journal)
+        output = (
+            outcome.artifact.model_dump(mode="json")
+            if outcome is not None and outcome.artifact is not None
+            else None
+        )
+        journal.record(
+            StageEvent(
+                source="learning",
+                stage="learning",
+                event="cancelled" if cancelled else "failed",
+                detail=error,
+                run=capture_run(
+                    journal,
+                    run_id,
+                    role="learning",
+                    status="cancelled" if cancelled else "failed",
+                    metadata=metadata,
+                    output=output,
+                    error=error,
+                ),
             )
-            outcome = await spec.run(replace(context, packet=packet))
-            if context.agent_state is not None:
-                context.agent_state.messages = list(outcome.transcript)
-    finally:
-        # Learning is an asynchronous invocation, not a foreground workflow step.
-        # Its private state persists without advancing or replacing that workflow.
-        runtime.active_stage, runtime.active_agent = previous_stage, previous_agent
-        save_runtime(deployment.storage.sessions, session_id, runtime)
+        )
+        runs.finish_run(
+            run_id,
+            status="cancelled" if cancelled else "failed",
+            output=output,
+            error=error,
+            metadata=metadata,
+        )
+        raise
 
-    if not isinstance(outcome.artifact, LearningResult):
-        _log.warning("learning produced nothing for %s: %s", session_id, outcome.error)
-        return "no_submission"
-
-    distil(
-        packet,
-        outcome.artifact,
-        index=deployment.storage.index,
-        sessions=deployment.storage.sessions,
-        settings=deployment.settings.memory,
+    assert outcome is not None
+    output = outcome.artifact.model_dump(mode="json") if outcome.artifact is not None else None
+    summary = build_trace_summary(
+        "learning", transcript=outcome.transcript, output=outcome.artifact, error=outcome.error
+    ).model_dump(mode="json")
+    metadata = {
+        **outcome.metadata,
+        **context_metadata(context, journal, transcript=outcome.transcript),
+        "distilled": status == "distilled",
+    }
+    evidence = capture_run(
+        journal,
+        run_id,
+        role="learning",
+        status="succeeded" if status == "distilled" else "failed",
+        metadata=metadata,
+        output=output,
+        trace_summary=summary,
+        error=outcome.error,
     )
-    return "distilled"
+    journal.record(
+        StageEvent(
+            source="learning",
+            stage="learning",
+            event="exited" if status == "distilled" else "failed",
+            detail=status,
+            run=evidence,
+        )
+    )
+    try:
+        runs.finish_run(
+            run_id,
+            status="succeeded" if status == "distilled" else "failed",
+            output=output,
+            trace_summary=summary,
+            error=outcome.error,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        journal.record(
+            StageEvent(
+                source="learning",
+                stage="persistence",
+                event="failed",
+                detail=f"{type(exc).__name__}: {exc}",
+                run=evidence,
+            )
+        )
+        raise
+
+    return status
 
 
 async def distil_incident(session_id: str, **kwargs: Any) -> str:
