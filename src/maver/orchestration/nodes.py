@@ -282,6 +282,17 @@ def _merge(
                 else {}
             ),
             "tools_withheld": dict(context.toolset.dropped),
+            **(
+                {
+                    "tool_description_overrides": {
+                        tool.name: tool.description
+                        for tool in context.toolset.definitions
+                        if tool.name in context.overlay.tool_descriptions
+                    }
+                }
+                if context.overlay is not None and context.overlay.tool_descriptions
+                else {}
+            ),
             **({"run_label": context.run_label} if context.run_label else {}),
         },
     )

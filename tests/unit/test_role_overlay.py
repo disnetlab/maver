@@ -22,6 +22,7 @@ from maver.audit.journal import ListSink
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from maver.memory.factory import build_storage
 from maver.orchestration.runner import Deployment, run_incident
+from maver.prompts.loader import read_asset
 from maver.roles.policy import control
 from maver.settings.groups import MemorySettings, PipelineSettings, ServerSettings, VerifySettings
 from maver.settings.profiles import load_profile
@@ -199,6 +200,11 @@ async def test_an_overlay_narrows_the_role_it_names_and_no_other(
             system_suffix=SUFFIX,
             context_blocks=(BLOCK,),
             drop_tools=frozenset({"bash_exec"}),
+            prompt_blocks={"KUBECTL_GUIDANCE": "Use only this environment's cluster tools."},
+            tool_descriptions={
+                "exec_kubectl_cmd_safely": "Inspect this environment's namespace.",
+                "bash_exec": "Withheld tools must stay withheld.",
+            },
         )
     )
     overlaid, _ = deployment(tmp_path / "overlaid", model=overlaid_model, adapter=adapter)
@@ -211,12 +217,26 @@ async def test_an_overlay_narrows_the_role_it_names_and_no_other(
     # because the suffix is a statement about the role and the protocol is plumbing.
     guidance = control("tool_failure_guidance")
     composed = body(plain_rca).removesuffix(f"\n\n{guidance}")
+    composed = composed.replace(
+        read_asset("blocks/kubectl/read_only.txt"), "Use only this environment's cluster tools."
+    )
     assert body(overlaid_rca) == f"{composed}\n\n{SUFFIX}\n\n{guidance}"
     assert opening(overlaid_rca) == f"{BLOCK}\n\n{opening(plain_rca)}"
 
     offered = {tool.name for tool in overlaid_rca.tools}
     assert "bash_exec" in {tool.name for tool in plain_rca.tools}
     assert "bash_exec" not in offered
+    plain_tools = {tool.name: tool for tool in plain_rca.tools}
+    assert [tool.name for tool in overlaid_rca.tools] == [
+        tool.name for tool in plain_rca.tools if tool.name != "bash_exec"
+    ]
+    for tool in overlaid_rca.tools:
+        assert tool.parameters == plain_tools[tool.name].parameters
+        assert tool.description == (
+            "Inspect this environment's namespace."
+            if tool.name == "exec_kubectl_cmd_safely"
+            else plain_tools[tool.name].description
+        )
     # Recorded, not merely absent. What the model was offered is not reconstructible
     # from the arm alone, so the reason is written on the run row beside the result.
     withheld = [
@@ -225,10 +245,17 @@ async def test_an_overlay_narrows_the_role_it_names_and_no_other(
         if run_.agent_name == "rca"
     ]
     assert withheld == ["withheld by the environment"]
+    recorded = [
+        row.metadata["tool_description_overrides"]
+        for row in overlaid.storage.runs.runs_for(session_id)
+        if row.agent_name == "rca"
+    ]
+    assert recorded == [{"exec_kubectl_cmd_safely": "Inspect this environment's namespace."}]
 
     for role in ("planning", "execution"):
         assert body(first(overlaid_model, role)) == body(first(plain_model, role))
         assert opening(first(overlaid_model, role)) == opening(first(plain_model, role))
+        assert first(overlaid_model, role).tools == first(plain_model, role).tools
 
 
 async def test_a_replacement_takes_the_place_of_the_composed_prompt(

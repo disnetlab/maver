@@ -236,7 +236,9 @@ def test_the_connectivity_contract_is_given_only_for_an_application_we_deployed(
     # reads is never handed to anything that could mutate it.
     assert body is not CONFIG.connectivity_contracts[NAMESPACE]
 
-    assert overlay("verify", "mitigation", namespace="some-other-namespace") is None
+    unknown = overlay("verify", "mitigation", namespace="some-other-namespace")
+    assert unknown.context_blocks == ()
+    assert "Generic `kubectl exec` is rejected" in unknown.prompt_blocks["KUBECTL_GUIDANCE"]
 
 
 @pytest.mark.parity

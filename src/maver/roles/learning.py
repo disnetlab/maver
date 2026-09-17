@@ -95,6 +95,7 @@ def _system_prompt(ctx: RoleContext, *, verify_live: bool) -> str:
             retrieval_enabled=retrieval_enabled(ctx),
             override_dir=ctx.settings.prompts.override_dir,
             kubectl_route=kubectl_route(ctx),
+            block_overrides=ctx.overlay.prompt_blocks if ctx.overlay is not None else None,
         ),
         read_runtime("learning", f"{POST_INCIDENT}.txt"),
     ]

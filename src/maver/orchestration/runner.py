@@ -681,6 +681,7 @@ def _context_builder(
                 tools,
                 extras=deployment.tool_extras,
                 drop=overlay.drop_tools if overlay is not None else frozenset(),
+                description_overrides=overlay.tool_descriptions if overlay is not None else None,
                 names=definition.tool_names if definition is not None else None,
             ),
             tool_context=tools,

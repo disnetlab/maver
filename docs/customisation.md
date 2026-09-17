@@ -258,6 +258,27 @@ Bump an agent's `version`, a middleware registration's `version`, or the workflo
 version when changing Python behaviour; configuration changes are detected directly.
 Changing only the deployment's default selection does not reroute an admitted run.
 
+Adapters can customize environment-specific wording through `RoleOverlay`:
+
+```python
+return RoleOverlay(
+    prompt_blocks={"KUBECTL_GUIDANCE": "Use this environment's Kubernetes tool."},
+    tool_descriptions={"exec_kubectl_cmd_safely": "Inspect resources in the incident namespace."},
+)
+```
+
+`prompt_blocks` replaces recognized blocks during template composition, including
+inside custom prompt templates. Recognized markers absent from a custom template
+are ignored; misspelled markers are rejected. `system_replacement` still replaces
+the whole composed prompt. `tool_descriptions` replaces the description only after
+tool selection, so it cannot add a withheld tool or change its schema, dispatch or
+authority. Unknown tool names and blank descriptions are rejected. Overrides are
+per role and run. Completed workflow agent runs store effective description overrides
+in metadata as `tool_description_overrides`; this field is not a record of tools
+offered before a paused or failed run. Prompt digests cover the resulting prompt text.
+The AIOpsLab adapter uses these hooks to describe its bridge without changing core
+or other adapters' instructions.
+
 Frozen research-arm files and historical prompt fixtures retain their original
 bytes. The current default Execution prompt and Verify submission repairs adopt
 later prototype behavior, as recorded in [the changelog](../CHANGELOG.md). Historical

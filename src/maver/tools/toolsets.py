@@ -57,6 +57,7 @@ def build_toolset(
     ctx: ToolContext,
     *,
     descriptions: Mapping[str, object] | None = None,
+    description_overrides: Mapping[str, str] | None = None,
     capabilities: Sequence[str] | None = None,
     extras: Sequence[AdapterTool] = (),
     drop: frozenset[str] = frozenset(),
@@ -69,6 +70,8 @@ def build_toolset(
         names: An explicitly configured ordered allowlist, or the canonical default.
         ctx: The run's context, bound into every dispatch.
         descriptions: The description catalogue. Defaults to the shipped one.
+        description_overrides: Environment replacements for known tools. Only offered
+            tools are affected; schemas, order, dispatch and authority stay unchanged.
         capabilities: What the transport serves. Defaults to asking the bound transport.
         extras: Tools an environment adapter supplies, each carrying the roles allowed
             to see it. Unioned after the allowlist rather than named in it, because the
@@ -84,7 +87,8 @@ def build_toolset(
     Raises:
         ToolRegistryError: When the role has no allowlist, or when an adapter's tool
             collides with a registered name. A silent override would make the audit
-            record say one thing and mean another.
+            record say one thing and mean another. Unknown or empty description
+            overrides are also rejected.
     """
     names = ROLE_TOOLSETS.get(role) if names is None else names
     if names is None:
@@ -103,6 +107,13 @@ def build_toolset(
     dropped: dict[str, str] = {}
 
     offered = _offer(role, [specs[name] for name in names], extras, specs)
+    overrides = description_overrides or {}
+    known = set(specs) | {extra.spec.name for extra in extras}
+    if unknown := set(overrides) - known:
+        raise ToolRegistryError(f"unknown tool description override(s): {sorted(unknown)}")
+    for name, description in overrides.items():
+        if not description.strip():
+            raise ToolRegistryError(f"tool description override for {name!r} must be non-empty")
 
     for spec in offered:
         name = spec.name
@@ -139,7 +150,9 @@ def build_toolset(
         definitions.append(
             ModelToolSpec(
                 name=name,
-                description=description_for(
+                description=overrides[name]
+                if name in overrides
+                else description_for(
                     name, role, descriptions=spec.descriptions or catalogue, route=route
                 ),
                 parameters=definition_for(spec),

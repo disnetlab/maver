@@ -2,8 +2,10 @@
 
 The AIOpsLab bridge permits normal read-only Kubernetes inspection but rejects
 generic `kubectl exec` and any `kubectl` run through `bash_exec`/`code_exec`.
-Do not retry either rejection. Use `exec_kubectl_cmd_safely` only for `get`,
-`describe`, and `logs` evidence.
+Do not retry either rejection. Planning uses `exec_kubectl_cmd_safely` for
+read-only evidence. Execution may apply planned mutations through that tool in
+the active incident namespace, subject to runtime authorization, then check the
+resulting resource state.
 
 For a Hotel Reservation MongoDB authentication fault on `mongodb-geo` or
 `mongodb-rate`, the only supported repair is the dedicated Execution tool

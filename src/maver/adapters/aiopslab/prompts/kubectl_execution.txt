@@ -1,0 +1,13 @@
+Use `exec_kubectl_cmd_safely` for Kubernetes inspection and remediation in
+AIOpsLab. Execution may apply planned mutations in the active incident namespace;
+reads are automatically approved and writes go through runtime authorization.
+Read the target before changing it and confirm the resulting resource state.
+Pass one full command starting with `kubectl` and scope it to the active incident
+namespace. Generic `kubectl exec` is rejected, including diagnostic commands.
+Do not retry it or route kubectl through `bash_exec` or `code_exec`. Those tools
+are only for local filtering, parsing, or computing over saved output.
+Never use another namespace, `-A`/`--all-namespaces`, API/raw discovery, or
+credential/context overrides. Commands run without a shell: pipes, redirects,
+and chained commands are unsupported. Use `-o json`/`-o jsonpath` or local
+post-processing. Omit `save_as` for short reads; use it for long or reusable
+results, saved under `tool_outputs/` in the session workspace.

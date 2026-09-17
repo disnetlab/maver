@@ -116,6 +116,7 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
                 retrieval_enabled=False,
                 override_dir=ctx.settings.prompts.override_dir,
                 kubectl_route=kubectl_route(ctx),
+                block_overrides=ctx.overlay.prompt_blocks if ctx.overlay is not None else None,
             ),
             ctx.overlay,
         )

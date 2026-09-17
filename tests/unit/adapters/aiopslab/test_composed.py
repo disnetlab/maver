@@ -21,6 +21,7 @@ from typing import Any
 
 import httpx
 import pytest
+from prototype_tree import prototype_root
 
 from maver.api.app import build_deployment, create_app
 from maver.api.deps import Service
@@ -282,7 +283,7 @@ async def test_a_mitigation_incident_gets_the_bridges_repair_and_its_own_probe(
             "rca": [("submit_root_cause", ROOT_CAUSE)],
             "planning": [("submit_plan", PLAN)],
             "execution": [
-                # Execution's opening call is forced to be a read.
+                # This profile leaves tool choice automatic; the model reads first.
                 ("exec_kubectl_cmd_safely", {"cmd": f"kubectl get pods -n {NAMESPACE}"}),
                 (
                     "restore_mongodb_access",
@@ -313,6 +314,25 @@ async def test_a_mitigation_incident_gets_the_bridges_repair_and_its_own_probe(
     assert f"{remediation}\n\n## AIOpsLab incident scope" in execution_prompt
     assert f"The active incident namespace is `{NAMESPACE}`" in execution_prompt
     assert "This run is non-interactive" in execution_prompt
+
+    # Check the actual model requests, not just which asset was appended.
+    archived_suffix = (
+        (prototype_root() / "agent/prompts/runtime/aiopslab/remediation.txt")
+        .read_text(encoding="utf-8")
+        .strip()
+    )
+    assert archived_suffix not in execution_prompt
+    assert "Execution may apply planned mutations" in execution_prompt
+    for role in ("rca", "planning", "execution", "verify"):
+        request = first(model, role)
+        description = next(
+            tool.description for tool in request.tools if tool.name == "exec_kubectl_cmd_safely"
+        )
+        assert "Generic `kubectl exec` is rejected" in description
+        assert "Generic `kubectl exec` is rejected" in body(request)
+        assert "Non-interactive diagnostic `kubectl exec" not in body(request)
+        assert "diagnostic exec" not in description
+        assert ("Execution may apply planned mutations" in description) == (role == "execution")
 
     # Each adapter tool reaches exactly the role it was contributed for.
     assert "restore_mongodb_access" in offered(first(model, "execution"))

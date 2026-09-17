@@ -198,6 +198,27 @@ def test_the_proxy_route_tells_a_role_to_run_kubectl_and_the_tool_route_not_to()
     assert "`exec_kubectl_cmd_safely` and rollback tools are not available" in proxied
 
 
+def test_environment_blocks_preserve_custom_templates_and_reject_unknown_markers(tmp_path) -> None:
+    (tmp_path / "roles").mkdir()
+    (tmp_path / "roles" / "rca.txt").write_text("Custom role: {{KUBECTL_GUIDANCE}}")
+    assert (
+        compose_role_prompt(
+            "rca",
+            retrieval_enabled=False,
+            override_dir=tmp_path,
+            block_overrides={
+                "KUBECTL_GUIDANCE": "Environment instructions",
+                "MEMORY_GUIDANCE": "unused",
+            },
+        )
+        == "Custom role: Environment instructions"
+    )
+    with pytest.raises(PromptError, match="unknown prompt block override"):
+        compose_role_prompt(
+            "rca", retrieval_enabled=False, block_overrides={"KUBECTL_GUIDENCE": "typo"}
+        )
+
+
 def test_an_unknown_route_is_refused_rather_than_silently_composing_the_other_one() -> None:
     """A typo would otherwise fall through to the cluster-tool blocks, and a whole
     campaign would run on guidance describing a route it was not using."""

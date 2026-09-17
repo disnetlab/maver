@@ -7,9 +7,10 @@ as ``if alert["benchmark"] == "aiopslab"`` beside the code that composed the pro
 table keyed on the role and the graded task, so a second environment adds a table of
 its own rather than a sixth branch in the same files.
 
-What the model reads is carried, not rewritten. Three of the assets are the prototype's
-own files byte for byte; the other four are the strings it built in Python, moved into
-``.txt`` because that is where this repository keeps prompt text. Two compositional
+The task contracts originate in the prototype. Transport guidance is adapter-owned:
+its kubectl prompt block and tool description describe the same bridge capabilities,
+with mutations permitted only for Execution. See CHANGELOG.md for this intentional
+change from the recorded acceptance prompts. Two compositional
 differences are unavoidable and are named where they occur: MAVER wraps a replaced system
 prompt in the same header and tool-call protocol the prototype's ``agent_system_prompt``
 wrapped it in, and a context block is prepended to the role's opening turn rather than
@@ -19,6 +20,7 @@ substituted into the middle of it.
 import json
 import tempfile
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -103,25 +105,35 @@ def role_overlay(
     alert: Mapping[str, Any] = state.get("alert") or {}
     task = task_of(alert)
 
+    overlay: RoleOverlay | None
     if role == "rca":
         if task == _DETECTION:
-            return _detection(alert, state, config=config, transport=transport)
-        if task in _CONTRACT_TASKS:
-            return RoleOverlay(
+            overlay = _detection(alert, state, config=config, transport=transport)
+        elif task in _CONTRACT_TASKS:
+            overlay = RoleOverlay(
                 system_suffix=render(_asset("rca_contract.txt"), {"TASK_TYPE": task})
             )
+        else:
+            return None
+    elif task != _MITIGATION:
         return None
-    if task != _MITIGATION:
-        return None
-    if role == "planning":
-        return RoleOverlay(system_suffix=_asset("remediation.txt"))
-    if role == "execution":
-        return RoleOverlay(
+    elif role == "planning":
+        overlay = RoleOverlay(system_suffix=_asset("remediation.txt"))
+    elif role == "execution":
+        overlay = RoleOverlay(
             system_suffix=f"{_asset('remediation.txt')}\n\n{_scope(alert, authority_mode)}"
         )
-    if role == "verify":
-        return _verify(alert, config=config)
-    return None
+    elif role == "verify":
+        overlay = _verify(alert, config=config)
+    else:
+        return None
+
+    guidance = _asset("kubectl_execution.txt" if role == "execution" else "kubectl_read_only.txt")
+    return replace(
+        overlay or RoleOverlay(),
+        prompt_blocks={"KUBECTL_GUIDANCE": guidance},
+        tool_descriptions={"exec_kubectl_cmd_safely": guidance},
+    )
 
 
 def _scope(alert: Mapping[str, Any], authority_mode: str) -> str:

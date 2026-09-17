@@ -113,6 +113,15 @@ def test_an_unknown_role_is_an_error_not_an_empty_toolset(tmp_path) -> None:
         build_toolset("not_a_role", context(tmp_path))
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [{"unknown_tool": "Description"}, {"exec_kubectl_cmd_safely": "   "}],
+)
+def test_invalid_description_overrides_are_refused(tmp_path, overrides) -> None:
+    with pytest.raises(toolsets.ToolRegistryError, match="description override"):
+        build_toolset("rca", context(tmp_path), description_overrides=overrides)
+
+
 # --- the allowlists against the prototype that measured them -----------------------
 
 PROTOTYPE_REGISTRY = prototype_root() / "agent" / "tools" / "registry.py"

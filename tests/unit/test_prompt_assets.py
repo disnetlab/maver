@@ -83,6 +83,15 @@ CARRIED_FROM_PROTOTYPE_CODE = {
 # rule because prompt text is a held-constant input, so a divergence is a decision
 # someone has to make and write down rather than a diff someone has to explain later.
 DELIBERATELY_DIVERGED = {
+    Path("adapters/aiopslab/remediation.txt"): (
+        "author-approved adapter correction: Planning reads; Execution may mutate"
+    ),
+    Path("adapters/aiopslab/kubectl_read_only.txt"): (
+        "adapter-owned prompt block and description matching bridge restrictions"
+    ),
+    Path("adapters/aiopslab/kubectl_execution.txt"): (
+        "adapter-owned prompt block and description permitting scoped remediation"
+    ),
     Path("roles/learning.txt"): (
         "prescribed a playbook layer this system does not have: the four playbook_* "
         "tools are not registered and the domain/human triggers are not shipped"

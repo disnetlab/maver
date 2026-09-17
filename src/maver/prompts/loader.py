@@ -324,6 +324,7 @@ def compose_role_prompt(
     retrieval_enabled: bool,
     override_dir: Path | None = None,
     kubectl_route: str = "tool",
+    block_overrides: Mapping[str, str] | None = None,
 ) -> str:
     """Build a role's system prompt from its template and the applicable blocks.
 
@@ -344,6 +345,8 @@ def compose_role_prompt(
             ``proxy_exec`` when the bound transport offers a proxy the roles run their
             own kubectl against, because the two routes prescribe opposite things about
             typing kubectl into the sandbox.
+        block_overrides: Environment replacements for recognized block markers. A
+            custom template may omit a known marker; that replacement is then unused.
 
     Returns:
         The fully rendered system prompt.
@@ -359,8 +362,13 @@ def compose_role_prompt(
             f"unknown kubectl route {kubectl_route!r}; "
             f"expected one of {sorted(_KUBECTL_ROUTE_BLOCKS)}"
         )
+    replacements = block_overrides or {}
+    if unknown := set(replacements) - FILLABLE_MARKERS:
+        raise PromptError(f"unknown prompt block override(s): {sorted(unknown)}")
     values = {
-        marker: _block_for(
+        marker: replacements[marker]
+        if marker in replacements
+        else _block_for(
             marker, role, retrieval_enabled=retrieval_enabled, kubectl_route=kubectl_route
         )
         for marker in markers(template)

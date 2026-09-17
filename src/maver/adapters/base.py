@@ -17,7 +17,7 @@ is banned from core imports by the ``TID251`` rule in ``pyproject.toml``.
 """
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from maver.contracts.state import IncidentState, TargetStage
@@ -166,7 +166,8 @@ class RoleOverlay:
     additive-or-restrictive by construction: ``drop_tools`` removes and only
     :meth:`EnvironmentAdapter.extra_tools` adds, ``max_turns`` is applied with ``min``,
     and a guard can refuse a submission but cannot write one, so the model still
-    produces the corrected artifact itself.
+    produces the corrected artifact itself. Prompt and description overrides change
+    presentation only; the toolset and runtime continue to enforce authority.
 
     Applied by the runner after the role has built its own configuration, so a role
     never learns why it was narrowed and no role carries a branch on which environment
@@ -186,6 +187,10 @@ class RoleOverlay:
     """A shorter turn budget. Applied as ``min``, so it can never lengthen one."""
     submit_guard: SubmitGuard | None = None
     """Consulted before the role's own guard. The first refusal is the one returned."""
+    prompt_blocks: Mapping[str, str] = field(default_factory=dict)
+    """Replace named blocks in the role template before composition; no capability change."""
+    tool_descriptions: Mapping[str, str] = field(default_factory=dict)
+    """Replace descriptions of resolved tools without changing schemas or dispatch."""
 
 
 @runtime_checkable

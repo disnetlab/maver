@@ -9,6 +9,22 @@ published comparisons, which are single-variable only while the schema does not 
 with the configuration. The procedure is in STYLE_GUIDE.md, "Typed artifacts are
 frozen".
 
+## AIOpsLab transport instructions and adapter wording overrides
+
+The 2026-09-17 mitigation record exposed conflicting instructions: the remediation
+suffix restricted kubectl to reads while Execution was tasked with mutations, and
+shared diagnostic guidance advertised `kubectl exec` that the bridge refuses.
+The adapter now explicitly permits Execution's scoped mutations and supplies
+consistent kubectl guidance and descriptions for RCA, Planning, Execution and
+Verify. It uses the generic `RoleOverlay.prompt_blocks` and `tool_descriptions`
+hooks; the core has no AIOpsLab branch. Completed workflow runs record effective
+description overrides in existing run metadata, independently of prompt digests.
+
+This intentionally changes subsequent AIOpsLab model inputs. Historical prompts,
+fixtures and the `f33ddc8` acceptance results retain their original meaning. Tool
+schemas, execution permissions, bridge enforcement and voluntary opening reads are
+unchanged. No live benchmark or deployment accompanies this correction.
+
 ## AIOpsLab complete structured reads
 
 Acceptance of revision `f33ddc8` exposed successful bridge responses cut to 10,013

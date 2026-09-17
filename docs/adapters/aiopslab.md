@@ -54,7 +54,21 @@ repair whose service and script are both allowlisted, and a verification-only
 `probe_service` that port-forwards one named Service and makes one HTTP request through
 it. Namespace-less reads are scoped to the active namespace, writes must name it, and
 generic `kubectl exec` is rejected because an in-container command cannot be proven
-read-only.
+read-only. This bridge refusal is expected transport enforcement; the general
+approval gate may approve an in-container command whose effects it cannot classify,
+while the bridge still refuses it.
+
+The adapter replaces the role's kubectl prompt block and tool description with the
+same transport guidance. RCA, Planning and Verify receive read-only instructions;
+Execution is explicitly allowed to apply planned, scoped mutations through the
+runtime's authorization path. Generic `kubectl exec`, shell command chains and
+kubectl through local sandbox tools remain unsupported. The dedicated MongoDB
+recovery tool is still the only supported in-container repair for its allowlisted
+faults. Execution's read-before-write behavior and approval policy are unchanged.
+
+These instructions correct contradictions found in the saved mitigation record;
+the `f33ddc8` acceptance row predates them. No new live acceptance run has been
+performed for this prompt change.
 
 ## Start the agent
 

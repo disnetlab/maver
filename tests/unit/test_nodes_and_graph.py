@@ -41,6 +41,7 @@ def deps(recorder: Recorder, sink: ListSink) -> IncidentDeps:
             run_label="",
             run_state=None,
             agent_state=None,
+            overlay=None,
         )
 
     return IncidentDeps(

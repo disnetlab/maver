@@ -57,6 +57,8 @@ COMPARED = tuple(
             test_toolsets.PROTOTYPE_REGISTRY,
             test_projections.PROTOTYPE,
             test_kubectl_proxy.PROTOTYPE_SHIM,
+            # The mitigation regression rejects this historical contradictory suffix.
+            ROOT / "agent/prompts/runtime/aiopslab/remediation.txt",
         }
         | _prompt_assets()
     )
