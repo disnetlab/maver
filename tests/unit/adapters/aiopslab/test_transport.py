@@ -174,7 +174,12 @@ async def test_an_alert_payload_is_re_encoded_so_the_partitioning_can_read_it() 
     does — returns to the model unparsed, unscoped and unlabelled, with nothing to say
     another namespace's incident is in it."""
     alerts = [
-        {"labels": {"alertname": "PodCrashLooping"}, "value": None, "state": "firing"},
+        {
+            "labels": {"alertname": "PodCrashLooping"},
+            "value": None,
+            "state": "firing",
+            "annotations": {"description": "x" * 12_000},
+        },
         {"labels": {"alertname": "HighLatency"}, "silenced": True, "state": "firing"},
     ]
     with respx.mock(assert_all_called=False) as router:
@@ -187,9 +192,7 @@ async def test_an_alert_payload_is_re_encoded_so_the_partitioning_can_read_it() 
 
 
 async def test_a_kubectl_read_is_returned_exactly_as_the_command_wrote_it() -> None:
-    """Two consumers parse this text as JSON. Re-encoding it as a Python literal would
-    make the namespace snapshot and the trace scoping's inventory unreadable, and both
-    report that as an empty namespace rather than as a failure."""
+    """Snapshot JSON must retain its encoding for internal parsing."""
     payload = json.dumps({"items": [{"metadata": {"name": "user", "enabled": True}}]})
     with respx.mock(assert_all_called=False) as router:
         router.post(ACTION).mock(
@@ -198,18 +201,30 @@ async def test_a_kubectl_read_is_returned_exactly_as_the_command_wrote_it() -> N
         assert await transport().kubectl(["get", "svc", "-o", "json"]) == payload
 
 
-async def test_an_oversized_answer_is_cut_where_the_measured_transport_cuts_it() -> None:
-    """The SREGym servers bound every response at ten thousand characters and append a
-    marker. Carrying the same bound here is what keeps a role reading results of one
-    size whichever environment it is bound to; a role that could ask this bridge for an
-    unbounded read would behave differently under the two."""
+async def test_an_ordinary_bridge_action_keeps_its_display_bound() -> None:
+    """Unstructured direct actions retain their existing display bound."""
     with respx.mock(assert_all_called=False) as router:
         router.post(ACTION).mock(
             return_value=httpx.Response(200, json={"ok": True, "result": "x" * 12_000})
         )
-        answer = await transport().kubectl(["get", "events"])
+        answer = await transport().action(
+            "kubectl", "exec_kubectl_cmd_safely", {"cmd": "kubectl get events"}
+        )
 
     assert answer == "x" * 10_000 + "… [truncated]"
+
+
+@pytest.mark.parametrize("status", [200, 400])
+async def test_kubectl_failures_keep_the_bound_even_when_success_output_is_complete(
+    status: int,
+) -> None:
+    with respx.mock as router:
+        router.post(ACTION).mock(
+            return_value=httpx.Response(status, json={"ok": False, "result": "E" * 12_000})
+        )
+        answer = await transport().kubectl(["get", "pods"])
+
+    assert answer == "error: " + "E" * 10_000 + "… [truncated]"
 
 
 async def test_every_call_opens_and_closes_its_own_client(monkeypatch: pytest.MonkeyPatch) -> None:

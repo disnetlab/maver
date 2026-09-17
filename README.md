@@ -182,8 +182,10 @@ reverses: a driver runs inside the benchmark's own interpreter, holds the cluste
 kubeconfig that the agent container is deliberately not given, and lets the agent reach
 the cluster only through a token-scoped loopback bridge that re-screens every action.
 `docs/adapters/aiopslab.md` covers deploying the agent, running one problem, and running
-a resumable sweep. That adapter has not yet been run against a live AIOpsLab host from
-this repository; no result is claimed for it.
+a resumable sweep. A [four-case Lab-1 acceptance run](docs/adapters/aiopslab-acceptance-20260917.md)
+completed at revision `f33ddc8`: detection, localization and mitigation passed; analysis
+failed its system-level classification. This is adapter acceptance evidence, not a
+comparative benchmark result.
 
 `STYLE_GUIDE.md` carries the conventions a linter cannot express: the layer boundaries,
 the tool-allowlist rule, the write-gate invariant, the artifact-schema freeze, and the

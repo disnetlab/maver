@@ -21,16 +21,14 @@ connection held across an episode dies part-way through it and every later call 
 contiguously, silently, after the diagnosis has been graded and while the remediation is
 being attempted. A connection setup is nothing beside a model turn.
 
-**One rendering boundary.** :meth:`AiopsLabTransport.action` is the only place a bridge
-answer becomes the string a role reads, so the bound on its size and the encoding of a
-structured payload are applied once rather than per method. The bound is the SREGym MCP
-servers' ~10,000 characters, and the encoding is the Python ``repr`` those servers
-produce, because the consumers above are written against exactly that: the alert
-partitioning parses its input with ``ast.literal_eval`` alone, so a JSON payload
-carrying ``true`` or ``null`` returns to the model unpartitioned, unscoped, and with
-nothing to say it happened. The prototype's bridge returned compact JSON and its MCP
-path returned a ``repr`` for the same cluster state, which is the divergence this
-removes.
+**Rendering and complete cluster reads.** :meth:`AiopsLabTransport.action` applies the
+shared action bound and re-encodes structured telemetry as the Python ``repr`` its
+consumers parse. Alert partitioning uses ``ast.literal_eval``, so leaving JSON ``true``
+or ``null`` in the answer would bypass partitioning. Successful kubectl and structured telemetry results are
+returned complete: snapshots parse resource JSON and telemetry tools enforce namespace
+scope before any model sees it. The tools apply their display bound and save full
+scoped output in the session workspace. Cutting these reads at the action bound destroys the JSON and also
+prevents ``save_as`` from saving the complete result.
 """
 
 import json
@@ -60,13 +58,10 @@ a timestamp join mis-mapped five sessions of six in one measured case.
 
 _RESPONSE_LIMIT = 10_000
 _TRUNCATION_MARKER = "… [truncated]"
-"""The bound the SREGym MCP servers impose on every response, applied here so a role
-reads results of one size whichever environment it is bound to.
+"""The existing display bound for bridge actions and errors.
 
-It is harmless for text and destructive for structured output, since a truncated payload
-no longer parses and the caller is told nothing. That is a property of the measured
-configuration rather than a defect this transport invents: the same bound is on every
-SREGym result the prompts were written against.
+Successful kubectl and structured telemetry bypass it so internal consumers can parse
+and scope complete results. Model-facing tools own display truncation and saving.
 """
 
 _TRACE_TOOL: dict[str, str] = {
@@ -195,10 +190,15 @@ class AiopsLabTransport:
             argv: The arguments, without a leading ``kubectl``.
 
         Returns:
-            The command's output, or a string beginning with ``error:``.
+            The complete successful command output, or a bounded failure beginning
+            with ``error:``. Internal consumers parse the result; the kubectl tool
+            applies display limits after saving the full output.
         """
         return await self.action(
-            "kubectl", "exec_kubectl_cmd_safely", {"cmd": join(["kubectl", *argv])}
+            "kubectl",
+            "exec_kubectl_cmd_safely",
+            {"cmd": join(["kubectl", *argv])},
+            bounded=False,
         )
 
     async def rollbackable_commands(self) -> str:
@@ -303,6 +303,7 @@ class AiopsLabTransport:
         structured: bool = False,
         select: str | None = None,
         stage: str | None = None,
+        bounded: bool = True,
     ) -> str:
         """POST one bridge action and render its answer.
 
@@ -327,6 +328,9 @@ class AiopsLabTransport:
                 the bound: cutting the envelope first leaves nothing that parses.
             stage: The calling role, when the caller knows it better than this
                 transport does.
+            bounded: Apply the action display limit to unstructured results. Kubectl
+                disables it for internal parsing and complete workspace saves. Structured
+                telemetry also stays complete; failures always keep the limit.
 
         Returns:
             The bridge's text, or the failure as a model-facing string.
@@ -349,7 +353,12 @@ class AiopsLabTransport:
             body = _body(response)
             if not isinstance(body, dict):
                 return tool_error("AIOpsLab bridge returned a non-object response")
-            result = _bounded(str(body.get("result", "")), structured=structured, select=select)
+            result = _render_output(
+                str(body.get("result", "")),
+                structured=structured,
+                select=select,
+                bounded=(bounded and not structured) or not body.get("ok", False),
+            )
             if not body.get("ok", False):
                 return tool_error(result or "AIOpsLab bridge action failed")
             return result or "(empty AIOpsLab bridge response)"
@@ -392,20 +401,22 @@ def _body(response: httpx.Response) -> Any:
     return body
 
 
-def _bounded(result: str, *, structured: bool, select: str | None = None) -> str:
-    """Render one answer as the model reads it: encoded, then bounded.
+def _render_output(
+    result: str, *, structured: bool, select: str | None = None, bounded: bool = True
+) -> str:
+    """Encode one answer, then apply its display bound when requested.
 
     Args:
         result: The bridge's text.
         structured: Whether it is a telemetry payload a consumer above parses.
         select: The key to lift out of the payload's envelope, when it has one.
+        bounded: Whether to apply the shared action display limit.
 
     Returns:
-        The text, re-encoded when it is a structured payload and cut at the shared
-        bound.
+        The text, re-encoded for structured telemetry and bounded when requested.
     """
     text = _as_literal(result, select) if structured else result
-    if len(text) <= _RESPONSE_LIMIT:
+    if not bounded or len(text) <= _RESPONSE_LIMIT:
         return text
     return text[:_RESPONSE_LIMIT] + _TRUNCATION_MARKER
 

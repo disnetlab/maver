@@ -3,11 +3,13 @@
 MAVER runs its own pipeline against [AIOpsLab](https://github.com/microsoft/AIOpsLab)
 without putting AIOpsLab's admin kubeconfig inside the agent container.
 
-**This adapter has not yet been run against a live AIOpsLab host from this repository.**
-Everything below is exercised by unit tests on a laptop, and the end-to-end acceptance
-(`refactor/12-AIOPSLAB.md` §C, one problem of each task type on the Lab-1 host) is
-pending. What has been run end to end is the research prototype it was carried from; a
-number produced there is not a number produced by this code.
+A four-case acceptance run on Lab-1 completed on 2026-09-17 at revision
+`f33ddc8`: detection, localization and mitigation passed; analysis received a failing
+grade. This validates live task plumbing and an audited mitigation write path for
+that revision, not comparative effectiveness. The run exposed premature truncation
+of large Kubernetes and trace responses; the correction below has a separate live
+read-only check. See [the acceptance record](aiopslab-acceptance-20260917.md) for
+configuration, evidence, failure analysis and coverage limits.
 
 ## Two processes, opposite directions
 
@@ -111,6 +113,18 @@ Do not carry the prototype's `agent.env` across wholesale. It set
 AIOpsLab run had the RCA configuration snapshot on; MAVER honours that name as an alias,
 which would switch the snapshot off and make a new sweep incomparable with the archive.
 The deploy script names `MAVER_PIPELINE__AUTO_SNAPSHOT=true` for that reason.
+
+## Complete structured reads
+
+Successful Kubernetes and structured telemetry responses remain complete inside the
+transport. Snapshot parsing and telemetry namespace filtering run before model-facing
+tools apply their 16,384-character display limit. Full scoped results are saved to the
+session workspace; `save_as` also retains the complete kubectl output. Direct
+unstructured bridge actions and error messages retain their 10,000-character bound.
+
+This corrects the premature truncation observed during the first live acceptance run.
+It changes the observations available in subsequent runs; the original grades are
+retained under their tested revision.
 
 ## Verify hand-back cap and current behavior
 

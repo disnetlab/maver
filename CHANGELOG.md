@@ -9,6 +9,21 @@ published comparisons, which are single-variable only while the schema does not 
 with the configuration. The procedure is in STYLE_GUIDE.md, "Typed artifacts are
 frozen".
 
+## AIOpsLab complete structured reads
+
+Acceptance of revision `f33ddc8` exposed successful bridge responses cut to 10,013
+characters before namespace snapshots and trace tools could parse them.
+The AIOpsLab transport now returns complete successful kubectl and structured
+telemetry output. Tools parse and scope those results before applying their shared
+16,384-character display limit and saving full scoped output to the session workspace.
+Kubectl also preserves complete explicit `save_as` results. Unstructured direct bridge
+actions and bridge failures retain their 10,000-character bound.
+
+This changes observations in subsequent AIOpsLab runs: snapshots can inspect large
+resource lists and agents can read complete saved results. Earlier acceptance results
+retain the original behavior; they are not parity evidence for the corrected adapter.
+No prompts, artifact schemas, namespace restrictions or write authority change.
+
 ## Execution scope and bounded Verify hand-backs
 
 Migrate prototype revisions `cb1ed3b6462feaa090c4c7b3c273753c7aece20b`

@@ -107,8 +107,8 @@ METRIC_DATA = {
     "result": [{"metric": {"__name__": "up", "namespace": NAMESPACE}, "value": [1.0, "1"]}],
 }
 
-# Longer than the transport's bound, so the marker and the cut are observed rather than
-# assumed. `get events` is the shape that produced them in the archived runs.
+# Longer than the old transport bound, so complete kubectl output is checked across
+# both bridge and client. The model-facing tool owns truncation and workspace saving.
 OVERSIZED = "E" * 12_000
 
 _KUBECTL_STUB = '''#!/usr/bin/env python3
@@ -311,13 +311,13 @@ async def test_a_pod_inventory_survives_the_round_trip_for_the_parser_that_reads
     ]
 
 
-async def test_an_oversized_answer_is_cut_with_the_marker_the_prompts_were_written_against(
+async def test_oversized_kubectl_output_survives_the_bridge_and_transport(
     wire: Wire,
 ) -> None:
     with wire() as transport:
         answer = await transport.kubectl(["get", "events"])
 
-    assert answer == "E" * 10_000 + "… [truncated]"
+    assert answer == OVERSIZED
 
 
 async def test_an_incident_namespace_the_bridge_does_not_serve_is_refused_in_its_words(
