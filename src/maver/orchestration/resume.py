@@ -32,7 +32,7 @@ from maver.contracts.artifacts import (
     SingleResult,
     VerifyResult,
 )
-from maver.contracts.events import PolicyDecisionEvent, ToolCallEvent
+from maver.contracts.events import PolicyDecisionEvent
 from maver.contracts.lifecycle import RunStatus
 from maver.contracts.runtime import RunState
 from maver.contracts.state import IncidentState, TargetStage
@@ -340,22 +340,12 @@ def stored_state(record: SessionRecord, *, target_stage: TargetStage = "full") -
 
 
 def resume_events(
-    checkpoint: ApprovalCheckpoint, record: ApprovalRecord, *, result_chars: int
-) -> list[Any]:
-    """Build the audit entries a continuation owes its log.
+    checkpoint: ApprovalCheckpoint, record: ApprovalRecord
+) -> list[PolicyDecisionEvent]:
+    """Record the operator's decision before replaying its call.
 
-    Both, always. The decision says what a person answered, and the call event says what
-    the run then did with it — a log carrying only the first cannot distinguish an
-    approval that was replayed from one that was never acted on. Both name the call, so
-    they join to the position in the stored transcript that the operator was shown.
-
-    Args:
-        checkpoint: What was written at the pause.
-        record: The decided request.
-        result_chars: How much the replayed call returned.
-
-    Returns:
-        The events, in the order they should be written.
+    Replay separately records the actual tool attempt. An approval establishes
+    permission; only the returned result establishes whether the action succeeded.
     """
     return [
         PolicyDecisionEvent(
@@ -366,14 +356,6 @@ def resume_events(
             reason=record.reason or "",
             request_id=record.request_id,
             decided_by=record.decided_by,
-        ),
-        ToolCallEvent(
-            tool=checkpoint.tool_name,
-            call_id=checkpoint.tool_call_id,
-            arguments=dict(checkpoint.tool_arguments),
-            rationale="replayed after an operator decision",
-            succeeded=record.status == "approved",
-            result_chars=result_chars,
         ),
     ]
 

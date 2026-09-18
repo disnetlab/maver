@@ -18,6 +18,8 @@ import os
 import re
 from pathlib import Path
 
+from maver.tools.auditing import capture_output
+
 __all__ = ["SessionWorkspace"]
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
@@ -87,6 +89,7 @@ class SessionWorkspace:
             What the model should see.
         """
         if len(content) <= limit:
+            capture_output(content, label=tool_name)
             return content
         body, ext = _normalise_for_file(content)
         while True:
@@ -98,10 +101,12 @@ class SessionWorkspace:
             except FileExistsError:
                 continue
         hint = " (valid JSON — json.load it)" if ext == "json" else ""
-        return (
+        shown = (
             content[:limit] + f"\n\n[Output truncated ({len(content)} chars). "
             f"Full output saved to tool_outputs/{name}{hint}]"
         )
+        capture_output(content, label=tool_name, path=f"tool_outputs/{name}", truncated=True)
+        return shown
 
     def save_named_output(self, content: str, name: str, head_limit: int = 1500) -> str:
         """Write a result to a file the model named, and return a head plus the path.
@@ -127,11 +132,13 @@ class SessionWorkspace:
             if len(content) <= head_limit
             else f"\n[... {len(content) - head_limit} more chars in file]"
         )
-        return (
+        shown = (
             f"[Saved {len(content)} chars to {rel}. Read/process it with code_exec "
             f"(your current directory) or bash_exec — do NOT run kubectl inside them.]\n"
             f"--- head of {rel} ---\n{content[:head_limit]}{more}"
         )
+        capture_output(content, label="named_output", path=rel, truncated=len(content) > head_limit)
+        return shown
 
     def subprocess_env(self) -> dict[str, str]:
         """Build a restricted environment for a sandbox subprocess.

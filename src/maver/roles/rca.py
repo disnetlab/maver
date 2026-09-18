@@ -19,11 +19,9 @@ incident is still answered downstream.
 """
 
 import logging
-import time
 from typing import Any
 
 from maver.contracts.artifacts import RootCause
-from maver.contracts.events import ToolCallEvent
 from maver.llm.types import Message
 from maver.prompts.loader import compose_role_prompt, read_runtime, render
 from maver.roles.base import RoleContext, RoleOutcome, RoleSpec
@@ -44,6 +42,7 @@ from maver.roles.prompting import (
     retrieval_enabled,
 )
 from maver.roles.registry import role
+from maver.tools.auditing import observe_tool
 from maver.tools.snapshot import namespace_snapshot
 
 __all__ = ["RCA", "build_initial_message"]
@@ -81,24 +80,6 @@ def _task_block(ctx: RoleContext, *, reassessing: bool) -> str:
     return render(read_runtime("rca", "incident_task.txt"), {"ALERT_JSON": alert_json(alert)})
 
 
-def _record_snapshot_failure(ctx: RoleContext, namespace: str, *, chars: int, ms: int) -> None:
-    """Record a snapshot that produced nothing, so its absence is visible in the log.
-
-    The prototype swallowed every failure and returned an empty block, which is how the
-    snapshot came to be missing from roughly 93% of runs with nobody noticing. The event
-    has no field for the reason, so that goes to the log; the event carries the fact.
-    """
-    ctx.journal.record(
-        ToolCallEvent(
-            tool=_SNAPSHOT_TOOL,
-            arguments={"namespace": namespace},
-            succeeded=False,
-            result_chars=chars,
-            duration_ms=ms,
-        )
-    )
-
-
 async def _snapshot_block(ctx: RoleContext) -> str:
     """Auto-collected namespace snapshot prepended to the RCA task.
 
@@ -114,22 +95,18 @@ async def _snapshot_block(ctx: RoleContext) -> str:
     if not namespace:
         return ""
 
-    started = time.perf_counter()
     try:
-        snapshot = await namespace_snapshot(ctx.tool_context, namespace)
+        snapshot = await observe_tool(
+            ctx.tool_context, _SNAPSHOT_TOOL, {"namespace": namespace}, namespace_snapshot
+        )
     except Exception as exc:  # never let snapshotting break the diagnosis
         _log.warning("namespace snapshot failed for ns=%s: %s", namespace, exc, exc_info=exc)
-        _record_snapshot_failure(
-            ctx, namespace, chars=0, ms=round((time.perf_counter() - started) * 1000)
-        )
         return ""
-    elapsed_ms = round((time.perf_counter() - started) * 1000)
 
     if not snapshot or snapshot.startswith("error:"):
         _log.warning(
             "namespace snapshot returned nothing usable for ns=%s: %s", namespace, snapshot
         )
-        _record_snapshot_failure(ctx, namespace, chars=len(snapshot), ms=elapsed_ms)
         return ""
     return render(read_runtime("rca", "namespace_snapshot.txt"), {"SNAPSHOT": snapshot})
 

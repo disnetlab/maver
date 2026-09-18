@@ -93,6 +93,7 @@ from maver.secondpass.types import (
 from maver.settings.authority import Mode
 from maver.settings.profiles import ModelProfile
 from maver.settings.root import Settings
+from maver.tools.auditing import ToolCallRecorder, observe_tool
 from maver.tools.context import EvidencePolicy, NullEvidencePolicy, ToolContext
 from maver.tools.scope import IncidentScope
 from maver.tools.snapshot import namespace_snapshot
@@ -502,7 +503,11 @@ def _second_pass_node(
             if not namespace:
                 return ""
             try:
-                return str(await namespace_snapshot(tools, namespace))
+                return str(
+                    await observe_tool(
+                        tools, "namespace_snapshot", {"namespace": namespace}, namespace_snapshot
+                    )
+                )
             except Exception:  # a missing snapshot narrows the query, it does not fail it
                 _log.warning("snapshot for the pre-anchor query could not be collected")
                 return ""
@@ -1153,9 +1158,9 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
                     pipeline=pipeline,
                 )(definition.spec, state, None, runtime.active_agent or checkpoint.run_id)
                 tools = replay_context.tool_context
-            content = await _replay(checkpoint, record, tools, deployment, journal, replay_context)
-            for event in resume_events(checkpoint, record, result_chars=len(content)):
+            for event in resume_events(checkpoint, record):
                 journal.record(event)
+            content = await _replay(checkpoint, record, tools, deployment, journal, replay_context)
 
             # Everything but the decided call, which the replay above answers. A turn that
             # paused part-way through its calls leaves the ones it never reached issued and
@@ -1256,6 +1261,32 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
 
 
 async def _replay(
+    checkpoint: ApprovalCheckpoint,
+    record: ApprovalRecord,
+    tools: ToolContext,
+    deployment: Deployment,
+    journal: Journal,
+    context: RoleContext | None = None,
+) -> str:
+    """Record what the decided call actually returned, independently of its approval."""
+    recorder = ToolCallRecorder(
+        tools.journal,
+        checkpoint.tool_name,
+        dict(checkpoint.tool_arguments),
+        call_id=checkpoint.tool_call_id,
+        rationale="replayed after an operator decision",
+    )
+    with recorder.active():
+        try:
+            content = await _replay_inner(checkpoint, record, tools, deployment, journal, context)
+        except ApprovalPending:
+            recorder.finish("", status="paused")
+            raise
+        recorder.finish(content, status="refused" if record.status != "approved" else None)
+        return content
+
+
+async def _replay_inner(
     checkpoint: ApprovalCheckpoint,
     record: ApprovalRecord,
     tools: ToolContext,

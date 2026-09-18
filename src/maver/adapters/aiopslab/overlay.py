@@ -26,9 +26,11 @@ from typing import Any
 
 from maver.adapters.aiopslab.config import AiopsLabConfig
 from maver.adapters.base import RoleOverlay, SubmitGuard
+from maver.audit.context import current_journal
 from maver.audit.journal import Journal
 from maver.contracts.state import IncidentState
 from maver.prompts.loader import read_asset, render
+from maver.tools.auditing import observe_tool
 from maver.tools.context import ToolContext
 from maver.tools.scope import IncidentScope
 from maver.tools.snapshot import namespace_snapshot
@@ -304,10 +306,12 @@ async def _live_snapshot(
         workspace=SessionWorkspace(workdir),
         role="rca",
         session_id=session_id,
-        journal=Journal(session_id=session_id, stage="rca"),
+        journal=current_journal() or Journal(session_id=session_id, stage="rca"),
         # The boundary line the guard reads exists only when the scope carries the
         # incident's observation window and names the namespace being snapshotted.
         scope=IncidentScope.from_alert(alert),
     )
-    rendered: str = await namespace_snapshot(context, namespace)
+    rendered: str = await observe_tool(
+        context, "namespace_snapshot", {"namespace": namespace}, namespace_snapshot
+    )
     return rendered

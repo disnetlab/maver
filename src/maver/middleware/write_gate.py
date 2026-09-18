@@ -15,6 +15,7 @@ import logging
 from collections.abc import Mapping
 from typing import Any, Literal
 
+from maver.audit.context import current_call
 from maver.audit.journal import Journal
 from maver.contracts.events import PolicyDecisionEvent
 from maver.llm.types import ToolResult
@@ -90,6 +91,14 @@ class WriteGate:
 
     @staticmethod
     def _refuse(request: ToolRequest, text: str) -> ToolResult:
+        call = current_call()
+        if (
+            call is not None
+            and call.session_id == request.session_id
+            and call.call_id == request.call_id
+            and call.tool == request.name
+        ):
+            call.observation.status = "refused"
         return ToolResult(tool_call_id=request.call_id, name=request.name, content=text)
 
     def _may_write(self, policy: ToolPolicy, stage: str) -> bool:

@@ -25,6 +25,7 @@ model's own submitted evidence. The verdict, guards and artifact schema remain a
 
 import logging
 import re
+from dataclasses import asdict
 from typing import Any, cast
 
 from maver.contracts.artifacts import VerifyResult
@@ -42,6 +43,8 @@ from maver.roles.prompting import (
     retrieval_enabled,
 )
 from maver.roles.registry import role
+from maver.tools.auditing import observe_tool
+from maver.tools.context import ToolContext
 
 __all__ = ["VERIFY"]
 
@@ -206,6 +209,16 @@ def _initial_message(ctx: RoleContext, gate: HealthGate) -> str:
     return f"{body}\n\n{gate.context_text()}" if gate.checked else body
 
 
+async def _observed_health_sweep(ctx: ToolContext, namespace: str) -> HealthGate:
+    """Retain the complete computed finding alongside the underlying read evidence."""
+    gate = await sweep_namespace_health(ctx, namespace)
+    if ctx.observation is not None:
+        ctx.observation.output_artifacts.append(ctx.journal.capture("health_gate", asdict(gate)))
+        if gate.error or gate.unavailable:
+            ctx.observation.incomplete = True
+    return gate
+
+
 async def _run(ctx: RoleContext) -> RoleOutcome:
     # Swept before the model sees anything, so the namespace's real state is established
     # independently of any causal chain rather than through one.
@@ -213,7 +226,12 @@ async def _run(ctx: RoleContext) -> RoleOutcome:
     if ctx.settings.verify.health_gate:
         namespace = str((ctx.state.get("alert") or {}).get("namespace") or "").strip()
         if namespace:
-            gate = await sweep_namespace_health(ctx.tool_context, namespace)
+            gate = await observe_tool(
+                ctx.tool_context,
+                "sweep_namespace_health",
+                {"namespace": namespace},
+                _observed_health_sweep,
+            )
 
     initial: list[Message] = [
         {"role": "user", "content": overlay_context(_initial_message(ctx, gate), ctx.overlay)}

@@ -9,6 +9,23 @@ published comparisons, which are single-variable only while the schema does not 
 with the configuration. The procedure is in STYLE_GUIDE.md, "Typed artifacts are
 frozen".
 
+## Complete tool invocation observations
+
+Normal tool dispatch, automatic namespace snapshots, Verify health sweeps and approval
+replay now record measured started/terminal attempts with full private backend and
+result artifacts. The same invocation identity links nested reads to the model call
+and bridge request. Workspace previews retain their existing presentation while the
+audit keeps the complete filtered result and its pre-presentation failure status.
+HITL refusals are explicitly marked refused, and an approved replay is graded by its
+actual result rather than by the approval decision. Loop stage/submission events carry
+a source label so workflow and role-loop observations can be counted separately.
+
+This changes audit observations, not authority decisions, tool schemas, prompts or
+execution arguments. The transport observer delegates through the existing protocol;
+custom tools relying on a concrete transport type should use that protocol instead.
+Older evidence cannot recover measurements that were never recorded. Submission
+artifact schemas and audit schema version 4 are unchanged.
+
 ## Audit schema version 4 and honest telemetry coverage
 
 The 2026-09-17 acceptance records exposed unknown tool measurements represented as

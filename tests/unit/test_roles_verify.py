@@ -262,6 +262,27 @@ async def test_a_recovered_verdict_the_spent_guard_never_saw_is_recorded_as_one(
         read_runtime("verify", "submit_while_unhealthy.txt"), {"FAILURES": f"  - {UNHEALTHY_POD}"}
     )
     assert submit_results(model) == [f"error: {expected}"] * 2
+    (started,) = [
+        e.payload
+        for e in sink.events
+        if e.payload.kind == "tool_call_started" and e.payload.tool == "sweep_namespace_health"
+    ]
+    (sweep,) = [
+        e.payload
+        for e in sink.events
+        if e.payload.kind == "tool_call" and e.payload.tool == "sweep_namespace_health"
+    ]
+    assert sweep.invocation_id == started.invocation_id
+    # Finding an unhealthy pod is a completed observation, not a failed read.
+    assert sweep.status == "completed" and sweep.succeeded
+    assert sweep.transport == "fake"
+    assert sweep.call_id is None
+    raw = [
+        ref["inline"] for ref in sweep.output_artifacts if ref["kind"] == "transport_observation"
+    ]
+    assert raw[0]["result"] == UNHEALTHY_NAMESPACE
+    (finding,) = [ref["inline"] for ref in sweep.output_artifacts if ref["kind"] == "health_gate"]
+    assert finding["failures"] == [UNHEALTHY_POD]
 
 
 def test_a_gate_that_could_not_look_does_not_block_recovery() -> None:
@@ -492,3 +513,21 @@ def test_normalizer_uses_the_latest_success_and_bounds_the_models_own_evidence()
     }
     args, _ = verify._normalize_verify_submit_args(evidence, messages)
     assert args["replan_reason"] == "a" * 1800
+
+
+async def test_an_unavailable_automatic_health_sweep_is_not_recorded_as_healthy(
+    tmp_path: pathlib.Path,
+) -> None:
+    sink = ListSink()
+    ctx, model = context(tmp_path, health_gate=True, sink=sink)
+    outcome = await verify.VERIFY.run(ctx)
+    (sweep,) = [
+        e.payload
+        for e in sink.events
+        if e.payload.kind == "tool_call" and e.payload.tool == "sweep_namespace_health"
+    ]
+    assert sweep.status == "incomplete" and not sweep.succeeded
+    assert sweep.incomplete and sweep.unavailable
+    assert sweep.output_artifacts[0]["inline"]["result"] == "no resources found"
+    assert outcome.artifact is not None and outcome.artifact.recovered
+    assert "Namespace health" not in model.requests[0].messages[0]["content"]

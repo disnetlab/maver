@@ -25,7 +25,7 @@ from typing import Any
 
 from maver.adapters.base import SubmitGuard
 from maver.audit.journal import Journal
-from maver.contracts.events import InterventionEvent, StageEvent, SubmissionEvent, ToolCallEvent
+from maver.contracts.events import InterventionEvent, StageEvent, SubmissionEvent
 from maver.llm.client import carry_reasoning_forward, serialise_assistant
 from maver.llm.sampling import is_token_limit_finish
 from maver.llm.types import (
@@ -54,7 +54,8 @@ from maver.roles.policy import (
     repair_submission,
     repeat_breaker_message,
 )
-from maver.tools.errors import call_failed, call_timed_out
+from maver.tools.auditing import ToolCallRecorder
+from maver.tools.errors import call_timed_out
 from maver.tools.registry import RETRIEVAL_PROVENANCE, ToolOutput
 
 __all__ = [
@@ -361,7 +362,7 @@ async def run_until_submit(
     submit_only = [t for t in tools if t.name == submit_tool]
     repeats = RepeatedCallTracker(limits)
 
-    log.record(StageEvent(stage=role, event="entered"))
+    log.record(StageEvent(source="role_loop", stage=role, event="entered"))
 
     def finish(
         status: str,
@@ -372,6 +373,7 @@ async def run_until_submit(
     ) -> LoopResult:
         log.record(
             StageEvent(
+                source="role_loop",
                 stage=role,
                 event="exited" if status == "submitted" else "failed",
                 detail=reason or status,
@@ -644,6 +646,24 @@ async def run_until_submit(
         submit_calls = [c for c in response.tool_calls if c.name == submit_tool]
 
         async def execute(call_: ToolCall) -> ToolResult:
+            """Record the attempt around the existing middleware and dispatch path."""
+            arguments = {
+                key: value for key, value in call_.arguments.items() if key != RATIONALE_ARG
+            }
+            recorder = ToolCallRecorder(
+                log, call_.name, arguments, call_.id, call_.arguments.get(RATIONALE_ARG)
+            )
+            with recorder.active():
+                try:
+                    result = await execute_inner(call_)
+                except ApprovalPending as pending:
+                    recorder.finish("", status="paused", error=str(pending))
+                    raise
+                recorder.observation.retrieval = result.metadata.get(RETRIEVAL_PROVENANCE, [])
+                recorder.finish(result.content)
+                return result
+
+        async def execute_inner(call_: ToolCall) -> ToolResult:
             """Dispatch one tool call through the hook stack."""
             if call_.parse_error:
                 return ToolResult(
@@ -698,17 +718,6 @@ async def run_until_submit(
                 # where it stopped rather than from its opening turn.
                 pending.messages = list(state.transcript)
                 raise
-            log.record(
-                ToolCallEvent(
-                    tool=call_.name,
-                    call_id=call_.id,
-                    arguments=arguments,
-                    rationale=call_.arguments.get(RATIONALE_ARG),
-                    succeeded=not call_failed(result.content),
-                    result_chars=len(result.content),
-                    retrieval=result.metadata.get(RETRIEVAL_PROVENANCE, []),
-                )
-            )
             if call_timed_out(result.content):
                 # A bound the harness imposed and enforced, which the tool-call event
                 # records only as a failure like any other. Grouping interventions by
@@ -785,6 +794,7 @@ async def run_until_submit(
                 state.mixed_rejections += 1
                 log.record(
                     SubmissionEvent(
+                        source="role_loop",
                         artifact=c.name,
                         accepted=False,
                         attempt=state.mixed_rejections,
@@ -811,6 +821,7 @@ async def run_until_submit(
                 )
                 log.record(
                     SubmissionEvent(
+                        source="role_loop",
                         artifact=call_.name,
                         accepted=False,
                         attempt=state.submit_rejections,
@@ -865,6 +876,7 @@ async def run_until_submit(
                         _hand_back(state, call_, str(verdict), note=is_note, rescue=handed_back)
                         log.record(
                             SubmissionEvent(
+                                source="role_loop",
                                 artifact=call_.name,
                                 accepted=False,
                                 attempt=state.guard_rejections,
@@ -880,6 +892,7 @@ async def run_until_submit(
             if repairs:
                 log.record(
                     SubmissionEvent(
+                        source="role_loop",
                         artifact=call_.name,
                         accepted=True,
                         attempt=state.submit_rejections + 1,
@@ -901,6 +914,7 @@ async def run_until_submit(
                     )
                     log.record(
                         SubmissionEvent(
+                            source="role_loop",
                             artifact=call_.name,
                             accepted=False,
                             attempt=state.submit_rejections,
@@ -921,7 +935,10 @@ async def run_until_submit(
             )
             log.record(
                 SubmissionEvent(
-                    artifact=call_.name, accepted=True, attempt=state.submit_rejections + 1
+                    source="role_loop",
+                    artifact=call_.name,
+                    accepted=True,
+                    attempt=state.submit_rejections + 1,
                 )
             )
             return finish("submitted", submission=arguments)

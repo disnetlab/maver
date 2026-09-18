@@ -47,9 +47,13 @@ contain unfinished calls. Abrupt process termination can leave a started-only ca
   failure, including failures to persist the normal runtime projection.
 - Tool event schema 4 supports invocation IDs, measured duration, transport, full
   result references, truncation and incomplete-observation details. These fields are
-  optional: legacy or uninstrumented producers cannot supply them. Current generic
-  dispatch still lacks the full observation wrapper, so complete tool/transport
-  capture is not yet claimed for normal pipeline calls.
+  optional: legacy or uninstrumented producers cannot supply them. Normal dispatch,
+  automatic snapshots, Verify health sweeps and approval replay record started/terminal
+  attempts. HITL refusals are recorded as refusals; approving a replay does not imply its
+  command succeeded. Complete backend and filtered tool outputs remain in private
+  artifacts even when the model sees a bounded preview or a saved-file pointer.
+  Automatic observations have no provider tool-call ID. Unknown or interrupted work
+  is never assigned a fabricated duration or success result.
 - AIOpsLab bridge schema 2 independently records received/finished actions and full
   parsed request contracts and response bodies. Correlation IDs are retained when
   callers supply them. Client disconnection is distinct from dispatch failure.
@@ -59,6 +63,13 @@ Telemetry parsing now distinguishes missing/malformed data from a valid empty re
 Snapshot coverage names unavailable reads. Health checks retain known unhealthy
 resources while flagging incomplete observations. They cannot recover data that an
 upstream service already discarded or turn an unknown observation into proof of health.
+
+The dispatch observer supplies a context with a protocol-compatible transport proxy.
+Custom tools should use `ToolTransport` methods and properties; relying on a concrete
+transport type or mutating its attributes through `ctx.transport` is not supported
+by this observer. The wrapped methods receive the original arguments and return the
+original values. Directly calling an undecorated tool function from custom workflow
+code requires `observe_tool` to obtain the same audit coverage.
 
 ## Storage and privacy
 

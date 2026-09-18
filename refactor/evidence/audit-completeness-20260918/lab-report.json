@@ -1,0 +1,91 @@
+{
+  "validation": "isolated bridge audit and cluster read-only I/O",
+  "full_pipeline_validated": false,
+  "model_called": false,
+  "allow_writes": false,
+  "namespace": "test-social-network",
+  "started_at": "2026-09-18T02:19:03.407651+00:00",
+  "evidence_dir": "/home/ubuntu/maver-audit-validation/20260918T021903Z-f07302e2",
+  "source_sha256": {
+    "smoke.py": "146503380578812b32b991848c4b7563395c3ea0bd4309ae93e23cc8ea400024",
+    "isolated_host/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "isolated_host/bridge.py": "d1acc21ca27075ee565b8bdf74bf1696be1a349a6583e30dd431f8412acfa98f",
+    "isolated_host/mapping.py": "1685294f74db0ec083be9ebb45a91ffb487be7798e52443bc5a9cfebe2ff9cf9"
+  },
+  "steps": [
+    {
+      "name": "pod_json",
+      "decision": "served",
+      "status": 200,
+      "duration_ms": 51.3,
+      "result_chars": 118,
+      "result_bytes": 118,
+      "result_sha256": "22b7aa17ea577148140e6bf13077aee806b9ae1561c7a36da8454a5b407fb2aa",
+      "preview_truncated": false,
+      "correlation_verified": true
+    },
+    {
+      "name": "metrics_up",
+      "decision": "failed",
+      "status": 200,
+      "duration_ms": 30.6,
+      "result_chars": 88,
+      "result_bytes": 88,
+      "result_sha256": "0887eafe210c559ff5e635b2b32c88a29120f3fa7c26a160b471c4cf04a014da",
+      "preview_truncated": false,
+      "correlation_verified": true
+    },
+    {
+      "name": "namespace_refusal",
+      "decision": "refused",
+      "status": 400,
+      "duration_ms": 5.7,
+      "result_chars": 95,
+      "result_bytes": 95,
+      "result_sha256": "4c09ac6e3fbc4cd6ba68a0c62b8772c7f1fbbf139f454f8138fd1c360b5aad5c",
+      "preview_truncated": false,
+      "correlation_verified": true
+    },
+    {
+      "name": "write_refusal",
+      "decision": "refused",
+      "status": 400,
+      "duration_ms": 5.4,
+      "result_chars": 70,
+      "result_bytes": 70,
+      "result_sha256": "3e43523d8abd447605a19c2fc53fbe5b95ef326136cf57017674c763e7a90735",
+      "preview_truncated": false,
+      "correlation_verified": true
+    }
+  ],
+  "large_output_live_coverage": "unavailable",
+  "prototype_before": {
+    "health": {
+      "status": 200,
+      "body": {
+        "status": "ok"
+      }
+    },
+    "container": "35a7fa77099204136d11e0dedca47e1ce08e24014b88ba5627af4fb5bbc1b308 running 2026-09-15T15:07:38.992741321Z"
+  },
+  "session_id": "maver-audit-smoke-0a7629440b744d41a97a0c9ce90f3a95",
+  "port": 41015,
+  "pod_count": 0,
+  "metrics_live_coverage": "unavailable",
+  "event_count": 8,
+  "all_artifacts_verified": true,
+  "private_permissions_verified": true,
+  "passed": true,
+  "prototype_after": {
+    "health": {
+      "status": 200,
+      "body": {
+        "status": "ok"
+      }
+    },
+    "container": "35a7fa77099204136d11e0dedca47e1ce08e24014b88ba5627af4fb5bbc1b308 running 2026-09-15T15:07:38.992741321Z"
+  },
+  "prototype_unchanged": true,
+  "isolated_port_closed": true,
+  "finished_at": "2026-09-18T02:19:03.606093+00:00"
+}

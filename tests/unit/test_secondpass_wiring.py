@@ -195,6 +195,27 @@ async def test_the_mechanism_replaces_the_diagnosis_and_keeps_both_runs(
     )
     assert logged["secondpass.gate"] == model.callers.count("secondpass.gate")
     assert logged["secondpass.selector"] == model.callers.count("secondpass.selector")
+    # The pre-anchor read is issued outside an agent run; it still belongs to this incident.
+    auxiliary = [
+        e
+        for e in sink.events
+        if e.payload.kind == "tool_call"
+        and e.payload.tool == "namespace_snapshot"
+        and e.run_id is None
+    ]
+    assert len(auxiliary) == 1
+    snapshot = auxiliary[0]
+    assert snapshot.session_id == session.session_id
+    assert snapshot.payload.status == "incomplete"
+    assert snapshot.payload.transport == "fake"
+    assert snapshot.payload.output_artifacts
+    (started,) = [
+        e
+        for e in sink.events
+        if e.payload.kind == "tool_call_started"
+        and e.payload.invocation_id == snapshot.payload.invocation_id
+    ]
+    assert started.sequence < snapshot.sequence
     assert model.callers.count("rca") == 2
     assert len([r for r in storage.runs.runs_for(session.session_id) if r.agent_name == "rca"]) == 2
     assert len([rid for rid in final["run_ids"] if ":rca:" in rid]) == 2

@@ -432,6 +432,15 @@ async def test_a_denial_comes_back_as_a_tool_result_and_the_run_finishes(
     assert status in ("success", "failure")
     stored = deploy.storage.sessions.get_session(session_id)
     assert stored is not None and stored.run_status == "completed"
+    (call,) = [
+        e.payload
+        for e in deploy.sink.events
+        if e.payload.kind == "tool_call"
+        and e.payload.rationale == "replayed after an operator decision"
+    ]
+    assert call.status == "refused" and not call.succeeded
+    assert call.result["inline"]["content"] == "denied by HITL gate: wrong resource"
+    assert call.transport is None and not call.output_artifacts
     deploy.storage.close()
 
 
@@ -1002,6 +1011,21 @@ async def test_the_replayed_decision_names_the_call_it_decided(tmp_path: pathlib
     )
     assert decision.call_id == checkpoint.tool_call_id
     assert call.call_id == checkpoint.tool_call_id
+    attempts = [
+        event
+        for event in deploy.sink.events
+        if event.payload.kind in {"tool_call_started", "tool_call"}
+        and event.payload.rationale == "replayed after an operator decision"
+    ]
+    assert [event.payload.kind for event in attempts] == ["tool_call_started", "tool_call"]
+    assert attempts[0].payload.invocation_id == call.invocation_id
+    assert call.status == "completed" and call.succeeded
+    assert call.transport == "fake"
+    assert call.result["inline"]["content"] == "service/user patched"
+    decision_sequence = next(
+        event.sequence for event in deploy.sink.events if event.payload is decision
+    )
+    assert decision_sequence < attempts[0].sequence < attempts[1].sequence
 
 
 async def test_a_spent_verify_handback_survives_approval_save_and_load(
@@ -1105,3 +1129,55 @@ async def test_resumed_persistence_failure_has_evidence_without_changing_outcome
     assert failure.run["inline"]["execution_result"]["succeeded"] is True
     assert deploy.sink.events[-1].payload.run == failure.run
     deploy.storage.close()
+
+
+@pytest.mark.parametrize("ending", ["returned_error", "raised", "cancelled"])
+async def test_replay_records_actual_failure_independently_of_approval(
+    tmp_path: pathlib.Path,
+    ending: str,
+) -> None:
+    deploy, _session_id, request_id = await parked_with(tmp_path)
+    deploy.storage.approvals.decide(
+        request_id, status="approved", decided_by="operator", reason="authorised"
+    )
+
+    class FailedWrite(FakeTransport):
+        async def kubectl(self, argv: list[str]) -> str:
+            if ending == "cancelled":
+                raise asyncio.CancelledError("replay stopped")
+            if ending == "raised":
+                raise RuntimeError("bridge disconnected")
+            return "error: mutation failed at the bridge"
+
+    deploy = replace(deploy, transport_for=lambda session_id: FailedWrite())
+    try:
+        if ending == "cancelled":
+            with pytest.raises(asyncio.CancelledError, match="replay stopped"):
+                await resume_after_decision(request_id, deploy)
+        elif ending == "raised":
+            with pytest.raises(RuntimeError, match="bridge disconnected"):
+                await resume_after_decision(request_id, deploy)
+        else:
+            # A returned error remains a tool reply; the resumed model owns its verdict.
+            await resume_after_decision(request_id, deploy)
+        attempts = [
+            e.payload
+            for e in deploy.sink.events
+            if e.payload.kind in {"tool_call_started", "tool_call"}
+            and e.payload.rationale == "replayed after an operator decision"
+        ]
+        assert [e.kind for e in attempts] == ["tool_call_started", "tool_call"]
+        call = attempts[1]
+        assert call.invocation_id == attempts[0].invocation_id
+        assert call.status == ("cancelled" if ending == "cancelled" else "failed")
+        assert not call.succeeded and call.error
+        assert call.transport == "fake"
+        assert call.output_artifacts
+        decisions = [
+            e.payload
+            for e in deploy.sink.events
+            if e.payload.kind == "policy_decision" and e.payload.decided_by == "operator"
+        ]
+        assert len(decisions) == 1 and decisions[0].decision == "approved"
+    finally:
+        deploy.storage.close()

@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from maver.audit.journal import Journal, ListSink
-from maver.contracts.events import ToolCallEvent
+from maver.contracts.events import ToolCallEvent, ToolCallStartedEvent
 from maver.contracts.routing import HandBack, Route
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from maver.middleware.base import MiddlewareStack
@@ -131,17 +131,23 @@ async def test_first_entry_carries_the_memory_line_and_the_snapshot(
 ) -> None:
     """Both `{{MEMORY_GUIDANCE}}` paths are wired: this is the user-turn one."""
 
-    async def snapshot(_ctx: object, _namespace: str) -> str:
+    async def snapshot(_ctx: object, namespace: str) -> str:
         return FIXTURE["snapshot"]
 
     monkeypatch.setattr(rca, "namespace_snapshot", snapshot)
-    ctx, model, _ = context(tmp_path, memory=True)
+    ctx, model, sink = context(tmp_path, memory=True)
 
     outcome = await rca.RCA.run(ctx)
 
     opening = model.requests[0].messages[0]["content"]
     assert opening == FIXTURE["rca_first_entry_memory_and_snapshot"]
     assert outcome.artifact is not None
+    started = [e.payload for e in sink.events if isinstance(e.payload, ToolCallStartedEvent)]
+    calls = [e.payload for e in sink.events if isinstance(e.payload, ToolCallEvent)]
+    assert len(started) == len(calls) == 1
+    assert calls[0].invocation_id == started[0].invocation_id
+    assert calls[0].status == "completed"
+    assert calls[0].result["inline"]["content"] == FIXTURE["snapshot"]
 
 
 async def test_a_failed_snapshot_is_recorded_rather_than_silently_empty(
@@ -149,7 +155,7 @@ async def test_a_failed_snapshot_is_recorded_rather_than_silently_empty(
 ) -> None:
     """The prototype swallowed the failure, and the block was empty in ~93% of runs."""
 
-    async def boom(_ctx: object, _namespace: str) -> str:
+    async def boom(_ctx: object, namespace: str) -> str:
         raise RuntimeError("apiserver read timed out")
 
     monkeypatch.setattr(rca, "namespace_snapshot", boom)
@@ -164,6 +170,11 @@ async def test_a_failed_snapshot_is_recorded_rather_than_silently_empty(
         if isinstance(event.payload, ToolCallEvent) and event.payload.tool == "namespace_snapshot"
     ]
     assert [event.succeeded for event in recorded] == [False]
+    (started,) = [e.payload for e in sink.events if isinstance(e.payload, ToolCallStartedEvent)]
+    assert started.invocation_id == recorded[0].invocation_id
+    assert recorded[0].status == "failed"
+    assert recorded[0].error == "RuntimeError: apiserver read timed out"
+    assert recorded[0].duration_ms is not None
 
 
 async def test_a_reassessment_entry_asks_for_the_three_way_discrimination(

@@ -15,6 +15,7 @@ import pytest
 
 from maver.adapters.aiopslab.config import AiopsLabConfig
 from maver.adapters.aiopslab.overlay import role_overlay
+from maver.audit.context import bind_journal, current_journal
 from maver.audit.journal import Journal, ListSink
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from maver.roles.loop import run_until_submit
@@ -264,7 +265,20 @@ async def test_the_guard_refuses_a_no_the_live_episode_contradicts() -> None:
     bridge = FakeBridge(BOUNDARY + timedelta(minutes=3))
     guard = overlay("rca", "detection", transport=bridge).submit_guard
 
-    verdict = await guard(NO_SUBMISSION, 4, [])
+    sink = ListSink()
+    journal = Journal(sink, session_id="s1", stage="rca", run_id="agent-rca")
+    with bind_journal(journal):
+        verdict = await guard(NO_SUBMISSION, 4, [])
+    assert current_journal() is None
+    (started,) = [e for e in sink.events if e.payload.kind == "tool_call_started"]
+    (finished,) = [e for e in sink.events if e.payload.kind == "tool_call"]
+    assert started.run_id == finished.run_id == "agent-rca"
+    assert started.payload.invocation_id == finished.payload.invocation_id
+    assert finished.payload.tool == "namespace_snapshot"
+    assert finished.payload.status == "incomplete"
+    assert finished.payload.transport == "aiopslab"
+    assert finished.payload.output_artifacts
+    assert "geo-0" in finished.payload.result["inline"]["content"]
 
     assert verdict is not None
     assert "[AT/AFTER incident boundary]" in verdict

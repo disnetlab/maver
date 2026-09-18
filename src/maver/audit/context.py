@@ -15,6 +15,7 @@ from typing import Any
 class ToolObservation:
     """Measurements collected during one tool attempt, never added to its prompt."""
 
+    status: str | None = None
     incomplete: bool = False
     unavailable: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -39,6 +40,7 @@ class CallContext:
     observation: ToolObservation
     journal: Any
     tool: str = ""
+    dispatching: bool = False
 
 
 _current: ContextVar[CallContext | None] = ContextVar("maver_audit_call", default=None)

@@ -19,6 +19,7 @@ from importlib.metadata import entry_points
 from importlib.resources import files
 from typing import Any, Literal
 
+from maver.tools.auditing import observe_tool
 from maver.tools.context import DEFAULT_KUBECTL_ROUTE, KUBECTL_ROUTES, ToolContext
 from maver.tools.policy import policy_for
 from maver.tools.schema import RATIONALE_ARG, strip_rationale, with_rationale
@@ -284,7 +285,9 @@ class BoundTool:
         """
         if self.spec.dispatch is None:
             raise ToolRegistryError(f"tool {self.spec.name!r} has no implementation")
-        returned = await self.spec.dispatch(self.ctx, **strip_rationale(arguments))
+        returned = await observe_tool(
+            self.ctx, self.spec.name, strip_rationale(arguments), self.spec.dispatch
+        )
         return returned if isinstance(returned, ToolOutput) else str(returned)
 
 
