@@ -173,7 +173,7 @@ class ModelProfile(_Frozen):
         ),
     )
     limits: dict[str, int] = Field(
-        description="request_timeout_s and num_retries.",
+        description="request_timeout_s, num_retries, and optional min_request_interval_ms.",
     )
     quirks: Quirks
     serving: Serving
@@ -245,6 +245,8 @@ class ModelProfile(_Frozen):
         missing = {"request_timeout_s", "num_retries"} - set(self.limits)
         if missing:
             raise ValueError(f"limits is missing {sorted(missing)}")
+        if self.limits.get("min_request_interval_ms", 0) < 0:
+            raise ValueError("min_request_interval_ms must be non-negative")
         return self
 
 

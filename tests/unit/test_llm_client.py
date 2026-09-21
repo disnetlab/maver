@@ -4,7 +4,9 @@ Every workaround here exists because of measured behaviour. A workaround with no
 a comment waiting to be deleted by someone who does not believe it.
 """
 
+import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -363,6 +365,35 @@ class TestUsageAccounting:
             await _complete(client)
         assert excinfo.value.attempts == 4  # one call plus three retries
         assert [e.attempt for e in events] == [1, 2, 3, 4]
+
+
+class TestProviderPacing:
+    async def test_profile_interval_serialises_provider_requests(self) -> None:
+        """A sequential incident can still exceed Google's free-tier RPM cap."""
+        profile = load_profile("gemini-3.5-flash-lite", MODELS)
+        profile = profile.model_copy(
+            update={"limits": {**profile.limits, "min_request_interval_ms": 40}}
+        )
+        starts: list[float] = []
+        active = 0
+        peak = 0
+
+        async def completion(**_kwargs: Any) -> Any:
+            nonlocal active, peak
+            starts.append(time.monotonic())
+            active += 1
+            peak = max(peak, active)
+            try:
+                await asyncio.sleep(0.02)
+                return _Raw(_Msg("ok"))
+            finally:
+                active -= 1
+
+        client = LLMClient(profile, load_settings(), completion=completion)
+        await asyncio.gather(_complete(client), _complete(client))
+        assert peak == 1
+        assert len(starts) == 2
+        assert starts[1] - starts[0] >= 0.035
 
 
 class TestRequestAssembly:

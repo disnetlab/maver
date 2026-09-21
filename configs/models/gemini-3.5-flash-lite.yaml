@@ -1,0 +1,68 @@
+# Hosted AI Studio diagnostic profile. Telemetry sent to this route leaves the cluster;
+# keep it separate from the local-model thesis arms and record each test as its own condition.
+schema_version: 1
+name: gemini-3.5-flash-lite
+model: gemini/gemini-3.5-flash-lite
+provider: gemini
+
+endpoint:
+  base_url: null  # LiteLLM's native Gemini route uses Google's AI Studio API.
+  api_key_env: GEMINI_API_KEY
+  api_key_literal: null
+
+sampling:
+  max_tokens: 8192
+  temperature: null  # Google recommends the model default for Gemini 3.
+  top_p: null
+  top_k: null
+  min_p: null
+  presence_penalty: null
+  frequency_penalty: null
+  repetition_penalty: null
+  no_repeat_ngram_size: null
+  seed: null
+  reasoning_effort: null
+  thinking_token_budget: null
+
+# The generic derived auxiliary set forces temperature to zero, which is unsafe for
+# Gemini 3. Keep its sampling at Google's defaults as well.
+aux_sampling:
+  max_tokens: 8192
+  temperature: null
+  top_p: null
+  top_k: null
+  min_p: null
+  presence_penalty: null
+  frequency_penalty: null
+  repetition_penalty: null
+  no_repeat_ngram_size: null
+  seed: null
+  reasoning_effort: null
+  thinking_token_budget: null
+
+limits:
+  request_timeout_s: 300
+  num_retries: 1
+  min_request_interval_ms: 5000  # Under the observed 15 requests/minute free-tier cap.
+
+quirks:
+  tool_choice: auto
+  keep_reasoning: false
+  rescue_disable_thinking: false
+  rescue_reasoning_effort: null
+  drop_unsupported_params: true
+  extra_body_fields: []
+  reports_cached_tokens: false
+
+serving:
+  runtime: "Google AI Studio Gemini API"
+  tool_parser: null
+  dtype: null
+  tensor_parallel: null
+  max_model_len: 1048576
+  max_num_seqs: null
+  weights_digest: null
+
+known_issues:
+  - "This hosted diagnostic route sends incident telemetry outside the cluster and is a separate experimental condition."
+  - "Model aliases may change behind the stable ID; record the test date and provider response."

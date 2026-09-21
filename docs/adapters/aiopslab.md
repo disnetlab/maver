@@ -11,6 +11,11 @@ of large Kubernetes and trace responses; the correction below has a separate liv
 read-only check. See [the acceptance record](aiopslab-acceptance-20260917.md) for
 configuration, evidence, failure analysis and coverage limits.
 
+A separate [Gemini 3.5 Flash-Lite mitigation validation](../../refactor/evidence/gemini-mitigation-20260921/validation.md)
+ran on Lab-1 on 2026-09-21. The final condition reached a recovered Verify verdict,
+a successful external grade, and a complete joined audit export. It used a hosted
+AI Studio route and therefore does not validate the local-first model condition.
+
 ## Two processes, opposite directions
 
 AIOpsLab is the inverse of a harness that spawns the agent. The **driver** imports

@@ -23,7 +23,7 @@ from maver.tools.workspace import SessionWorkspace
 
 MODELS = Path("configs/models")
 ARMS = Path("configs/arms")
-SHIPPED_PROFILES = ["qwen3.6-35b-a3b", "qwen3.8-27b", "claude-sonnet-4-6"]
+SHIPPED_PROFILES = ["qwen3.6-35b-a3b", "qwen3.8-27b", "claude-sonnet-4-6", "gemini-3.5-flash-lite"]
 SHIPPED_ARMS = sorted(path.stem for path in ARMS.glob("*.yaml"))
 """Read from the directory, not listed. A hand-written list is a second place to add an
 arm, and the one it silently omitted was the configuration carrying the interaction."""
@@ -75,6 +75,17 @@ class TestShippedProfiles:
     @pytest.mark.parametrize("name", SHIPPED_PROFILES)
     def test_each_profile_loads(self, name: str) -> None:
         assert load_profile(name, MODELS).name == name
+
+    def test_gemini_keeps_provider_sampling_defaults_in_both_sets(self) -> None:
+        profile = load_profile("gemini-3.5-flash-lite", MODELS)
+        for sampling in (profile.sampling, profile.aux_sampling):
+            assert sampling is not None
+            assert (sampling.temperature, sampling.top_p, sampling.top_k) == (
+                None,
+                None,
+                None,
+            )
+        assert profile.limits["min_request_interval_ms"] == 5000
 
     def test_native_knobs_are_routed_away_from_a_hosted_provider(self) -> None:
         profile = load_profile("claude-sonnet-4-6", MODELS)
@@ -255,6 +266,23 @@ def test_a_profile_without_an_auxiliary_set_gets_a_derived_one() -> None:
 
 
 SHIPPED_SAMPLING: dict[str, tuple[str, dict[str, object]]] = {
+    "gemini-3.5-flash-lite": (
+        "35d9f53e433a",
+        {
+            "max_tokens": 8192,
+            "temperature": None,
+            "top_p": None,
+            "top_k": None,
+            "min_p": None,
+            "presence_penalty": None,
+            "frequency_penalty": None,
+            "repetition_penalty": None,
+            "no_repeat_ngram_size": None,
+            "seed": None,
+            "reasoning_effort": None,
+            "thinking_token_budget": None,
+        },
+    ),
     "qwen3.6-35b-a3b": (
         "15b241cc5221",
         {

@@ -9,6 +9,17 @@ published comparisons, which are single-variable only while the schema does not 
 with the configuration. The procedure is in STYLE_GUIDE.md, "Typed artifacts are
 frozen".
 
+## Gemini 3.5 Flash-Lite diagnostic profile and request pacing
+
+A hosted Gemini 3.5 Flash-Lite model profile is available for isolated diagnosis
+and validation. It leaves Gemini 3 sampling parameters at Google's defaults and
+specifies a five-second minimum interval between provider requests to stay below
+the observed AI Studio free-tier request cap. The optional interval is enforced by
+one client-side gate across calls and retries; existing profiles are unchanged.
+The key belongs in the environment, never in the profile. This condition sends
+incident telemetry outside the cluster and must not be conflated with local-model
+thesis arms. See the [Lab mitigation validation](refactor/evidence/gemini-mitigation-20260921/validation.md).
+
 ## Complete tool invocation observations
 
 Normal tool dispatch, automatic namespace snapshots, Verify health sweeps and approval

@@ -401,6 +401,10 @@ class LLMClient:
         self.sampling: SamplingResolution = resolve_sampling(profile, settings)
         self._sink = sink
         self._completion = completion
+        # Only profiles with a provider rate cap use this gate. It spans the provider
+        # call so one shared client cannot have overlapping requests on that route.
+        self._provider_gate = asyncio.Lock()
+        self._next_provider_at = 0.0
         # Resolved here rather than per call, because here is startup. A credential the
         # environment mangled is then refused while the process is coming up, instead of
         # on the first model call, minutes into a run, where a provider's 401 reads as
@@ -412,7 +416,15 @@ class LLMClient:
             from maver.llm._provider import litellm  # noqa: PLC0415
 
             self._completion = litellm.acompletion
-        return await self._completion(**kwargs)
+        interval = self.profile.limits.get("min_request_interval_ms", 0) / 1000
+        if not interval:
+            return await self._completion(**kwargs)
+        async with self._provider_gate:
+            remaining = self._next_provider_at - time.monotonic()
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+            self._next_provider_at = time.monotonic() + interval
+            return await self._completion(**kwargs)
 
     def _resolve_api_key(self) -> str | None:
         """Resolve the credential this client authenticates with.

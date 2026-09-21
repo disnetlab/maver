@@ -69,6 +69,19 @@ store. `enabled: false` disables it for that agent; `true` cannot create a store
 the deployment has disabled memory. Storage backends and credentials remain
 deployment resources.
 
+## Hosted Gemini diagnostic profile
+
+`configs/models/gemini-3.5-flash-lite.yaml` selects LiteLLM's native Gemini route.
+Set `MAVER_MODEL__PROFILE=gemini-3.5-flash-lite` and supply `GEMINI_API_KEY` or
+`MAVER_MODEL__API_KEY` through the deployment environment; never put the key in
+YAML. The profile leaves temperature, top-p, top-k and thinking settings at
+Google's defaults. Its optional `limits.min_request_interval_ms: 5000` spaces
+provider requests and serializes them inside one MAVER process, including retries.
+This is process-local pacing; other processes sharing the same AI Studio project
+can still consume its quota. Existing profiles have no interval and are unaffected.
+The hosted route sends incident telemetry to Google, so record it as a separate
+experimental condition from local-model arms.
+
 ## Bound Verify hand-backs
 
 The built-in `multi` workflow can limit how many times Verify sends an incident
