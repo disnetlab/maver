@@ -80,6 +80,7 @@ from maver.memory.ports import (
     ApprovalRecord,
     ApprovalStatus,
     DecisionStatus,
+    LearningIntent,
     OutcomeFeedback,
     QuarantineRecord,
     SearchScope,
@@ -108,6 +109,15 @@ def _to_quarantine(row: _Row) -> QuarantineRecord:
         reason=row["reason"],
         created_at=row["created_at"].isoformat(),
         retry_session_id=row["retry_session_id"],
+    )
+
+
+def _to_learning_intent(row: _Row) -> LearningIntent:
+    return LearningIntent(
+        session_id=row["session_id"],
+        due_at=row["due_at"].isoformat(),
+        external_feedback=row["external_feedback"],
+        attempts=row["attempts"],
     )
 
 
@@ -145,6 +155,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_state ON sessions (corpus_id, state);
 CREATE INDEX IF NOT EXISTS idx_sessions_distilled ON sessions (corpus_id, distilled, ended_at);
+
+CREATE TABLE IF NOT EXISTS learning_intents (
+    corpus_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    due_at TIMESTAMPTZ NOT NULL,
+    external_feedback JSONB,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (corpus_id, session_id)
+);
 
 CREATE TABLE IF NOT EXISTS intake_receipts (
     corpus_id TEXT NOT NULL,
@@ -654,7 +673,18 @@ class _PostgresSchema(StoreSchema):
             5: self._add_intake_quarantine,
             6: self._add_outcome_feedback,
             7: self._order_outcome_feedback,
+            8: self._add_learning_intents,
         }
+
+    def _add_learning_intents(self) -> None:
+        with self._db.write() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS learning_intents (corpus_id TEXT NOT NULL, "
+                "session_id TEXT NOT NULL, due_at TIMESTAMPTZ NOT NULL, "
+                "external_feedback JSONB, attempts INTEGER NOT NULL DEFAULT 0, "
+                "PRIMARY KEY (corpus_id, session_id))"
+            )
+            _stamp(conn, 9)
 
     def _add_intake_quarantine(self) -> None:
         with self._db.write() as conn:
@@ -827,6 +857,55 @@ class PostgresStore:
         self._db.close()
 
     # SessionStore ---------------------------------------------------------------
+
+    def put_learning_intent(self, intent: LearningIntent) -> None:
+        """Persist one eligible Learning intent without replacing an earlier grade."""
+        with self._db.write() as conn:
+            conn.execute(
+                "INSERT INTO learning_intents (corpus_id, session_id, due_at, external_feedback) "
+                "VALUES (%s, %s, %s, %s) ON CONFLICT(corpus_id, session_id) DO NOTHING",
+                (
+                    self.corpus_id,
+                    intent.session_id,
+                    _instant(intent.due_at),
+                    _json(intent.external_feedback),
+                ),
+            )
+
+    def get_learning_intent(self, session_id: str) -> LearningIntent | None:
+        """Read the pending Learning intent for one session."""
+        with self._db.read() as conn:
+            row = conn.execute(
+                "SELECT * FROM learning_intents WHERE corpus_id = %s AND session_id = %s",
+                (self.corpus_id, session_id),
+            ).fetchone()
+        return _to_learning_intent(row) if row is not None else None
+
+    def pending_learning_intents(self) -> list[LearningIntent]:
+        """List pending Learning intents scoped to this store."""
+        with self._db.read() as conn:
+            rows = conn.execute(
+                "SELECT * FROM learning_intents WHERE corpus_id = %s ORDER BY due_at",
+                (self.corpus_id,),
+            ).fetchall()
+        return [_to_learning_intent(row) for row in rows]
+
+    def advance_learning_intent(self, session_id: str, due_at: str) -> None:
+        """Defer a failed Learning intent and count the attempt."""
+        with self._db.write() as conn:
+            conn.execute(
+                "UPDATE learning_intents SET due_at = %s, attempts = attempts + 1 "
+                "WHERE corpus_id = %s AND session_id = %s",
+                (_instant(due_at), self.corpus_id, session_id),
+            )
+
+    def complete_learning_intent(self, session_id: str) -> None:
+        """Remove an intent after its lesson is safely written."""
+        with self._db.write() as conn:
+            conn.execute(
+                "DELETE FROM learning_intents WHERE corpus_id = %s AND session_id = %s",
+                (self.corpus_id, session_id),
+            )
 
     def quarantine(self, source: str, key: str, raw_base64: str, reason: str) -> QuarantineRecord:
         """Persist a poison record, reusing a prior quarantine on redelivery."""

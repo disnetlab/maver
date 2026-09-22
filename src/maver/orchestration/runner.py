@@ -1059,7 +1059,12 @@ async def _run_mode(
     ):
         # A diagnosis-only task has no remediation outcome to learn from. Never
         # distil it as a successful incident memory entry.
-        await fire_hooks(record.outcome, session_id, workdir=deployment.settings.server.workdir)
+        await fire_hooks(
+            record.outcome,
+            session_id,
+            workdir=deployment.settings.server.workdir,
+            sessions=deployment.storage.sessions,
+        )
 
     _record_completion(journal, final_state, record, deps.policy)
     return final_state
@@ -1314,6 +1319,7 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
                     outcome.outcome,
                     checkpoint.session_id,
                     workdir=deployment.settings.server.workdir,
+                    sessions=deployment.storage.sessions,
                 )
             _record_completion(journal, final_state, outcome, deps.policy)
             return outcome.outcome.value

@@ -55,6 +55,7 @@ from maver.orchestration.jobs import (
     schedule_approval_timeout,
     unbind_deployment,
 )
+from maver.orchestration.learning import restore_learning_intents
 from maver.orchestration.runner import Deployment, TransportFactory
 from maver.orchestration.scheduler import shutdown_scheduler
 from maver.roles.registry import load_plugin_roles, validate_roles
@@ -331,6 +332,8 @@ def create_app(
             bind_deployment(active, runs=app.state.service.runs)
             register_post_incident_hooks(active.settings)
             schedule_approval_sweep(active.settings.authority.poll_interval_s)
+            if active.settings.memory.learning_enabled:
+                restore_learning_intents(active.storage.sessions, active.settings.server.workdir)
             configure_tracing(active.settings)
             if active.settings.server.resume_interrupted_incidents:
                 await recover_active(app.state.service)

@@ -53,6 +53,7 @@ from maver.memory.ports import (
     ApprovalRecord,
     ApprovalStatus,
     DecisionStatus,
+    LearningIntent,
     OutcomeFeedback,
     QuarantineRecord,
     SearchScope,
@@ -97,6 +98,13 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_state ON sessions(state);
 CREATE INDEX IF NOT EXISTS idx_sessions_distilled ON sessions(distilled, ended_at);
+
+CREATE TABLE IF NOT EXISTS learning_intents (
+    session_id TEXT PRIMARY KEY,
+    due_at TEXT NOT NULL,
+    external_feedback_json TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0
+);
 
 CREATE TABLE IF NOT EXISTS intake_receipts (
     source TEXT NOT NULL,
@@ -225,6 +233,15 @@ def _to_quarantine(row: sqlite3.Row) -> QuarantineRecord:
         reason=row["reason"],
         created_at=row["created_at"],
         retry_session_id=row["retry_session_id"],
+    )
+
+
+def _to_learning_intent(row: sqlite3.Row) -> LearningIntent:
+    return LearningIntent(
+        session_id=row["session_id"],
+        due_at=row["due_at"],
+        external_feedback=_loads(row["external_feedback_json"]),
+        attempts=row["attempts"],
     )
 
 
@@ -379,7 +396,17 @@ class _SqliteSchema(StoreSchema):
             5: self._add_intake_quarantine,
             6: self._add_outcome_feedback,
             7: self._order_outcome_feedback,
+            8: self._add_learning_intents,
         }
+
+    def _add_learning_intents(self) -> None:
+        with self._db.write() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS learning_intents (session_id TEXT PRIMARY KEY, "
+                "due_at TEXT NOT NULL, external_feedback_json TEXT, "
+                "attempts INTEGER NOT NULL DEFAULT 0)"
+            )
+            _stamp(conn, 9)
 
     def _add_intake_quarantine(self) -> None:
         with self._db.write() as conn:
@@ -584,6 +611,43 @@ class SqliteStore:
         self._db.close()
 
     # SessionStore ---------------------------------------------------------------
+
+    def put_learning_intent(self, intent: LearningIntent) -> None:
+        """Persist one eligible Learning intent without replacing an earlier grade."""
+        with self._db.write() as conn:
+            conn.execute(
+                "INSERT INTO learning_intents (session_id, due_at, external_feedback_json) "
+                "VALUES (?, ?, ?) ON CONFLICT(session_id) DO NOTHING",
+                (intent.session_id, intent.due_at, _dumps_optional(intent.external_feedback)),
+            )
+
+    def get_learning_intent(self, session_id: str) -> LearningIntent | None:
+        """Read the pending Learning intent for one session."""
+        with self._db.read() as conn:
+            row = conn.execute(
+                "SELECT * FROM learning_intents WHERE session_id = ?", (session_id,)
+            ).fetchone()
+        return _to_learning_intent(row) if row is not None else None
+
+    def pending_learning_intents(self) -> list[LearningIntent]:
+        """List pending Learning intents scoped to this store."""
+        with self._db.read() as conn:
+            rows = conn.execute("SELECT * FROM learning_intents ORDER BY due_at").fetchall()
+        return [_to_learning_intent(row) for row in rows]
+
+    def advance_learning_intent(self, session_id: str, due_at: str) -> None:
+        """Defer a failed Learning intent and count the attempt."""
+        with self._db.write() as conn:
+            conn.execute(
+                "UPDATE learning_intents SET due_at = ?, attempts = attempts + 1 "
+                "WHERE session_id = ?",
+                (due_at, session_id),
+            )
+
+    def complete_learning_intent(self, session_id: str) -> None:
+        """Remove an intent after its lesson is safely written."""
+        with self._db.write() as conn:
+            conn.execute("DELETE FROM learning_intents WHERE session_id = ?", (session_id,))
 
     def quarantine(self, source: str, key: str, raw_base64: str, reason: str) -> QuarantineRecord:
         """Persist a poison record, reusing a prior quarantine on redelivery."""

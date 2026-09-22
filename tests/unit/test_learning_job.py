@@ -14,11 +14,12 @@ from maver.audit.journal import ListSink
 from maver.contracts.runtime import AgentState, RunState
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from maver.memory.factory import build_storage
-from maver.memory.ports import AgentRunRecord
+from maver.memory.ports import AgentRunRecord, LearningIntent
 from maver.middleware.base import TurnContext
+from maver.orchestration import learning as learning_module
 from maver.orchestration.bootstrap import register_post_incident_hooks
 from maver.orchestration.hooks import clear_hooks, registered_hooks
-from maver.orchestration.learning import build_packet, run_learning
+from maver.orchestration.learning import build_packet, run_learning, run_learning_intent
 from maver.orchestration.outcomes import Outcome
 from maver.orchestration.runner import Deployment
 from maver.pipelines import PipelineCatalog, PipelineChangedError, select_pipeline
@@ -244,6 +245,57 @@ async def test_no_hook_is_registered_when_nothing_will_be_distilled(
         assert registered_hooks() == {}
     finally:
         clear_hooks()
+        deploy.storage.close()
+
+
+async def test_learning_intent_retries_and_survives_reopen(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deploy, _ = deployment(tmp_path)
+    session_id = closed_incident(deploy)
+    sessions = deploy.storage.sessions
+    feedback = {"source": "benchmark", "diagnosis": {"success": False}}
+    sessions.put_learning_intent(
+        LearningIntent(
+            session_id=session_id,
+            due_at="2026-01-01T00:00:00+00:00",
+            external_feedback=feedback,
+        )
+    )
+    scheduled: list[LearningIntent] = []
+    monkeypatch.setattr(learning_module, "bound_deployment", lambda: deploy)
+    monkeypatch.setattr(
+        learning_module,
+        "schedule_learning_intent",
+        lambda workdir, intent: scheduled.append(intent),
+    )
+    outcomes = iter(["feedback_changed", "distilled"])
+    seen_feedback: list[dict[str, Any] | None] = []
+
+    async def fake_run(
+        session: str, active: Deployment, *, external_feedback: dict[str, Any] | None
+    ):
+        seen_feedback.append(external_feedback)
+        return next(outcomes)
+
+    monkeypatch.setattr(learning_module, "run_learning", fake_run)
+    try:
+        assert await run_learning_intent(session_id) == "feedback_changed"
+        retry = sessions.get_learning_intent(session_id)
+        assert retry is not None and retry.attempts == 1
+        assert retry.external_feedback == feedback
+        assert scheduled == [retry]
+        # A restart reopens the same explicit intent, including the exact grade.
+        deploy.storage.close()
+        deploy, _ = deployment(tmp_path)
+        assert deploy.storage.sessions.get_learning_intent(session_id) == retry
+        monkeypatch.setattr(learning_module, "bound_deployment", lambda: deploy)
+        deploy.storage.sessions.advance_learning_intent(session_id, "2026-01-01T00:00:00+00:00")
+        assert await run_learning_intent(session_id) == "distilled"
+        assert deploy.storage.sessions.get_learning_intent(session_id) is None
+        assert seen_feedback == [feedback, feedback]
+    finally:
         deploy.storage.close()
 
 

@@ -24,6 +24,7 @@ __all__ = [
     "ApprovalStatus",
     "ApprovalStore",
     "DecisionStatus",
+    "LearningIntent",
     "OutcomeFeedback",
     "QuarantineRecord",
     "RunStore",
@@ -54,6 +55,16 @@ is already in cannot be expressed. There is no such thing as deciding to keep wa
 """
 
 AgentRunStatus = Literal["running", "succeeded", "failed", "halted", "awaiting_human", "cancelled"]
+
+
+@dataclass(frozen=True)
+class LearningIntent:
+    """An explicitly eligible delayed Learning pass, including its original feedback."""
+
+    session_id: str
+    due_at: str
+    external_feedback: dict[str, Any] | None = None
+    attempts: int = 0
 
 
 @dataclass
@@ -262,6 +273,26 @@ class SessionMemory:
 @runtime_checkable
 class SessionStore(Protocol):
     """Persistence for incidents and their artefacts."""
+
+    def put_learning_intent(self, intent: LearningIntent) -> None:
+        """Persist eligibility and exact feedback before scheduling delayed Learning."""
+        ...
+
+    def get_learning_intent(self, session_id: str) -> LearningIntent | None:
+        """Read a pending intent, if one exists."""
+        ...
+
+    def pending_learning_intents(self) -> list[LearningIntent]:
+        """List only explicitly eligible intents, including future ones."""
+        ...
+
+    def advance_learning_intent(self, session_id: str, due_at: str) -> None:
+        """Record a retry time and increment its attempt counter."""
+        ...
+
+    def complete_learning_intent(self, session_id: str) -> None:
+        """Remove an intent after successful or already completed distillation."""
+        ...
 
     def create_session(self, alert: dict[str, Any]) -> SessionRecord:
         """Open a session for an incoming alert.

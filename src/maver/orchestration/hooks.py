@@ -14,9 +14,11 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from maver.memory.ports import LearningIntent, SessionStore
 from maver.orchestration.outcomes import Outcome
 from maver.orchestration.scheduler import scheduler_for
 
@@ -73,13 +75,21 @@ def clear_hooks() -> None:
     _HOOKS.clear()
 
 
-async def fire_hooks(outcome: Outcome, session_id: str, *, workdir: Path, **extra: Any) -> None:
+async def fire_hooks(
+    outcome: Outcome,
+    session_id: str,
+    *,
+    workdir: Path,
+    sessions: SessionStore | None = None,
+    **extra: Any,
+) -> None:
     """Schedule every hook that matches this incident's outcome.
 
     Args:
         outcome: How the incident ended.
         session_id: The incident.
         workdir: The deployment's workspace, which locates the job store.
+        sessions: Session store for durable built-in Learning intents.
         **extra: Passed to the job alongside its own configured arguments. This is how
             an adapter carries an external grade through the registry instead of
             calling the job directly and bypassing it.
@@ -87,11 +97,45 @@ async def fire_hooks(outcome: Outcome, session_id: str, *, workdir: Path, **extr
     for hook in _HOOKS.values():
         if outcome not in hook.on_outcomes:
             continue
+        due_at = datetime.now(UTC) + timedelta(seconds=hook.delay_seconds)
+        learning = import_module("maver.orchestration.learning")
+        if hook.job_fn is learning.distil_incident and sessions is not None:
+            feedback = {**dict(hook.kwargs), **extra}.get("external_feedback")
+            try:
+                sessions.put_learning_intent(
+                    LearningIntent(
+                        session_id=session_id,
+                        due_at=due_at.isoformat(),
+                        external_feedback=feedback if isinstance(feedback, dict) else None,
+                    )
+                )
+            except Exception:
+                _log.exception("could not persist Learning intent for %s", session_id)
+                # Keep the original one-shot job as a best-effort fallback. Never
+                # claim that an intent was durable when its transaction failed.
+                try:
+                    scheduler_for(workdir).add_job(
+                        hook.job_fn,
+                        "date",
+                        run_date=due_at,
+                        kwargs={"session_id": session_id, **dict(hook.kwargs), **extra},
+                        id=f"{hook.name}:{session_id}",
+                        replace_existing=True,
+                    )
+                except Exception:
+                    _log.exception("could not schedule fallback Learning job for %s", session_id)
+                continue
+            # The persisted intent is the authority; a scheduler outage cannot erase it.
+            try:
+                learning.schedule_learning_intent(workdir, sessions.get_learning_intent(session_id))
+            except Exception:
+                _log.exception("could not schedule post-incident hook %s", hook.name)
+            continue
         try:
             scheduler_for(workdir).add_job(
                 hook.job_fn,
                 "date",
-                run_date=datetime.now(UTC) + timedelta(seconds=hook.delay_seconds),
+                run_date=due_at,
                 kwargs={"session_id": session_id, **dict(hook.kwargs), **extra},
                 id=f"{hook.name}:{session_id}",
                 replace_existing=True,

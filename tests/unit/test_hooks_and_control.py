@@ -8,9 +8,11 @@ from typing import Any
 import pytest
 
 from maver.contracts.lifecycle import RunStatus
+from maver.memory.backends.sqlite import SqliteStore
 from maver.memory.factory import build_storage
 from maver.memory.ports import ApprovalRecord
 from maver.orchestration import hooks, jobs
+from maver.orchestration import learning as learning_module
 from maver.orchestration.control import RunRegistry
 from maver.orchestration.hooks import PostIncidentHook, fire_hooks, register_hook
 from maver.orchestration.outcomes import Outcome
@@ -100,6 +102,41 @@ async def test_a_scheduling_failure_does_not_fail_the_incident(
     scheduler.fail = True
 
     await fire_hooks(Outcome.SUCCESS, "s1", workdir=tmp_path)
+
+
+async def test_eligible_learning_survives_scheduler_failure(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hooks.clear_hooks()
+    store = SqliteStore(tmp_path / "memory.sqlite")
+    store.create_session({"alertname": "test"})
+    register_hook(
+        PostIncidentHook(
+            name="learning",
+            job_fn=learning_module.distil_incident,
+            on_outcomes=frozenset({Outcome.SUCCESS}),
+        )
+    )
+
+    def fail_schedule(workdir: pathlib.Path, intent: Any) -> None:
+        raise RuntimeError("scheduler unavailable")
+
+    monkeypatch.setattr(learning_module, "schedule_learning_intent", fail_schedule)
+    try:
+        await fire_hooks(
+            Outcome.SUCCESS,
+            "s1",
+            workdir=tmp_path,
+            sessions=store,
+            external_feedback={"source": "benchmark", "score": 0},
+        )
+        intent = store.get_learning_intent("s1")
+        assert intent is not None
+        assert intent.external_feedback == {"source": "benchmark", "score": 0}
+    finally:
+        hooks.clear_hooks()
+        store.close()
 
 
 async def test_re_running_an_incident_replaces_its_job_rather_than_queueing_a_second(
