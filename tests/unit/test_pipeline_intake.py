@@ -458,3 +458,38 @@ async def test_failed_initial_persistence_closes_session_and_releases_admission(
     finally:
         await _settle(app.state.service)
         deploy.storage.close()
+
+
+async def test_http_idempotency_key_returns_completed_session_without_new_run(
+    tmp_path: Path,
+) -> None:
+    model = DiagnosisModel()
+    deploy = _deployment(tmp_path, model)
+    app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://maver"
+        ) as client:
+            first = await client.post(
+                "/api/v1/incidents",
+                json={"alert": ALERT, "target_stage": "diagnose"},
+                headers={"Idempotency-Key": "request-1"},
+            )
+            assert first.status_code == 202
+            await _settle(app.state.service)
+            second = await client.post(
+                "/api/v1/incidents",
+                json={"alert": ALERT, "target_stage": "diagnose"},
+                headers={"Idempotency-Key": "request-1"},
+            )
+            assert second.status_code == 202
+            assert second.json() == first.json()
+            assert len(model.requests) == 1
+            conflict = await client.post(
+                "/api/v1/incidents",
+                json={"alert": {"alertname": "B"}},
+                headers={"Idempotency-Key": "request-1"},
+            )
+            assert conflict.status_code == 409
+    finally:
+        deploy.storage.close()

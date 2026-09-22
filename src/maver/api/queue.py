@@ -23,8 +23,8 @@ _log = logging.getLogger(__name__)
 class QueueConsumer:
     """Commit an offset only after the incident has been durably admitted.
 
-    Delivery is at least once. A crash between admission and offset commit can redeliver
-    a message; the intake's live-run deduplication covers that window within a process.
+    Delivery is at least once. A durable receipt maps a redelivered record to its
+    initialized session, including after a process restart.
     """
 
     def __init__(self, service: Service) -> None:
@@ -73,7 +73,13 @@ class QueueConsumer:
                         f"invalid alert at {message.topic}:{message.partition}:{message.offset}"
                     ) from exc
                 try:
-                    receipt = await accept_incident(body, self.service)
+                    source = (
+                        f"kafka:{self.service.deployment.settings.intake.kafka.group_id}:"
+                        f"{message.topic}:{message.partition}"
+                    )
+                    receipt = await accept_incident(
+                        body, self.service, intake_id=(source, str(message.offset))
+                    )
                 except HTTPException as exc:
                     if exc.status_code not in (429, 503):
                         raise ValueError(
@@ -87,7 +93,8 @@ class QueueConsumer:
                     )
                     await asyncio.sleep(1)
                     continue
-                await self.consumer.commit()
+                partition = self.topic_partition(message.topic, message.partition)
+                await self.consumer.commit({partition: message.offset + 1})
                 _log.info(
                     "admitted Kafka record %s:%d:%d as incident %s",
                     message.topic,

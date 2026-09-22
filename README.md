@@ -120,8 +120,10 @@ The consumer acknowledges a message after the session is stored. Backpressure re
 the same offset; a malformed or rejected message stops the consumer unacknowledged and
 causes `/readyz` to return 503 until the message is repaired or skipped by an operator.
 Set `MAVER_INTAKE__HTTP_ENABLED=false` for queue-only intake. Kafka delivery is at
-least once: a crash after admission but before offset commit can create a duplicate
-incident after restart, so producers should avoid publishing repeated action alerts.
+least once: a durable receipt keyed by group, topic, partition and offset returns the
+original session if a record is redelivered after admission. HTTP callers can send
+`Idempotency-Key` to get the same behavior across retries. A key reused with a
+different request returns 409. Requests without a key retain live alert deduplication.
 
 `MAVER_SERVER__RESUME_INTERRUPTED_INCIDENTS=true` opts into startup recovery of
 ordinary running incidents. It saves a pre-stage checkpoint and serially resumes

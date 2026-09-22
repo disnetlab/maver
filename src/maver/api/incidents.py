@@ -23,7 +23,7 @@ import logging
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from maver.api.deps import Service, ServiceDep, admit
@@ -65,12 +65,17 @@ class IncidentRequest(BaseModel):
 
 
 @router.post("/incidents", status_code=202)
-async def create_incident(body: IncidentRequest, service: ServiceDep) -> dict[str, Any]:
+async def create_incident(
+    body: IncidentRequest,
+    service: ServiceDep,
+    idempotency_key: str | None = Header(default=None),
+) -> dict[str, Any]:
     """Accept an alert and start working on it.
 
     Args:
         body: The alert and the stage to run to.
         service: The process's resources.
+        idempotency_key: Optional durable retry key.
 
     Returns:
         The session to poll, echoing the stage word the caller used.
@@ -85,15 +90,35 @@ async def create_incident(body: IncidentRequest, service: ServiceDep) -> dict[st
             status_code=503, detail="HTTP intake disabled (MAVER_INTAKE__HTTP_ENABLED=false)"
         )
 
-    return await accept_incident(body, service)
+    if idempotency_key is not None and (not idempotency_key or len(idempotency_key) > 255):
+        raise HTTPException(status_code=422, detail="Idempotency-Key must contain 1-255 characters")
+    return await accept_incident(
+        body, service, intake_id=("http", idempotency_key) if idempotency_key else None
+    )
 
 
-async def accept_incident(body: IncidentRequest, service: Service) -> dict[str, Any]:
+async def accept_incident(
+    body: IncidentRequest,
+    service: Service,
+    *,
+    intake_id: tuple[str, str] | None = None,
+) -> dict[str, Any]:
     """Admit an already validated alert from HTTP or a queue."""
     # Validate explicit names before reserving capacity or opening a session. Resolving
     # selectors is deferred until this request owns the alert, so retries cannot run
     # selection middleware repeatedly for one incident.
     explicit = _requested_pipeline(body, service.deployment)
+    sessions = service.deployment.storage.sessions
+    request_hash = hashlib.sha256(
+        json.dumps(body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    if intake_id is not None:
+        try:
+            prior = await asyncio.to_thread(sessions.get_intake_receipt, *intake_id, request_hash)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if prior is not None:
+            return _receipt(body, service.deployment, prior)
     claim = admit(service, fingerprint=fingerprint(body.alert))
 
     # A retrying alert source posting the same alert twice wants one incident, not two
@@ -107,7 +132,7 @@ async def accept_incident(body: IncidentRequest, service: Service) -> dict[str, 
                 detail="the incident this alert raised could not be opened",
                 headers={"Retry-After": "30"},
             )
-        record = await asyncio.to_thread(service.deployment.storage.sessions.get_session, existing)
+        record = await asyncio.to_thread(sessions.get_session, existing)
         runtime = await asyncio.to_thread(
             load_runtime, service.deployment.storage.sessions, existing
         )
@@ -117,6 +142,13 @@ async def accept_incident(body: IncidentRequest, service: Service) -> dict[str, 
                 status_code=409,
                 detail=f"this alert is already handled by pipeline {selected!r} in incident {existing}",
             )
+        if intake_id is not None:
+            try:
+                record = await asyncio.to_thread(
+                    sessions.bind_intake_receipt, *intake_id, request_hash, existing
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
         _log.info("alert already being handled by %s; not starting a second run", existing)
         receipt = {
             "session_id": existing,
@@ -136,6 +168,8 @@ async def accept_incident(body: IncidentRequest, service: Service) -> dict[str, 
             service=service,
             selection=selection,
             metadata=body.metadata,
+            intake_id=intake_id,
+            request_hash=request_hash,
         )
         if _show_pipeline(body, service.deployment):
             receipt["pipeline"] = selection.pipeline.name
@@ -224,6 +258,8 @@ async def start_incident(
     service: Service,
     selection: SelectedPipeline | None = None,
     metadata: dict[str, Any] | None = None,
+    intake_id: tuple[str, str] | None = None,
+    request_hash: str | None = None,
 ) -> dict[str, Any]:
     """Open a session, put a task on it, and hand back what to poll.
 
@@ -237,6 +273,8 @@ async def start_incident(
         service: The process's resources.
         selection: The already resolved admission choice, if the caller selected it.
         metadata: Private middleware context, separate from the alert.
+        intake_id: Durable source and message key, when supplied.
+        request_hash: Digest of the complete validated request.
 
     Returns:
         The intake receipt: session id, acceptance, the stage as asked for, and when the
@@ -253,12 +291,33 @@ async def start_incident(
     # not leave a session which has neither a task nor a complete selection record.
     runtime = RunState(selection=selection.manifest(), metadata=metadata or {})
     sessions = service.deployment.storage.sessions
-    record = await asyncio.to_thread(sessions.create_session, alert)
+    if intake_id is not None:
+        assert request_hash is not None
+        try:
+            record, created = await asyncio.to_thread(
+                sessions.open_idempotent_session,
+                *intake_id,
+                request_hash,
+                alert,
+                runtime.model_dump(mode="json"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if not created:
+            return _receipt(
+                IncidentRequest(alert=alert, target_stage=target_stage, metadata=metadata or {}),
+                service.deployment,
+                record,
+            )
+    else:
+        record = await asyncio.to_thread(sessions.create_session, alert)
     try:
         # Saved before register wakes deduplicated requests and before any model call.
-        await asyncio.to_thread(save_runtime, sessions, record.session_id, runtime)
+        if intake_id is None:
+            await asyncio.to_thread(save_runtime, sessions, record.session_id, runtime)
         # Pollers must see the run as started from the moment its task exists.
-        await asyncio.to_thread(sessions.set_run_status, record.session_id, RunStatus.RUNNING)
+        if intake_id is None:
+            await asyncio.to_thread(sessions.set_run_status, record.session_id, RunStatus.RUNNING)
     except Exception as exc:
         _log.exception("initial persistence failed for incident %s", record.session_id)
         # Database errors can quote rejected JSON, including private metadata. The
@@ -294,6 +353,19 @@ async def start_incident(
         "target_stage": target_stage,
         "started_at": record.started_at,
     }
+
+
+def _receipt(body: IncidentRequest, deployment: Deployment, record: Any) -> dict[str, Any]:
+    """Return the original admission without launching another run."""
+    result = {
+        "session_id": record.session_id,
+        "status": "accepted",
+        "target_stage": body.target_stage,
+        "started_at": record.started_at,
+    }
+    if _show_pipeline(body, deployment):
+        result["pipeline"] = record.runtime.get("selection", {}).get("name", "")
+    return result
 
 
 async def run_incident_task(

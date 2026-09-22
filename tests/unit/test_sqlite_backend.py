@@ -285,3 +285,30 @@ def test_private_runtime_migrates_existing_sessions_without_changing_artifacts(
         assert restored is not None
         assert restored.runtime == {"metadata": {"tenant": "private"}}
         assert store.schema_version == STORE_SCHEMA_VERSION
+
+
+def test_intake_receipt_survives_restart_and_rejects_changed_request(
+    tmp_path: pathlib.Path,
+) -> None:
+    path = tmp_path / "intake.db"
+    with contextlib.closing(SqliteStore(path)) as store:
+        created, first = store.open_idempotent_session(
+            "http", "request-1", "hash-a", {"alertname": "A"}, {"selection": {"name": "multi"}}
+        )
+        assert first
+        assert created.run_status == "running"
+    with contextlib.closing(SqliteStore(path)) as store:
+        recovered = store.get_intake_receipt("http", "request-1", "hash-a")
+        assert recovered is not None
+        assert recovered.session_id == created.session_id
+        assert recovered.runtime == {"selection": {"name": "multi"}}
+        same, opened = store.open_idempotent_session(
+            "http", "request-1", "hash-a", {"alertname": "A"}, {}
+        )
+        assert not opened and same.session_id == created.session_id
+        with pytest.raises(ValueError, match="different request"):
+            store.open_idempotent_session("http", "request-1", "hash-b", {}, {})
+        independent, opened = store.open_idempotent_session(
+            "kafka:group:alerts:0", "request-1", "hash-b", {}, {}
+        )
+        assert opened and independent.session_id != created.session_id

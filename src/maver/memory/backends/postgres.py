@@ -130,6 +130,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_state ON sessions (corpus_id, state);
 CREATE INDEX IF NOT EXISTS idx_sessions_distilled ON sessions (corpus_id, distilled, ended_at);
 
+CREATE TABLE IF NOT EXISTS intake_receipts (
+    corpus_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    intake_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    PRIMARY KEY (corpus_id, source, intake_key)
+);
+
 CREATE TABLE IF NOT EXISTS approvals (
     corpus_id    TEXT NOT NULL,
     request_id   TEXT NOT NULL,
@@ -594,7 +603,23 @@ class _PostgresSchema(StoreSchema):
 
     @property
     def steps(self) -> Mapping[int, Callable[[], None]]:
-        return {1: self._index_normalised_terms, 2: self._add_labels, 3: self._add_runtime}
+        return {
+            1: self._index_normalised_terms,
+            2: self._add_labels,
+            3: self._add_runtime,
+            4: self._add_intake_receipts,
+        }
+
+    def _add_intake_receipts(self) -> None:
+        with self._db.write() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS intake_receipts ("
+                "corpus_id TEXT NOT NULL, source TEXT NOT NULL, "
+                "intake_key TEXT NOT NULL, request_hash TEXT NOT NULL, "
+                "session_id TEXT NOT NULL, "
+                "PRIMARY KEY (corpus_id, source, intake_key))"
+            )
+            _stamp(conn, 5)
 
     def _add_runtime(self) -> None:
         """Add private run state to existing sessions, without requiring that half."""
@@ -702,6 +727,119 @@ class PostgresStore:
         self._db.close()
 
     # SessionStore ---------------------------------------------------------------
+
+    def get_intake_receipt(
+        self,
+        source: str,
+        key: str,
+        request_hash: str,
+    ) -> SessionRecord | None:
+        """Find the session previously admitted for this source and key."""
+        with self._db.read() as conn:
+            row = conn.execute(
+                "SELECT request_hash, session_id FROM intake_receipts "
+                "WHERE corpus_id = %s AND source = %s AND intake_key = %s",
+                (self.corpus_id, source, key),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["request_hash"] != request_hash:
+                raise ValueError("idempotency key was used for a different request")
+            session = conn.execute(
+                "SELECT * FROM sessions WHERE corpus_id = %s AND session_id = %s",
+                (self.corpus_id, row["session_id"]),
+            ).fetchone()
+        if session is None:
+            raise RuntimeError("intake receipt has no session")
+        return _to_session(session)
+
+    def open_idempotent_session(
+        self,
+        source: str,
+        key: str,
+        request_hash: str,
+        alert: dict[str, Any],
+        runtime: dict[str, Any],
+    ) -> tuple[SessionRecord, bool]:
+        """Claim a key and initialize its session in one transaction."""
+        started_at = _now()
+        record = SessionRecord(
+            session_id=str(uuid.uuid4()),
+            started_at=started_at.isoformat(),
+            alert=alert,
+            run_status=RunStatus.RUNNING.value,
+            runtime=runtime,
+        )
+        with self._db.write() as conn:
+            inserted = conn.execute(
+                "INSERT INTO intake_receipts (corpus_id, source, intake_key, request_hash, "
+                "session_id) VALUES (%s, %s, %s, %s, %s) "
+                "ON CONFLICT DO NOTHING RETURNING session_id",
+                (self.corpus_id, source, key, request_hash, record.session_id),
+            ).fetchone()
+            if inserted is None:
+                row = conn.execute(
+                    "SELECT request_hash, session_id FROM intake_receipts "
+                    "WHERE corpus_id = %s AND source = %s AND intake_key = %s",
+                    (self.corpus_id, source, key),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError("intake receipt disappeared")
+                if row["request_hash"] != request_hash:
+                    raise ValueError("idempotency key was used for a different request")
+                existing = conn.execute(
+                    "SELECT * FROM sessions WHERE corpus_id = %s AND session_id = %s",
+                    (self.corpus_id, row["session_id"]),
+                ).fetchone()
+                if existing is None:
+                    raise RuntimeError("intake receipt has no session")
+                return _to_session(existing), False
+            conn.execute(
+                "INSERT INTO sessions (corpus_id, session_id, started_at, state, "
+                "run_status, alert, runtime) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (
+                    self.corpus_id,
+                    record.session_id,
+                    started_at,
+                    record.state,
+                    record.run_status,
+                    _json(alert),
+                    _json(runtime),
+                ),
+            )
+        return record, True
+
+    def bind_intake_receipt(
+        self,
+        source: str,
+        key: str,
+        request_hash: str,
+        session_id: str,
+    ) -> SessionRecord:
+        """Remember a delivery coalesced by the live alert registry."""
+        with self._db.write() as conn:
+            conn.execute(
+                "INSERT INTO intake_receipts (corpus_id, source, intake_key, "
+                "request_hash, session_id) VALUES (%s, %s, %s, %s, %s) "
+                "ON CONFLICT DO NOTHING",
+                (self.corpus_id, source, key, request_hash, session_id),
+            )
+            row = conn.execute(
+                "SELECT request_hash, session_id FROM intake_receipts "
+                "WHERE corpus_id = %s AND source = %s AND intake_key = %s",
+                (self.corpus_id, source, key),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("intake receipt disappeared")
+            if row["request_hash"] != request_hash:
+                raise ValueError("idempotency key was used for a different request")
+            session = conn.execute(
+                "SELECT * FROM sessions WHERE corpus_id = %s AND session_id = %s",
+                (self.corpus_id, row["session_id"]),
+            ).fetchone()
+            if session is None:
+                raise RuntimeError("intake receipt has no session")
+        return _to_session(session)
 
     def create_session(self, alert: dict[str, Any]) -> SessionRecord:
         """Open a session for an incoming alert.

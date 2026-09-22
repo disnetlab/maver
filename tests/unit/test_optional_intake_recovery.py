@@ -29,7 +29,8 @@ class FakeConsumer:
 
         return records()
 
-    async def commit(self) -> None:
+    async def commit(self, offsets: dict[Any, int]) -> None:
+        assert offsets == {("alerts", 0): 8}
         self.commits += 1
 
     def seek(self, partition: Any, offset: int) -> None:
@@ -43,12 +44,18 @@ def message(value: bytes = b'{"alert":{"alertname":"A"}}') -> Any:
 @pytest.mark.asyncio
 async def test_queue_commits_after_durable_admission(monkeypatch: pytest.MonkeyPatch) -> None:
     consumer = FakeConsumer([message()])
-    service = SimpleNamespace(runs=SimpleNamespace(draining=False))
+    service = SimpleNamespace(
+        runs=SimpleNamespace(draining=False),
+        deployment=SimpleNamespace(
+            settings=SimpleNamespace(intake=SimpleNamespace(kafka=SimpleNamespace(group_id="test")))
+        ),
+    )
     queue = QueueConsumer(service)
     queue.consumer = consumer
     queue.topic_partition = lambda topic, partition: (topic, partition)
 
-    async def admit(body, service):
+    async def admit(body, service, *, intake_id):
+        assert intake_id == ("kafka:test:alerts:0", "7")
         assert consumer.commits == 0
         return {"session_id": "s1"}
 
@@ -63,12 +70,22 @@ async def test_queue_retries_capacity_without_acknowledging(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     consumer = FakeConsumer([message(), message()])
-    queue = QueueConsumer(SimpleNamespace(runs=SimpleNamespace(draining=False)))
+    queue = QueueConsumer(
+        SimpleNamespace(
+            runs=SimpleNamespace(draining=False),
+            deployment=SimpleNamespace(
+                settings=SimpleNamespace(
+                    intake=SimpleNamespace(kafka=SimpleNamespace(group_id="test"))
+                )
+            ),
+        )
+    )
     queue.consumer = consumer
     queue.topic_partition = lambda topic, partition: (topic, partition)
     attempts = 0
 
-    async def admit(body, service):
+    async def admit(body, service, *, intake_id):
+        assert intake_id == ("kafka:test:alerts:0", "7")
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -88,7 +105,16 @@ async def test_queue_retries_capacity_without_acknowledging(
 @pytest.mark.asyncio
 async def test_queue_halts_on_poison_record_without_acknowledging() -> None:
     consumer = FakeConsumer([message(b"not JSON")])
-    queue = QueueConsumer(SimpleNamespace(runs=SimpleNamespace(draining=False)))
+    queue = QueueConsumer(
+        SimpleNamespace(
+            runs=SimpleNamespace(draining=False),
+            deployment=SimpleNamespace(
+                settings=SimpleNamespace(
+                    intake=SimpleNamespace(kafka=SimpleNamespace(group_id="test"))
+                )
+            ),
+        )
+    )
     queue.consumer = consumer
     await queue._run()
     assert isinstance(queue.error, ValueError)

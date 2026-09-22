@@ -243,6 +243,36 @@ class SessionStore(Protocol):
         """
         ...
 
+    def open_idempotent_session(
+        self,
+        source: str,
+        key: str,
+        request_hash: str,
+        alert: dict[str, Any],
+        runtime: dict[str, Any],
+    ) -> tuple[SessionRecord, bool]:
+        """Atomically claim an intake key and initialize its running session.
+
+        Return the stored session and whether this call created it. A reused key with
+        different request content raises ValueError. Source namespaces HTTP and queues.
+        """
+        ...
+
+    def get_intake_receipt(
+        self,
+        source: str,
+        key: str,
+        request_hash: str,
+    ) -> SessionRecord | None:
+        """Find a prior admission, rejecting reuse with different request content."""
+        ...
+
+    def bind_intake_receipt(
+        self, source: str, key: str, request_hash: str, session_id: str,
+    ) -> SessionRecord:
+        """Attach another delivery key to an already running session atomically."""
+        ...
+
     def get_session(self, session_id: str) -> SessionRecord | None:
         """Read one session.
 
