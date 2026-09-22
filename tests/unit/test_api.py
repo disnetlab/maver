@@ -849,6 +849,66 @@ async def test_owned_lifespan_keeps_storage_open_during_late_admission(
         deploy.storage.close()
 
 
+async def test_late_admission_can_be_replanned_after_shutdown(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deploy = deployment(tmp_path, mode="auto")
+    object.__setattr__(deploy.settings.server, "resume_interrupted_incidents", True)
+    sessions = deploy.storage.sessions
+    entered = threading.Event()
+    release = threading.Event()
+    original = sessions.create_session
+
+    def slow_create(alert: dict[str, Any]) -> Any:
+        record = original(alert)
+        entered.set()
+        assert release.wait(timeout=5)
+        return record
+
+    monkeypatch.setattr(sessions, "create_session", slow_create)
+    first_app = create_app(deployment=deploy)
+    request = asyncio.create_task(
+        incidents.accept_incident(incidents.IncidentRequest(alert=ALERT), first_app.state.service)
+    )
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        await _drain(first_app.state.service, 0.0)
+        release.set()
+        receipt = await asyncio.wait_for(request, timeout=5)
+        original_id = receipt["session_id"]
+        parked = sessions.get_session(original_id)
+        assert parked is not None and parked.run_status == RunStatus.NEEDS_RECONCILIATION
+        assert parked.checkpoint is not None
+        assert parked.checkpoint["kind"] == "initialized_incident"
+        assert parked.checkpoint["state"]["runtime"]["deployment_digest"] == deploy.runtime_digest
+        assert not first_app.state.service.runs.live()
+
+        def scheduled(prepared: Any, **kwargs: Any) -> dict[str, Any]:
+            return {"session_id": prepared.session_id, "status": "accepted"}
+
+        monkeypatch.setattr("maver.api.reconciliation.schedule_prepared_incident", scheduled)
+        second_app = create_app(deployment=deploy)
+        async with client(second_app) as http:
+            response = await http.post(
+                f"/api/v1/incidents/{original_id}/reconciliation",
+                json={
+                    "action": "replan",
+                    "reason": "incident was initialized during shutdown",
+                    "observed_state": "fault still present",
+                    "decided_by": "operator",
+                },
+            )
+        assert response.status_code == 200, response.text
+        replacement_id = response.json()["new_incident"]["session_id"]
+        replacement = sessions.get_session(replacement_id)
+        assert replacement is not None
+        assert replacement.runtime["metadata"] == {"reconciliation_of": original_id}
+    finally:
+        release.set()
+        await asyncio.gather(request, return_exceptions=True)
+        deploy.storage.close()
+
+
 async def test_intake_answers_with_the_shape_the_harness_reads(tmp_path: pathlib.Path) -> None:
     """Held contract. The four keys and their values are what an outside driver parses,
     and a run it can poll has to look started from the moment it is accepted."""

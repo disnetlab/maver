@@ -397,8 +397,28 @@ def schedule_prepared_incident(
         # The admission outlived shutdown's bounded wait. Its writes are durable,
         # but a pipeline launched now would run after the drain has stopped watching.
         if service.deployment.settings.server.resume_interrupted_incidents:
+            checkpoint = {
+                "kind": "initialized_incident",
+                "version": 1,
+                "adapter": (
+                    service.deployment.adapter.name
+                    if service.deployment.adapter is not None
+                    else ""
+                ),
+                "state": {
+                    "session_id": record.session_id,
+                    "target_stage": _TARGET_STAGES[target_stage],
+                    "runtime": RunState(
+                        selection=selection.manifest(),
+                        metadata=metadata or {},
+                        deployment_digest=service.deployment.runtime_digest,
+                    ).model_dump(mode="json"),
+                },
+            }
             service.deployment.storage.sessions.set_run_status(
-                record.session_id, RunStatus.NEEDS_RECONCILIATION
+                record.session_id,
+                RunStatus.NEEDS_RECONCILIATION,
+                checkpoint=checkpoint,
             )
         else:
             record_cancellation(service.deployment, record.session_id)
