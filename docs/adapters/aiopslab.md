@@ -3,19 +3,6 @@
 MAVER runs its own pipeline against [AIOpsLab](https://github.com/microsoft/AIOpsLab)
 without putting AIOpsLab's admin kubeconfig inside the agent container.
 
-A four-case acceptance run on Lab-1 completed on 2026-09-17 at revision
-`f33ddc8`: detection, localization and mitigation passed; analysis received a failing
-grade. This validates live task plumbing and an audited mitigation write path for
-that revision, not comparative effectiveness. The run exposed premature truncation
-of large Kubernetes and trace responses; the correction below has a separate live
-read-only check. See [the acceptance record](aiopslab-acceptance-20260917.md) for
-configuration, evidence, failure analysis and coverage limits.
-
-A separate [Gemini 3.5 Flash-Lite mitigation validation](../../refactor/evidence/gemini-mitigation-20260921/validation.md)
-ran on Lab-1 on 2026-09-21. The final condition reached a recovered Verify verdict,
-a successful external grade, and a complete joined audit export. It used a hosted
-AI Studio route and therefore does not validate the local-first model condition.
-
 ## Two processes, opposite directions
 
 AIOpsLab is the inverse of a harness that spawns the agent. The **driver** imports
@@ -70,10 +57,6 @@ runtime's authorization path. Generic `kubectl exec`, shell command chains and
 kubectl through local sandbox tools remain unsupported. The dedicated MongoDB
 recovery tool is still the only supported in-container repair for its allowlisted
 faults. Execution's read-before-write behavior and approval policy are unchanged.
-
-These instructions correct contradictions found in the saved mitigation record;
-the `f33ddc8` acceptance row predates them. No new live acceptance run has been
-performed for this prompt change.
 
 ## Start the agent
 
@@ -141,10 +124,6 @@ tools apply their 16,384-character display limit. Full scoped results are saved 
 session workspace; `save_as` also retains the complete kubectl output. Direct
 unstructured bridge actions and error messages retain their 10,000-character bound.
 
-This corrects the premature truncation observed during the first live acceptance run.
-It changes the observations available in subsequent runs; the original grades are
-retained under their tested revision.
-
 ## Verify hand-back cap and current behavior
 
 The agent accepts `MAVER_VERIFY__HANDBACK_RETRIES=1` to permit at most one Verify
@@ -185,22 +164,21 @@ poetry run python /path/to/maver/scripts/aiopslab-driver.py run \
 It prints the AIOpsLab session, the agent's incident id, the submitted action and the
 harness's outcome, and exits 1 on any refusal the sweep should record.
 
-Before paying for a deployment, check the host:
+Check the host before a run:
 
 ```bash
 poetry run python /path/to/maver/scripts/aiopslab-driver.py doctor \
   --bridge-token-file /var/lib/aiopslab/agent-config/bridge-token
 ```
 
-`doctor` reports on all four preconditions separately — the agent answers, `aiopslab` is
-importable in this interpreter, `kubectl` is on PATH, the token resolves — because each
-has failed on a host at some point looking like something else.
+`doctor` reports four preconditions separately: the agent answers, `aiopslab` is
+importable in this interpreter, `kubectl` is on PATH, and the token resolves.
 
 ## Run a sweep
 
 ```bash
 poetry run python /path/to/maver/scripts/aiopslab-driver.py sweep \
-  --sweep-dir /var/lib/aiopslab/results/sweeps/qwen36-ma-v-20260907 \
+  --sweep-dir /var/lib/aiopslab/results/sweeps/my-sweep \
   --bridge-token-file /var/lib/aiopslab/agent-config/bridge-token
 ```
 
@@ -213,8 +191,7 @@ narrows it to one subset; `--problems <file>` takes an explicit list, one id per
 skipped, so an interrupted sweep continues rather than repeating. `--rerun` overrides
 that, and it is a new experiment rather than a repair.
 
-Two rules are carried from the archived sweeps unchanged, because a resumed sweep has to
-behave like them:
+The sweep applies these retry rules:
 
 - **A result AIOpsLab graded is final.** It is never run again — not on a resume, and not
   when the runner exits nonzero cleaning up after the grade was persisted. Retrying a
@@ -233,11 +210,11 @@ Detached, with a watcher on the side:
 ```bash
 tmux new-session -d -s aiopslab-sweep "cd /var/lib/aiopslab/src/AIOpsLab && \
   poetry run python /path/to/maver/scripts/aiopslab-driver.py sweep \
-  --sweep-dir /var/lib/aiopslab/results/sweeps/qwen36-ma-v-20260907 \
+  --sweep-dir /var/lib/aiopslab/results/sweeps/my-sweep \
   --bridge-token-file /var/lib/aiopslab/agent-config/bridge-token 2>&1 | \
-  tee -a /var/lib/aiopslab/results/sweeps/qwen36-ma-v-20260907/console.log"
+  tee -a /var/lib/aiopslab/results/sweeps/my-sweep/console.log"
 
-scripts/aiopslab/watch-sweep.sh /var/lib/aiopslab/results/sweeps/qwen36-ma-v-20260907
+scripts/aiopslab/watch-sweep.sh /var/lib/aiopslab/results/sweeps/my-sweep
 ```
 
 The watcher only watches. It prints the grade tally, the last rows of `status.tsv` and
@@ -265,7 +242,7 @@ two arms.
     bridge.log                    one JSON line per cluster action, from the host side
 ```
 
-`status.tsv` carries the archived sweep's seven columns and four more:
+`status.tsv` records these columns:
 
 | Column | |
 |---|---|

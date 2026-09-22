@@ -9,14 +9,13 @@ kubectl apply -k deploy/k8s/overlays/production   # a real cluster, digest-pinne
 points at service names your cluster may not have, and it binds nothing in a workload
 namespace, so an overlay is where a deployment becomes a deployment.
 
-## Two traps, both already paid for once
+## Applying overlays safely
 
 **Apply an overlay with `-k`, never a file inside it with `-f`.** The files under
 `overlays/` are patches rather than manifests. `kubectl apply -f overlays/*/configmap-patch.yaml`
 replaces `maver-config` with only the keys that patch names and silently drops every other
 one. Settings default conservatively, so the pod comes back up with the alert consumer
-disabled, the memory store off, and no error anywhere saying so. The prototype lost a run
-to exactly this.
+disabled and the memory store off, with no startup error identifying the dropped keys.
 
 **A `configMapGenerator` cannot read files outside its own kustomization root** without
 `--load-restrictor LoadRestrictionsNone`, which turns off a safety check. That is why the
@@ -152,7 +151,7 @@ uv run pytest tests/unit/test_deploy.py   # renders both overlays, no cluster
 kubectl kustomize deploy/k8s/overlays/production | kubeconform -strict -summary
 ```
 
-`tests/unit/test_deploy.py` is the check that runs in CI. It renders both overlays with
+`tests/unit/test_deploy.py` renders both overlays with
 `kubectl kustomize`, validates every rendered `MAVER_`-prefixed key against the settings
 model, builds `Settings` from the rendered environment so a value the validators refuse
 fails here rather than in a crash loop, checks the probe paths against the routes

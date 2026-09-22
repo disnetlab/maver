@@ -11,7 +11,7 @@ waits for the answer.
 Process-local, and that is the limitation rather than an oversight. A restart empties
 this, and the resume path is required to say so and end the episode rather than continue
 it under whatever composition happens to be configured; see
-``refactor/PRODUCTION-READINESS.md`` §2.7.
+``docs/operations.md`` for restart recovery and reconciliation boundaries.
 """
 
 from collections.abc import Awaitable, Callable

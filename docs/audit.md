@@ -96,4 +96,4 @@ supply a different sink when composing a custom application.
 Audit schema version 4 does not change the structured submission artifact schemas.
 Do not rewrite old measurements with newly inferred durations, success flags or
 missing bodies. Changed telemetry observations define a new experimental condition;
-prior acceptance runs validate their recorded revision only.
+compare results using the schema and software revision recorded for each run.

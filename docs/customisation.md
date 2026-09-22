@@ -294,8 +294,6 @@ The AIOpsLab adapter uses these hooks to describe its bridge without changing co
 or other adapters' instructions.
 
 Frozen research-arm files and historical prompt fixtures retain their original
-bytes. The current default Execution prompt and Verify submission repairs adopt
-later prototype behavior, as recorded in [the changelog](../CHANGELOG.md). Historical
-composition tests replay the earlier Execution prompt through the override mechanism.
-New customisations and migrated behavior must be recorded as experimental conditions;
-these extension points do not constitute parity sign-off.
+bytes. The current Execution prompt and Verify submission behavior are described in
+[the changelog](../CHANGELOG.md). Record custom prompts, agents, and workflow changes
+as distinct experimental conditions when comparing results.

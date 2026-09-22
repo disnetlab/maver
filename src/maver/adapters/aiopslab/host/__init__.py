@@ -9,5 +9,5 @@ enforces the constraint with an AST walk over every module in this package.
 
 The split is not tidiness either. This half holds the cluster-admin kubeconfig and
 serves the loopback bridge; the agent half runs in a container that has neither, and
-reaches the cluster only through that bridge. See ``refactor/12-AIOPSLAB.md`` §2.
+reaches the cluster only through that bridge. See ``docs/adapters/aiopslab.md``.
 """

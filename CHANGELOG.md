@@ -9,6 +9,31 @@ published comparisons, which are single-variable only while the schema does not 
 with the configuration. The procedure is in STYLE_GUIDE.md, "Typed artifacts are
 frozen".
 
+## Operational robustness and documentation
+
+Releasing an intake reservation twice no longer frees another incident's capacity
+slot. Audit appends preserve subsequent events after an interrupted JSONL line,
+while export continues to report the damaged fragment. CLI commands report HTTP
+and connection failures consistently, and the incident example stops when operator
+reconciliation is required instead of polling until timeout.
+
+The public operations guide covers intake, approvals, quarantine, restart recovery,
+outcome review and storage upgrades. Deployment examples include the optional intake
+and recovery settings.
+
+## Durable intake, recovery, and operator feedback
+
+HTTP idempotency keys and Kafka source/message keys now identify an accepted incident
+durably. Duplicate deliveries return the prior receipt; a conflicting payload for the
+same key is refused. Malformed or permanently rejected Kafka records are quarantined for
+inspection and explicit retry. Operator feedback can be attached to a completed
+incident and used by subsequent learning without rewriting the original agent artifacts.
+Eligible interrupted stages can resume from a persisted pre-stage checkpoint when
+recovery is enabled; uncertain external effects require operator reconciliation.
+Storage layout version 8 includes durable receipts, quarantine and ordered feedback.
+These changes affect intake and lifecycle behavior;
+record the version and settings used for each experimental run.
+
 ## Local tool cancellation cleanup
 
 Cancelling a tool now kills and reaps its local process group across shell, Python,
@@ -20,12 +45,12 @@ submitted remote operation took effect; interrupted writes still need reconcilia
 
 A hosted Gemini 3.5 Flash-Lite model profile is available for isolated diagnosis
 and validation. It leaves Gemini 3 sampling parameters at Google's defaults and
-specifies a five-second minimum interval between provider requests to stay below
-the observed AI Studio free-tier request cap. The optional interval is enforced by
+specifies a five-second minimum interval between provider requests. Adjust the profile
+to the quota of the selected endpoint. The optional interval is enforced by
 one client-side gate across calls and retries; existing profiles are unchanged.
 The key belongs in the environment, never in the profile. This condition sends
-incident telemetry outside the cluster and must not be conflated with local-model
-thesis arms. See the [Lab mitigation validation](refactor/evidence/gemini-mitigation-20260921/validation.md).
+incident telemetry outside the cluster and is a separate experimental condition
+from local-model thesis arms.
 
 ## Complete tool invocation observations
 
@@ -46,9 +71,9 @@ artifact schemas and audit schema version 4 are unchanged.
 
 ## Audit schema version 4 and honest telemetry coverage
 
-The 2026-09-17 acceptance records exposed unknown tool measurements represented as
-zero/false, incomplete telemetry represented as healthy, and evidence available only
-in bounded database records or overwriteable workspace files.
+Earlier audit records represented unknown tool measurements as zero/false and
+incomplete telemetry as healthy. Evidence was limited to bounded database records
+or overwriteable workspace files.
 
 Audit version 4 adds model call IDs, per-provider-attempt events, full request/response
 references, tool-start and tool observation fields, and stage source/cancellation
@@ -68,30 +93,29 @@ Malformed telemetry envelopes and unavailable snapshot reads are reported explic
 Health checks distinguish unknown observations from healthy resources, while retaining
 known failures. These change subsequent model observations; RCA and Verify implementation
 versions advance. Generated workspace output names no longer overwrite earlier results
-after recreation or resume. Historical acceptance results retain their original meaning;
-this change does not establish parity or new benchmark performance. See
+after recreation or resume. Earlier results retain their original measurement
+boundaries; this change makes no benchmark performance claim. See
 [the audit guide](docs/audit.md) for the current capture boundaries.
 
 ## AIOpsLab transport instructions and adapter wording overrides
 
-The 2026-09-17 mitigation record exposed conflicting instructions: the remediation
-suffix restricted kubectl to reads while Execution was tasked with mutations, and
-shared diagnostic guidance advertised `kubectl exec` that the bridge refuses.
+The remediation suffix restricted kubectl to reads while Execution was tasked with
+mutations, and shared diagnostic guidance advertised `kubectl exec` that the bridge
+refuses.
 The adapter now explicitly permits Execution's scoped mutations and supplies
 consistent kubectl guidance and descriptions for RCA, Planning, Execution and
 Verify. It uses the generic `RoleOverlay.prompt_blocks` and `tool_descriptions`
 hooks; the core has no AIOpsLab branch. Completed workflow runs record effective
 description overrides in existing run metadata, independently of prompt digests.
 
-This intentionally changes subsequent AIOpsLab model inputs. Historical prompts,
-fixtures and the `f33ddc8` acceptance results retain their original meaning. Tool
-schemas, execution permissions, bridge enforcement and voluntary opening reads are
-unchanged. No live benchmark or deployment accompanies this correction.
+This changes AIOpsLab model inputs. Historical prompts and fixtures retain their
+original meaning. Tool schemas, execution permissions, bridge enforcement and
+voluntary opening reads are unchanged.
 
 ## AIOpsLab complete structured reads
 
-Acceptance of revision `f33ddc8` exposed successful bridge responses cut to 10,013
-characters before namespace snapshots and trace tools could parse them.
+Successful bridge responses were previously cut to 10,013 characters before
+namespace snapshots and trace tools could parse them.
 The AIOpsLab transport now returns complete successful kubectl and structured
 telemetry output. Tools parse and scope those results before applying their shared
 16,384-character display limit and saving full scoped output to the session workspace.
@@ -99,9 +123,9 @@ Kubectl also preserves complete explicit `save_as` results. Unstructured direct 
 actions and bridge failures retain their 10,000-character bound.
 
 This changes observations in subsequent AIOpsLab runs: snapshots can inspect large
-resource lists and agents can read complete saved results. Earlier acceptance results
-retain the original behavior; they are not parity evidence for the corrected adapter.
-No prompts, artifact schemas, namespace restrictions or write authority change.
+resource lists and agents can read complete saved results. Earlier results retain the
+original behavior. No prompts, artifact schemas, namespace restrictions or write
+authority change.
 
 ## Execution scope and bounded Verify hand-backs
 
@@ -126,11 +150,9 @@ still in the prototype working tree. MAVER supplies its own integration and audi
   summary/checks. The model's verdict and raw transcript remain unchanged, and
   health/shape guards still run after repairs.
 
-These are behavioral changes, not claims of parity with the earlier measured
-campaigns. Existing results retain their original prompts and control policy; new
-runs must record the changed condition. No measured campaign or deployment was run
-as part of this migration. Execution and Verify implementations and the built-in
-multi workflow advance their versions so pinned approvals cannot silently continue
+These are behavioral changes. Existing results retain their original prompts and
+control policy; new runs must record the changed condition. Execution, Verify and the
+built-in multi workflow advance their versions so pinned approvals cannot silently continue
 under changed behavior. Frozen experiment-arm files and artifact schemas are unchanged.
 
 ### Schema version 3: audited submission repair
@@ -183,7 +205,6 @@ agent behaviour defines a new experimental condition and requires its own eviden
   construction. A model whose submission carries a field the schema does not name is now
   rejected and asked again, where the archive accepted it and dropped the field, so the
   two are not interchangeable on a run that produced such a submission.
-  See `refactor/PARITY-CHECKLIST.md` P57.
 
 ## Safety
 

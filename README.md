@@ -4,10 +4,10 @@
 recovery framework whose default pipeline diagnoses and repairs live microservice
 incidents using a privately served open-weight language model.
 
-An alert enters over HTTP. A read-only diagnosing role investigates cluster state,
+An alert enters over HTTP or optional Kafka intake. A read-only diagnosing role investigates cluster state,
 metrics, logs and traces and emits a typed `RootCause`. A planning role turns that
-record into a typed `Plan`. An execution role, the only one holding write-capable
-tools, applies it under a check-and-set discipline. Two optional mechanisms sit around
+record into a typed `Plan`. An execution role applies it under a check-and-set discipline and a write-authority
+gate. Two optional mechanisms sit around
 that spine: an independent verification role that can hand work back, and a gated
 second diagnostic opinion informed by an experience store of past incidents.
 
@@ -17,19 +17,36 @@ network policy determine where data goes.
 
 ## Quick start
 
+Python 3.12+ and [uv](https://docs.astral.sh/uv/) are required. Install dependencies
+and validate the checkout without contacting a model or cluster:
+
 ```bash
 uv sync --all-extras
-make check                       # lint, types, and the whole test suite
-make test-parity                 # only the checks that pin the published numbers
-uv run maver config check         # validate the configuration a server would start on
-uv run maver serve                # listen on 0.0.0.0:8080
-python examples/run_incident.py examples/alerts/high-error-rate.json
+make check                       # lint, types, unit and contract tests
+uv run maver config check        # validate local configuration
 ```
 
-Nothing above needs a cluster or a model endpoint except the last line, which needs
-both. `configs/models/` holds the model profiles; a profile is the complete statement
-of how one model is called, including the sampling set every published measurement was
-taken under.
+For an incident run, configure an accessible model endpoint and a kubeconfig for the
+managed cluster. The shipped model endpoint is a placeholder; select your own:
+
+```bash
+export MAVER_MODEL__ENDPOINT_OVERRIDE=http://your-model-host:8000/v1
+export KUBECONFIG=/path/to/kubeconfig
+uv run maver serve               # listen on 0.0.0.0:8080
+```
+
+From another terminal, submit a diagnosis-only incident:
+
+```bash
+uv run python examples/run_incident.py examples/alerts/high-error-rate.json \
+  --target-stage diagnose
+```
+
+Model profiles in `configs/models/` specify provider routing and sampling. Configure
+telemetry and write authority for your deployment using
+[the environment example](deploy/docker/maver.env.example). The
+[operations guide](docs/operations.md) covers incident submission, approvals,
+durable retries, quarantine, restart recovery and outcome feedback.
 
 ## What this artifact demonstrates
 
@@ -66,16 +83,13 @@ and resumes the same incident on a decision, and that path is tested. It is not 
 that a human approved anything during the measurements.
 
 **The manuscript's results come from the research prototype.** They are recomputed
-from its data archive. Earlier MAVER builds, then named Kira, completed a ten-pair
-SREGym smoke comparison and small memory-mechanism checks on 2026-09-08/09. Those
-checks establish implementation evidence for those builds, not new paper results,
-comparative-effect estimates, or sign-off for the current build.
+from its data archive. This repository provides the reusable framework, mechanism
+tests and benchmark adapters. Its current defaults include later behavior changes,
+so the manuscript's measurements should not be attributed to the current release.
 
-Local parity checks pin individual inputs and mechanisms (`make test-parity`). Later
-adopted behavior, including the Execution prompt and Verify submission repairs, is
-identified in [the changelog](CHANGELOG.md). Historical prompt fixtures remain
-available; the current defaults do not reproduce every earlier campaign. The current
-behavior still requires its own validation before use in a measured campaign.
+`make test-parity` checks retained inputs and mechanisms. [The changelog](CHANGELOG.md)
+identifies changes to prompts, submission handling and other experimental conditions.
+Reproducing a study requires its recorded source revision, configuration and data.
 
 ## Running it
 
@@ -92,27 +106,9 @@ write roles an overlay binds per managed namespace. Secrets are in neither role.
 **The approval and incident routes have no authentication yet.** Until they do, the
 deployment guidance is the shipped NetworkPolicy and no ingress.
 
-After an incident reaches `completed` or `failed`, an operator can record a later
-outcome review. For example:
-
-```bash
-maver incidents feedback SESSION_ID corrected --by on-call \
-  --reason 'Checked service endpoints' \
-  --evidence 'Target port 9999 had no listener' \
-  --corrected-cause 'Service targetPort was wrong' \
-  --url http://127.0.0.1:8080
-```
-
-`confirmed` moves the lesson to `human_verified`; `rejected` and `corrected` move it
-to `invalidated`. The same operation is available through
-`POST /api/v1/incidents/{session_id}/feedback`; `GET` on that path returns the
-append-only review history. Each request supplies `verdict`, `decided_by`, `reason`,
-and `evidence`; `corrected` also requires `corrected_cause`. The review changes the
-session and distilled memory standing while preserving the agent's original RCA,
-plan, execution result, and observations. A review submitted before delayed Learning
-runs is included in its packet as external feedback. This review concerns the final
-outcome; `/api/v1/hitl` separately decides proposed cluster writes while a run is
-active.
+See [incident operations](docs/operations.md) for durable intake, operator review,
+and recovery, and [Kubernetes deployment](deploy/k8s/README.md) for manifests,
+namespace access and persistent state.
 
 ## Configuration
 
@@ -131,69 +127,17 @@ stops the process rather than being ignored. `uv run maver config show` prints t
 resolved configuration with secrets masked; `configs/arms/` holds the experiment
 configurations, each declaring what it holds constant.
 
-Kafka intake is optional. Install `maver[kafka]` (or build the image with
-`--build-arg EXTRAS=kafka`), then set `MAVER_INTAKE__KAFKA__ENABLED=true` and
-`MAVER_INTAKE__KAFKA__BOOTSTRAP_SERVERS=broker:9092`. The default topic is `alerts`
-and the default consumer group is `maver`; `MAVER_INTAKE__KAFKA__TOPIC` and
-`MAVER_INTAKE__KAFKA__GROUP_ID` override them. Each message is UTF-8 JSON with the
-same body as `POST /api/v1/incidents`, for example
-`{"alert":{"alertname":"HighErrorRate","namespace":"shop"},"target_stage":"full"}`.
-The consumer acknowledges a message after the session is stored. Backpressure retries
-the same offset. Malformed, tombstone (null value), or permanently rejected messages
-are saved with their original bytes and a reason in the configured session database,
-then acknowledged so later records can proceed.
-A failed quarantine write leaves the offset uncommitted and `/readyz` unhealthy. Inspect
-with `maver queue list` and `maver queue show RECORD_ID` in the deployment environment.
-Retry explicitly with `maver queue retry RECORD_ID --url http://localhost:8080`; pass
-`--corrected incident.json` for malformed input or a tombstone. A retry uses normal
-admission and keeps its session reference on the quarantine record.
-Set `MAVER_INTAKE__HTTP_ENABLED=false` to disable HTTP incident submission while
-keeping read and operator routes available. Kafka delivery is at
-least once: a durable receipt keyed by group, topic, partition and offset returns the
-original session if a record is redelivered after admission. HTTP callers can send
-`Idempotency-Key` to get the same behavior across retries. A key reused with a
-different request returns 409. Requests without a key retain live alert deduplication.
-An exact-key retry returns the original session even if it is parked for reconciliation.
+| Setting | Default | Purpose |
+|---|---|---|
+| `MAVER_INTAKE__HTTP_ENABLED` | `true` | Accept HTTP incident submissions. Read and operator routes remain available when disabled. |
+| `MAVER_INTAKE__KAFKA__ENABLED` | `false` | Consume Kafka alerts; requires the Kafka extra and broker configuration. |
+| `MAVER_SERVER__RESUME_INTERRUPTED_INCIDENTS` | `false` | Checkpoint and recover eligible interrupted stages; park uncertain effects for reconciliation. |
 
-`MAVER_SERVER__RESUME_INTERRUPTED_INCIDENTS=true` opts into startup recovery of
-ordinary running incidents. It saves a pre-stage checkpoint and serially resumes
-interrupted RCA, Planning, and Verify stages under the same selected pipeline and
-configuration. An interrupted Execution stage, an adapter-owned episode, or a changed
-configuration is parked as `needs_reconciliation` with its checkpoint and audit
-evidence intact instead of replaying a possibly completed cluster write. Inspect
-private evidence from a host with access to the configured store:
-
-```bash
-maver incidents reconcile-show SESSION_ID
-```
-
-Check the affected resource and service with fresh read-only observations. Then record
-the observation and a decision through the running server:
-
-```bash
-maver incidents reconcile-decide SESSION_ID --action close --observed-state "service healthy" --reason "write already applied" --by operator
-maver incidents reconcile-decide SESSION_ID --action replan --observed-state "symptom persists" --reason "needs a fresh plan" --by operator
-```
-
-`close` ends the uncertain attempt. `replan` closes it and starts a linked new incident
-from the stored alert and exact selected pipeline; the old write is never replayed.
-New delivery keys and unkeyed intake for the same alert are refused while
-reconciliation is pending; exact-key retries return the original session.
-Replan refuses adapter-owned episodes, incomplete checkpoints, changed deployment
-behavior, and changed pipeline compositions. The old closure and initialized replacement
-commit together. One successful decision is allowed per case. If the process dies before
-the replacement task starts, its linked running session remains visible; with restart
-recovery enabled, its missing stage checkpoint parks it for operator reconciliation.
-The API exposes only stage and evidence-presence metadata at
-`GET /api/v1/incidents/{id}/reconciliation`; the CLI
-reads detailed evidence locally. This recovery assumes one MAVER process over a
-durable SQLite volume or PostgreSQL store; it does not reattach external episodes.
-The enabled mode withholds local `bash_exec` and `code_exec` from replayable stages,
-and a stage with unvetted custom tools is not auto-resumed.
-The flag defaults to false, preserving the measured run behavior.
-Durable intake receipts prevent duplicate admission; they do not enable restart
-recovery by themselves. With recovery disabled, an exact-key retry still names the
-original incident and does not start its interrupted work again.
+HTTP callers can use `Idempotency-Key` for durable retries. Kafka uses a durable
+message identity automatically. Deduplication and restart recovery are separate:
+returning an existing receipt never starts another execution. Configuration examples,
+quarantine commands, recovery boundaries and API behavior are in
+[incident operations](docs/operations.md).
 
 ## Customising your deployment
 
@@ -251,8 +195,8 @@ src/maver/
   memory/        ports, ranking, lifecycle, projections, backends
   secondpass/    the gated second opinion, as five composable stages
   orchestration/ routing, the graph, the runner, outcomes, and the offline pass
-  adapters/      the environment seam, and the SREGym adapter
-  api/           incident intake, health, and approval decisions
+  adapters/      the environment seam, SREGym and AIOpsLab adapters
+  api/           intake, health, approvals, feedback and reconciliation
 
 configs/         model profiles, experiment arms, adapter settings
 deploy/          the container image, and Kubernetes manifests with two overlays
@@ -274,7 +218,7 @@ Under SREGym, kubectl reaches the cluster through the harness's own filtering pr
 sandbox shell runs a real kubectl against a credential-free endpoint the harness serves,
 which is the route every measured run took. The MCP kubectl tools are hidden by default,
 so the model reaches the cluster from the shell and telemetry still arrives over MCP.
-`docs/adapters/sregym.md` covers that route's settings, loading an archived corpus with
+[The SREGym guide](docs/adapters/sregym.md) covers that route's settings, loading an archived corpus with
 `maver memory import`, and the leave-one-out map an imported corpus needs.
 
 Two environment adapters ship, and the difference between them is instructive. Under
@@ -282,11 +226,8 @@ SREGym the harness starts the agent and hands it a problem. Under AIOpsLab the d
 reverses: a driver runs inside the benchmark's own interpreter, holds the cluster-admin
 kubeconfig that the agent container is deliberately not given, and lets the agent reach
 the cluster only through a token-scoped loopback bridge that re-screens every action.
-`docs/adapters/aiopslab.md` covers deploying the agent, running one problem, and running
-a resumable sweep. A [four-case Lab-1 acceptance run](docs/adapters/aiopslab-acceptance-20260917.md)
-completed at revision `f33ddc8`: detection, localization and mitigation passed; analysis
-failed its system-level classification. This is adapter acceptance evidence, not a
-comparative benchmark result.
+[The AIOpsLab guide](docs/adapters/aiopslab.md) covers deploying the agent,
+running one problem and running a resumable sweep.
 
 `STYLE_GUIDE.md` carries the conventions a linter cannot express: the layer boundaries,
 the tool-allowlist rule, the write-gate invariant, the artifact-schema freeze, and the
@@ -294,11 +235,10 @@ rule that keeps the graph library replaceable.
 
 ## Limitations and known issues
 
-The manuscript's numbers remain prototype results. The earlier smoke and mechanism
-checks do not validate subsequent behavior changes or establish comparative effects.
+The manuscript's numbers remain prototype results. Mechanism tests demonstrate
+implementation behavior; they do not establish comparative recovery rates.
 
-**Deferred deliberately.** Each of these is tracked, and what stands in for it today is
-named so an adopter can judge the risk themselves.
+**Deployment boundaries.** Account for these constraints when adapting the framework.
 
 - **No authentication or authorisation on the API.** Anyone who can reach the port can
   approve a cluster write. The shipped NetworkPolicy and no ingress are the interim
