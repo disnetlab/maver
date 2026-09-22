@@ -19,6 +19,7 @@ except ImportError:  # optional maver[kafka] extra
     TopicPartition = None
 
 _log = logging.getLogger(__name__)
+_STOP_GRACE_S = 1.0
 
 
 class QueueConsumer:
@@ -57,8 +58,15 @@ class QueueConsumer:
         """Stop polling before the process drains its admitted incidents."""
         if self.task is not None:
             self.task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self.task
+            # An admission can be waiting for a slow storage thread. Its task is
+            # tracked by the run registry and drained separately; waiting here
+            # without a bound would prevent that drain from ever starting.
+            done, _ = await asyncio.wait({self.task}, timeout=_STOP_GRACE_S)
+            if done:
+                with suppress(asyncio.CancelledError):
+                    await self.task
+            else:
+                _log.warning("Kafka intake is still settling an admission during shutdown")
         if self.consumer is not None:
             await self.consumer.stop()
 
@@ -123,13 +131,29 @@ class QueueConsumer:
 
     async def _quarantine(self, source: str, key: str, raw: bytes | None, reason: str) -> None:
         """Write the rejected bytes durably before their offset can advance."""
-        record = await asyncio.to_thread(
-            self.service.deployment.storage.sessions.quarantine,
-            source,
-            key,
-            base64.b64encode(raw or b"").decode("ascii"),
-            reason,
+        write = asyncio.create_task(
+            asyncio.to_thread(
+                self.service.deployment.storage.sessions.quarantine,
+                source,
+                key,
+                base64.b64encode(raw or b"").decode("ascii"),
+                reason,
+            ),
+            name="maver-kafka-quarantine",
         )
+        self.service.runs.track_admission(write)
+        try:
+            record = await asyncio.shield(write)
+        except asyncio.CancelledError:
+            # A thread cannot be cancelled safely. The drain owns it now, and
+            # the uncommitted offset will be retried on the next consumer.
+            write.add_done_callback(_log_late_quarantine_failure)
+            raise
         _log.warning(
             "quarantined Kafka record %s:%s as %s: %s", source, key, record.record_id, reason
         )
+
+
+def _log_late_quarantine_failure(task: asyncio.Task[Any]) -> None:
+    if not task.cancelled() and (error := task.exception()) is not None:
+        _log.error("Kafka quarantine write failed during shutdown", exc_info=error)

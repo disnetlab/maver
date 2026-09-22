@@ -1,6 +1,8 @@
 """The two opt-in boundaries: queue acknowledgement and safe restart replay."""
 
 import asyncio
+import threading
+from contextlib import suppress
 from types import SimpleNamespace
 from typing import Any
 
@@ -13,6 +15,7 @@ from maver.api.queue import QueueConsumer
 from maver.contracts.runtime import RunState
 from maver.memory.ports import SessionRecord
 from maver.orchestration import recovery as recovery_module
+from maver.orchestration.control import RunRegistry
 from maver.orchestration.runner import _checkpointed_node
 
 
@@ -39,6 +42,92 @@ class FakeConsumer:
 
 def message(value: bytes | None = b'{"alert":{"alertname":"A"}}') -> Any:
     return SimpleNamespace(value=value, topic="alerts", partition=0, offset=7)
+
+
+@pytest.mark.asyncio
+async def test_queue_stop_does_not_wait_forever_for_shielded_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runs = RunRegistry()
+    admitted = asyncio.Event()
+    release = asyncio.Event()
+    stopped = False
+
+    class Consumer(FakeConsumer):
+        async def stop(self) -> None:
+            nonlocal stopped
+            stopped = True
+
+    async def admit(body, service, *, intake_id):
+        async def persist():
+            admitted.set()
+            await release.wait()
+            return {"session_id": "s1"}
+
+        task = asyncio.create_task(persist())
+        runs.track_admission(task)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await task
+            raise
+
+    monkeypatch.setattr(queue_module, "accept_incident", admit)
+    monkeypatch.setattr(queue_module, "_STOP_GRACE_S", 0.01)
+    queue = QueueConsumer(
+        SimpleNamespace(
+            runs=runs,
+            deployment=SimpleNamespace(
+                settings=SimpleNamespace(
+                    intake=SimpleNamespace(kafka=SimpleNamespace(group_id="test"))
+                )
+            ),
+        )
+    )
+    queue.consumer = Consumer([message()])
+    queue.topic_partition = lambda topic, partition: (topic, partition)
+    queue.task = asyncio.create_task(queue._run())
+    await admitted.wait()
+    await asyncio.wait_for(queue.stop(), timeout=0.2)
+    assert stopped
+    assert len(runs.admissions()) == 1
+    assert queue.consumer.commits == 0
+    release.set()
+    with suppress(asyncio.CancelledError):
+        await queue.task
+    await asyncio.sleep(0)
+    assert not runs.admissions()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_quarantine_write_remains_tracked_until_thread_finishes() -> None:
+    runs = RunRegistry()
+    started = threading.Event()
+    release = threading.Event()
+
+    def quarantine(*args):
+        started.set()
+        assert release.wait(timeout=2)
+        return SimpleNamespace(record_id="q1")
+
+    queue = QueueConsumer(
+        SimpleNamespace(
+            runs=runs,
+            deployment=SimpleNamespace(
+                storage=SimpleNamespace(sessions=SimpleNamespace(quarantine=quarantine))
+            ),
+        )
+    )
+    task = asyncio.create_task(queue._quarantine("source", "key", b"bad", "invalid JSON"))
+    assert await asyncio.to_thread(started.wait, 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert len(runs.admissions()) == 1
+    release.set()
+    await asyncio.wait(runs.admissions())
+    await asyncio.sleep(0)
+    assert not runs.admissions()
 
 
 @pytest.mark.asyncio
@@ -151,7 +240,7 @@ async def test_queue_quarantines_poison_record_before_acknowledging() -> None:
 
     queue = QueueConsumer(
         SimpleNamespace(
-            runs=SimpleNamespace(draining=False),
+            runs=RunRegistry(),
             deployment=SimpleNamespace(
                 settings=SimpleNamespace(
                     intake=SimpleNamespace(kafka=SimpleNamespace(group_id="test"))
@@ -177,7 +266,7 @@ async def test_queue_does_not_acknowledge_when_quarantine_write_fails() -> None:
 
     queue = QueueConsumer(
         SimpleNamespace(
-            runs=SimpleNamespace(draining=False),
+            runs=RunRegistry(),
             deployment=SimpleNamespace(
                 settings=SimpleNamespace(
                     intake=SimpleNamespace(kafka=SimpleNamespace(group_id="test"))
@@ -214,7 +303,7 @@ async def test_queue_quarantines_permanent_rejection_and_continues(
 
     queue = QueueConsumer(
         SimpleNamespace(
-            runs=SimpleNamespace(draining=False),
+            runs=RunRegistry(),
             deployment=SimpleNamespace(
                 settings=SimpleNamespace(
                     intake=SimpleNamespace(kafka=SimpleNamespace(group_id="test"))
@@ -344,7 +433,7 @@ async def test_queue_quarantines_tombstone_with_distinct_reason() -> None:
 
     queue = QueueConsumer(
         SimpleNamespace(
-            runs=SimpleNamespace(draining=False),
+            runs=RunRegistry(),
             deployment=SimpleNamespace(
                 settings=SimpleNamespace(
                     intake=SimpleNamespace(kafka=SimpleNamespace(group_id="test"))
