@@ -221,6 +221,13 @@ async def _resume_tracked(
     when opt-in recovery is enabled, cancellation after the approved call starts leaves
     the incident for explicit reconciliation because the write may have happened.
     """
+    # No await between these checks and registration: two decided-request jobs in
+    # this process must not both replay the same approved call. A drain also keeps
+    # the durable awaiting_human row for the next process's approval sweep.
+    if _RUNS.draining:
+        return "draining"
+    if session_id in _RUNS.live():
+        return "already_resuming"
     _RUNS.register(session_id)
     task = asyncio.current_task()
     if task is not None:

@@ -31,6 +31,7 @@ from maver.memory.factory import build_storage
 from maver.middleware.authority import ApprovalPending
 from maver.middleware.human_approval import authorities
 from maver.orchestration import scheduler
+from maver.orchestration.control import RunRegistry
 from maver.orchestration.jobs import bind_deployment, resume_approval, unbind_deployment
 from maver.orchestration.runner import Deployment, resume_after_decision, run_incident
 from maver.roles import registry as role_registry
@@ -365,6 +366,78 @@ async def test_restored_approval_job_cannot_beat_startup_reconciliation(
     assert parked.checkpoint == paused.checkpoint
     assert parked.awaiting_request_id == request_id
     assert model.callers == calls_before
+    deploy.storage.close()
+
+
+async def test_two_decided_approval_jobs_dispatch_only_one_continuation(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sweep racing a decision cannot replay the approved call twice."""
+    deploy = deployment(tmp_path)
+    session = deploy.storage.sessions.create_session(ALERT)
+    with pytest.raises(ApprovalPending):
+        await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+    parked = deploy.storage.sessions.get_session(session.session_id)
+    assert parked is not None and parked.awaiting_request_id is not None
+    request_id = parked.awaiting_request_id
+    assert deploy.storage.approvals.decide(
+        request_id, status="approved", decided_by="operator", reason="approved"
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    dispatched: list[str] = []
+
+    async def stalled_resume(request: str, deployment: Deployment) -> str:
+        dispatched.append(request)
+        entered.set()
+        await release.wait()
+        return "success"
+
+    monkeypatch.setattr("maver.orchestration.jobs.resume_after_decision", stalled_resume)
+    runs = RunRegistry()
+    bind_deployment(deploy, runs=runs)
+    try:
+        first = asyncio.create_task(resume_approval(request_id))
+        await entered.wait()
+        assert await resume_approval(request_id) == "already_resuming"
+        assert dispatched == [request_id]
+        release.set()
+        assert await first == "success"
+    finally:
+        unbind_deployment()
+        deploy.storage.close()
+
+
+async def test_approval_decided_during_drain_stays_parked_for_next_process(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A scheduler job cannot start an untracked continuation after drain begins."""
+    deploy = deployment(tmp_path)
+    session = deploy.storage.sessions.create_session(ALERT)
+    with pytest.raises(ApprovalPending):
+        await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+    parked = deploy.storage.sessions.get_session(session.session_id)
+    assert parked is not None and parked.awaiting_request_id is not None
+    request_id = parked.awaiting_request_id
+    assert deploy.storage.approvals.decide(
+        request_id, status="approved", decided_by="operator", reason="approved"
+    )
+
+    async def should_not_resume(request: str, deployment: Deployment) -> str:
+        pytest.fail("approval continuation started during drain")
+
+    monkeypatch.setattr("maver.orchestration.jobs.resume_after_decision", should_not_resume)
+    runs = RunRegistry()
+    runs.begin_draining()
+    bind_deployment(deploy, runs=runs)
+    try:
+        assert await resume_approval(request_id) == "draining"
+    finally:
+        unbind_deployment()
+    unchanged = deploy.storage.sessions.get_session(session.session_id)
+    assert unchanged is not None and unchanged.run_status == RunStatus.AWAITING_HUMAN
+    assert unchanged.checkpoint == parked.checkpoint
+    assert unchanged.awaiting_request_id == request_id
     deploy.storage.close()
 
 
