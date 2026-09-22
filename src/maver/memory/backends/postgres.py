@@ -80,11 +80,13 @@ from maver.memory.ports import (
     ApprovalRecord,
     ApprovalStatus,
     DecisionStatus,
+    OutcomeFeedback,
     QuarantineRecord,
     SearchScope,
     SessionMemory,
     SessionRecord,
 )
+from maver.memory.review import reviewed_memory
 
 if TYPE_CHECKING:
     from maver.memory.ports import ApprovalStore, RunStore, SessionStore, TextSearch
@@ -165,6 +167,20 @@ CREATE TABLE IF NOT EXISTS intake_quarantine (
     PRIMARY KEY (corpus_id, record_id),
     UNIQUE (corpus_id, source, intake_key)
 );
+CREATE TABLE IF NOT EXISTS outcome_feedback (
+    corpus_id TEXT NOT NULL,
+    feedback_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    decided_by TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    evidence TEXT NOT NULL,
+    corrected_cause TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (corpus_id, feedback_id)
+);
+CREATE INDEX IF NOT EXISTS idx_outcome_feedback_session
+    ON outcome_feedback(corpus_id, session_id, created_at);
 
 CREATE TABLE IF NOT EXISTS approvals (
     corpus_id    TEXT NOT NULL,
@@ -636,6 +652,7 @@ class _PostgresSchema(StoreSchema):
             3: self._add_runtime,
             4: self._add_intake_receipts,
             5: self._add_intake_quarantine,
+            6: self._add_outcome_feedback,
         }
 
     def _add_intake_quarantine(self) -> None:
@@ -661,6 +678,23 @@ class _PostgresSchema(StoreSchema):
                 "PRIMARY KEY (corpus_id, source, intake_key))"
             )
             _stamp(conn, 5)
+
+    def _add_outcome_feedback(self) -> None:
+        """Add durable later verdicts in the configured schema."""
+        with self._db.write() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS outcome_feedback ("
+                "corpus_id TEXT NOT NULL, feedback_id TEXT NOT NULL, "
+                "session_id TEXT NOT NULL, verdict TEXT NOT NULL, "
+                "decided_by TEXT NOT NULL, reason TEXT NOT NULL, "
+                "evidence TEXT NOT NULL, corrected_cause TEXT NOT NULL, "
+                "created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (corpus_id, feedback_id))"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_outcome_feedback_session "
+                "ON outcome_feedback(corpus_id, session_id, created_at)"
+            )
+            _stamp(conn, 7)
 
     def _add_runtime(self) -> None:
         """Add private run state to existing sessions, without requiring that half."""
@@ -972,6 +1006,57 @@ class PostgresStore:
                 (self.corpus_id, session_id),
             ).fetchone()
         return None if row is None else _to_session(row)
+
+    def record_feedback(self, feedback: OutcomeFeedback) -> OutcomeFeedback:
+        """Write the operator verdict and its state change in one transaction."""
+        target = (
+            LifecycleState.HUMAN_VERIFIED
+            if feedback.verdict == "confirmed"
+            else LifecycleState.INVALIDATED
+        )
+        with self._db.write() as conn:
+            row = conn.execute(
+                "SELECT state, run_status FROM sessions WHERE corpus_id = %s "
+                "AND session_id = %s FOR UPDATE",
+                (self.corpus_id, feedback.session_id),
+            ).fetchone()
+            if row is None:
+                raise LookupError("incident not found")
+            if row["run_status"] not in (RunStatus.COMPLETED.value, RunStatus.FAILED.value):
+                raise ValueError("incident is not complete")
+            check_transition(LifecycleState(row["state"]), target)
+            conn.execute(
+                "INSERT INTO outcome_feedback VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    self.corpus_id,
+                    feedback.feedback_id,
+                    feedback.session_id,
+                    feedback.verdict,
+                    scrub_text(feedback.decided_by),
+                    scrub_text(feedback.reason),
+                    scrub_text(feedback.evidence),
+                    scrub_text(feedback.corrected_cause),
+                    feedback.created_at,
+                ),
+            )
+            conn.execute(
+                "UPDATE sessions SET state = %s WHERE corpus_id = %s AND session_id = %s",
+                (target.value, self.corpus_id, feedback.session_id),
+            )
+        return feedback
+
+    def feedback_for(self, session_id: str) -> list[OutcomeFeedback]:
+        """Read the full operator verdict history."""
+        with self._db.read() as conn:
+            rows = conn.execute(
+                "SELECT feedback_id, session_id, verdict, decided_by, reason, evidence, "
+                "corrected_cause, created_at FROM outcome_feedback WHERE corpus_id = %s "
+                "AND session_id = %s ORDER BY created_at, feedback_id",
+                (self.corpus_id, session_id),
+            ).fetchall()
+        return [
+            OutcomeFeedback(**{**row, "created_at": row["created_at"].isoformat()}) for row in rows
+        ]
 
     def set_runtime(self, session_id: str, runtime: dict[str, Any]) -> None:
         """Replace private run state in this corpus only.
@@ -1626,11 +1711,33 @@ class PostgresRecordIndex:
         Args:
             memory: The distilled record.
         """
-        values = [self.corpus_id, *(_bind(name, getattr(memory, name)) for name in _RECORD_FIELDS)]
-        values.extend(
-            [_terms(scrub_text(memory.evidence_text)), _terms(scrub_text(memory.lesson_text))]
-        )
         with self._db.write() as conn:
+            # Lock the session row in the same order as record_feedback. Whichever
+            # transaction commits last sees the latest verdict before writing the
+            # index, even when delayed Learning overlaps an operator review.
+            table = conn.execute("SELECT to_regclass('sessions') AS table_name").fetchone()
+            if table is not None and table["table_name"] is not None:
+                session = conn.execute(
+                    "SELECT state FROM sessions WHERE corpus_id = %s AND session_id = %s "
+                    "FOR UPDATE",
+                    (self.corpus_id, memory.session_id),
+                ).fetchone()
+                if session is not None:
+                    review = conn.execute(
+                        "SELECT verdict, corrected_cause FROM outcome_feedback "
+                        "WHERE corpus_id = %s AND session_id = %s "
+                        "ORDER BY created_at DESC, feedback_id DESC LIMIT 1",
+                        (self.corpus_id, memory.session_id),
+                    ).fetchone()
+                    if review is not None:
+                        memory = reviewed_memory(memory, state=session["state"], **review)
+            values = [
+                self.corpus_id,
+                *(_bind(name, getattr(memory, name)) for name in _RECORD_FIELDS),
+            ]
+            values.extend(
+                [_terms(scrub_text(memory.evidence_text)), _terms(scrub_text(memory.lesson_text))]
+            )
             conn.execute(
                 f"INSERT INTO records (corpus_id, {_RECORD_COLUMNS}, {_TERMS_INSERT}) "
                 f"VALUES (%s, {_RECORD_PLACEHOLDERS}, %s, %s) "

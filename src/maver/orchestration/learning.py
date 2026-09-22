@@ -26,6 +26,7 @@ from maver.memory.distil import distil
 from maver.memory.ports import AgentRunRecord
 from maver.orchestration.jobs import bound_deployment
 from maver.orchestration.nodes import capture_run, context_metadata
+from maver.orchestration.outcome_feedback import latest_feedback_packet
 from maver.orchestration.runner import (
     Deployment,
     _context_builder,
@@ -65,6 +66,13 @@ def build_packet(
         # cost guard rather than a correctness one: a retried job should not spend a
         # model call re-deriving a lesson that is already stored.
         return None
+
+    # A human verdict may have arrived after the delayed job was scheduled. It is
+    # authoritative for the deployable incident; benchmark feedback remains the source
+    # when there is no operator review.
+    external_feedback = (
+        latest_feedback_packet(deployment.storage.sessions, session_id) or external_feedback
+    )
 
     summaries: list[RoleTraceSummary] = []
     for run in deployment.storage.runs.runs_for(session_id):
@@ -174,14 +182,29 @@ async def run_learning(
                 if context.agent_state is not None:
                     context.agent_state.messages = list(outcome.transcript)
             if isinstance(outcome.artifact, LearningResult):
-                distil(
-                    packet,
-                    outcome.artifact,
-                    index=deployment.storage.index,
-                    sessions=deployment.storage.sessions,
-                    settings=deployment.settings.memory,
-                )
-                status = "distilled"
+                # An operator may have reviewed the run while the model was distilling.
+                # A result based on an older verdict must not enter the corpus.
+                current_feedback = latest_feedback_packet(deployment.storage.sessions, session_id)
+                if current_feedback is not None and current_feedback != packet.external_feedback:
+                    _log.warning("operator feedback changed during learning for %s", session_id)
+                    status = "feedback_changed"
+                    continue_learning = False
+                else:
+                    continue_learning = True
+                if continue_learning:
+                    latest_state = deployment.storage.sessions.get_states([session_id]).get(
+                        session_id
+                    )
+                    if latest_state is not None:
+                        packet = packet.model_copy(update={"lifecycle_state": latest_state})
+                    distil(
+                        packet,
+                        outcome.artifact,
+                        index=deployment.storage.index,
+                        sessions=deployment.storage.sessions,
+                        settings=deployment.settings.memory,
+                    )
+                    status = "distilled"
             else:
                 _log.warning("learning produced nothing for %s: %s", session_id, outcome.error)
         finally:

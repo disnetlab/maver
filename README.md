@@ -92,6 +92,28 @@ write roles an overlay binds per managed namespace. Secrets are in neither role.
 **The approval and incident routes have no authentication yet.** Until they do, the
 deployment guidance is the shipped NetworkPolicy and no ingress.
 
+After an incident reaches `completed` or `failed`, an operator can record a later
+outcome review. For example:
+
+```bash
+maver incidents feedback SESSION_ID corrected --by on-call \
+  --reason 'Checked service endpoints' \
+  --evidence 'Target port 9999 had no listener' \
+  --corrected-cause 'Service targetPort was wrong' \
+  --url http://127.0.0.1:8080
+```
+
+`confirmed` moves the lesson to `human_verified`; `rejected` and `corrected` move it
+to `invalidated`. The same operation is available through
+`POST /api/v1/incidents/{session_id}/feedback`; `GET` on that path returns the
+append-only review history. Each request supplies `verdict`, `decided_by`, `reason`,
+and `evidence`; `corrected` also requires `corrected_cause`. The review changes the
+session and distilled memory standing while preserving the agent's original RCA,
+plan, execution result, and observations. A review submitted before delayed Learning
+runs is included in its packet as external feedback. This review concerns the final
+outcome; `/api/v1/hitl` separately decides proposed cluster writes while a run is
+active.
+
 ## Configuration
 
 The package and command are now `maver`, and settings use the `MAVER_` prefix.

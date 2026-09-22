@@ -27,6 +27,7 @@ from pydantic import ValidationError
 from maver import __version__
 from maver.adapters.registry import available_adapters
 from maver.api.app import enabled_adapters, validate_deployment
+from maver.api.feedback import FeedbackRequest
 from maver.api.hitl import request_payload
 from maver.api.incidents import IncidentRequest
 from maver.audit.export import export_incident
@@ -383,6 +384,45 @@ def incidents_reconcile_decide(
         typer.echo(f"could not reach MAVER: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@incidents_app.command("feedback")
+def incidents_feedback(
+    session_id: str,
+    verdict: Annotated[str, typer.Argument(help="confirmed, rejected, or corrected")],
+    reason: Annotated[str, typer.Option("--reason", help="Why this verdict was reached.")],
+    evidence: Annotated[str, typer.Option("--evidence", help="Observation supporting it.")],
+    by: Annotated[str, typer.Option("--by", help="Operator identity.")],
+    corrected_cause: Annotated[
+        str, typer.Option("--corrected-cause", help="Correct cause for corrected verdicts.")
+    ] = "",
+    url: Annotated[
+        str, typer.Option("--url", help="The running MAVER deployment.")
+    ] = "http://127.0.0.1:8080",
+) -> None:
+    """Review a completed incident's outcome, preserving its original artifacts."""
+    try:
+        body = FeedbackRequest.model_validate(
+            {
+                "verdict": verdict,
+                "reason": reason,
+                "evidence": evidence,
+                "decided_by": by,
+                "corrected_cause": corrected_cause,
+            }
+        ).model_dump()
+    except ValidationError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    try:
+        receipt = _api(url, "POST", f"/incidents/{session_id}/feedback", json=body)
+    except httpx.HTTPStatusError as exc:
+        typer.echo(_detail(exc.response), err=True)
+        raise typer.Exit(code=1) from exc
+    except httpx.RequestError as exc:
+        typer.echo(f"could not reach MAVER: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(receipt, indent=2, sort_keys=True))
 
 
 def _json_object(path: Path) -> dict[str, Any]:

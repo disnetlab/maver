@@ -24,6 +24,7 @@ __all__ = [
     "ApprovalStatus",
     "ApprovalStore",
     "DecisionStatus",
+    "OutcomeFeedback",
     "QuarantineRecord",
     "RunStore",
     "SearchHit",
@@ -90,6 +91,20 @@ class SessionRecord:
     notes: str | None = None
     runtime: dict[str, Any] = field(default_factory=dict)
     """Private pipeline state, isolated from model-visible artifacts and alert input."""
+
+
+@dataclass(frozen=True)
+class OutcomeFeedback:
+    """An operator's later verdict, separate from the agent's original artifacts."""
+
+    feedback_id: str
+    session_id: str
+    verdict: Literal["confirmed", "rejected", "corrected"]
+    decided_by: str
+    reason: str
+    evidence: str
+    corrected_cause: str
+    created_at: str
 
 
 @dataclass
@@ -316,6 +331,14 @@ class SessionStore(Protocol):
         Returns:
             The record, or None when it does not exist.
         """
+        ...
+
+    def record_feedback(self, feedback: OutcomeFeedback) -> OutcomeFeedback:
+        """Atomically append a verdict and update a completed session's standing."""
+        ...
+
+    def feedback_for(self, session_id: str) -> list[OutcomeFeedback]:
+        """Return operator verdicts in chronological order."""
         ...
 
     def set_runtime(self, session_id: str, runtime: dict[str, Any]) -> None:
