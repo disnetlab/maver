@@ -53,6 +53,7 @@ from maver.memory.ports import (
     ApprovalRecord,
     ApprovalStatus,
     DecisionStatus,
+    FeedbackChangedError,
     LearningIntent,
     OutcomeFeedback,
     QuarantineRecord,
@@ -1550,11 +1551,15 @@ class SqliteRecordIndex:
         """Close the connection. A no-op worth calling only on a standalone index."""
         self._db.close()
 
-    def upsert_summary(self, memory: SessionMemory) -> None:
+    def upsert_summary(
+        self, memory: SessionMemory, *, expected_feedback_sequence: int | None = None
+    ) -> None:
         """Write or replace one record.
 
         Args:
             memory: The distilled record.
+            expected_feedback_sequence: Operator review sequence used for this lesson,
+                checked atomically before writing; None permits unguarded imports.
         """
         with self._db.write() as conn:
             # The index can be opened alone for corpus imports. In a running store,
@@ -1567,16 +1572,33 @@ class SqliteRecordIndex:
                     "AND name IN ('sessions', 'outcome_feedback')"
                 )
             }
+            review = None
+            if expected_feedback_sequence is not None and (
+                not {"sessions", "outcome_feedback"} <= tables
+                or conn.execute(
+                    "SELECT 1 FROM sessions WHERE session_id = ?", (memory.session_id,)
+                ).fetchone()
+                is None
+            ):
+                raise FeedbackChangedError("cannot check feedback without the original session")
             if {"sessions", "outcome_feedback"} <= tables:
                 review = conn.execute(
-                    "SELECT s.state, f.verdict, f.corrected_cause FROM outcome_feedback f "
+                    "SELECT s.state, f.verdict, f.corrected_cause, f.sequence FROM outcome_feedback f "
                     "JOIN sessions s ON s.session_id = f.session_id "
                     "WHERE f.session_id = ? ORDER BY f.sequence DESC "
                     "LIMIT 1",
                     (memory.session_id,),
                 ).fetchone()
-                if review is not None:
-                    memory = reviewed_memory(memory, **dict(review))
+            sequence = review["sequence"] if review is not None else 0
+            if expected_feedback_sequence is not None and sequence != expected_feedback_sequence:
+                raise FeedbackChangedError("operator feedback changed before the corpus write")
+            if review is not None:
+                memory = reviewed_memory(
+                    memory,
+                    state=review["state"],
+                    verdict=review["verdict"],
+                    corrected_cause=review["corrected_cause"],
+                )
             payload = {name: getattr(memory, name) for name in sorted(_PAYLOAD_FIELDS)}
             evidence = scrub_text(memory.evidence_text)
             lesson = scrub_text(memory.lesson_text)

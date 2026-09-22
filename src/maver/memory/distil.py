@@ -68,6 +68,7 @@ def distil(
     index: TextSearch,
     sessions: SessionStore,
     settings: MemorySettings | None = None,
+    expected_feedback_sequence: int | None = None,
 ) -> SessionMemory:
     """Write one incident's lesson into the corpus and mark the session distilled.
 
@@ -80,6 +81,8 @@ def distil(
         settings: The memory group, which decides whether this record is indexed under
             its own identifiers or under placeholders. None uses the shipped defaults,
             which is what a caller with nothing to say about it has.
+        expected_feedback_sequence: Review sequence captured before packet assembly;
+            the index refuses stale output atomically when this is supplied.
 
     Returns:
         The record that was written.
@@ -117,7 +120,10 @@ def distil(
         labels=signal_labels(_stored_signal(sessions, packet.session_id)),
         **_evaluation(packet.external_feedback),
     )
-    index.upsert_summary(record)
+    if expected_feedback_sequence is None:
+        index.upsert_summary(record)
+    else:
+        index.upsert_summary(record, expected_feedback_sequence=expected_feedback_sequence)
     sessions.mark_distilled(packet.session_id)
     _log.info("distilled session %s into the corpus", packet.session_id)
     return record

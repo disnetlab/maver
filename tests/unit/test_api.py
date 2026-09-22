@@ -458,7 +458,7 @@ async def test_two_decided_approval_jobs_dispatch_only_one_continuation(
 
 
 async def test_held_approval_continuation_is_tracked_and_single_flight(
-    tmp_path: pathlib.Path
+    tmp_path: pathlib.Path,
 ) -> None:
     """An adapter's held episode obeys the same drain and duplicate-job guard."""
     deploy = deployment(tmp_path)

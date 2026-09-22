@@ -42,6 +42,7 @@ from maver.memory.ports import (
     AgentRunRecord,
     ApprovalRecord,
     ApprovalStore,
+    FeedbackChangedError,
     LearningIntent,
     OutcomeFeedback,
     RunStore,
@@ -429,6 +430,39 @@ class MemoryStoreContract:
         assert refreshed is not None
         assert refreshed.lifecycle_state == LifecycleState.HUMAN_VERIFIED.value
         assert refreshed.evaluation_source == "operator"
+
+    def test_guarded_corpus_write_preserves_record_when_review_changes(
+        self, store: OperationalStore, records: TextSearch
+    ) -> None:
+        session = store.create_session({})
+        store.set_run_status(session.session_id, RunStatus.COMPLETED)
+        original = a_record(session.session_id, lesson="original lesson")
+        records.upsert_summary(original, expected_feedback_sequence=0)
+        review = store.record_feedback(
+            OutcomeFeedback(
+                feedback_id="review-1",
+                session_id=session.session_id,
+                verdict="corrected",
+                decided_by="operator",
+                reason="new evidence",
+                evidence="service selector was wrong",
+                corrected_cause="wrong selector",
+                created_at="2026-09-22T12:00:00+00:00",
+            )
+        )
+        reviewed = records.open_record(session.session_id)
+        replacement = a_record(session.session_id, lesson="replacement lesson")
+        with pytest.raises(FeedbackChangedError):
+            records.upsert_summary(replacement, expected_feedback_sequence=0)
+        assert records.open_record(session.session_id) == reviewed
+        assert not store.get_session(session.session_id).distilled
+        records.upsert_summary(replacement, expected_feedback_sequence=review.sequence)
+        written = records.open_record(session.session_id)
+        assert written.lesson_text == "replacement lesson"
+        assert written.corrected_cause == "wrong selector"
+        with pytest.raises(FeedbackChangedError):
+            records.upsert_summary(a_record("missing-session"), expected_feedback_sequence=0)
+        assert records.open_record("missing-session") is None
 
     def test_the_run_status_and_its_checkpoint_move_together(self, store: OperationalStore) -> None:
         """No reader may see `awaiting_human` without the checkpoint that goes with it,

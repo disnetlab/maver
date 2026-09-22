@@ -24,6 +24,7 @@ __all__ = [
     "ApprovalStatus",
     "ApprovalStore",
     "DecisionStatus",
+    "FeedbackChangedError",
     "LearningIntent",
     "OutcomeFeedback",
     "QuarantineRecord",
@@ -55,6 +56,10 @@ is already in cannot be expressed. There is no such thing as deciding to keep wa
 """
 
 AgentRunStatus = Literal["running", "succeeded", "failed", "halted", "awaiting_human", "cancelled"]
+
+
+class FeedbackChangedError(RuntimeError):
+    """A lesson was derived from feedback superseded before its corpus write."""
 
 
 @dataclass(frozen=True)
@@ -711,11 +716,20 @@ class TextSearch(Protocol):
     here is a way of narrowing the corpus rather than of ordering it.
     """
 
-    def upsert_summary(self, memory: SessionMemory) -> None:
+    def upsert_summary(
+        self, memory: SessionMemory, *, expected_feedback_sequence: int | None = None
+    ) -> None:
         """Write or replace one record.
 
         Args:
             memory: The distilled record.
+            expected_feedback_sequence: Require this latest operator review sequence
+                in the write transaction; zero means no review. None skips the check
+                for corpus imports without a corresponding session.
+
+        Raises:
+            FeedbackChangedError: When the expected review is no longer current or
+                its session cannot be checked. The previous corpus record is retained.
         """
         ...
 

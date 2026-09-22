@@ -80,6 +80,7 @@ from maver.memory.ports import (
     ApprovalRecord,
     ApprovalStatus,
     DecisionStatus,
+    FeedbackChangedError,
     LearningIntent,
     OutcomeFeedback,
     QuarantineRecord,
@@ -1872,17 +1873,23 @@ class PostgresRecordIndex:
         """Close the connections. Worth calling only on a standalone index."""
         self._db.close()
 
-    def upsert_summary(self, memory: SessionMemory) -> None:
+    def upsert_summary(
+        self, memory: SessionMemory, *, expected_feedback_sequence: int | None = None
+    ) -> None:
         """Write or replace one record.
 
         Args:
             memory: The distilled record.
+            expected_feedback_sequence: Operator review sequence used for this lesson,
+                checked atomically before writing; None permits unguarded imports.
         """
         with self._db.write() as conn:
             # Lock the session row in the same order as record_feedback. Whichever
             # transaction commits last sees the latest verdict before writing the
             # index, even when delayed Learning overlaps an operator review.
             table = conn.execute("SELECT to_regclass('sessions') AS table_name").fetchone()
+            session = None
+            review = None
             if table is not None and table["table_name"] is not None:
                 session = conn.execute(
                     "SELECT state FROM sessions WHERE corpus_id = %s AND session_id = %s "
@@ -1891,13 +1898,23 @@ class PostgresRecordIndex:
                 ).fetchone()
                 if session is not None:
                     review = conn.execute(
-                        "SELECT verdict, corrected_cause FROM outcome_feedback "
+                        "SELECT verdict, corrected_cause, sequence FROM outcome_feedback "
                         "WHERE corpus_id = %s AND session_id = %s "
                         "ORDER BY sequence DESC LIMIT 1",
                         (self.corpus_id, memory.session_id),
                     ).fetchone()
-                    if review is not None:
-                        memory = reviewed_memory(memory, state=session["state"], **review)
+            if expected_feedback_sequence is not None and session is None:
+                raise FeedbackChangedError("cannot check feedback without the original session")
+            sequence = review["sequence"] if review is not None else 0
+            if expected_feedback_sequence is not None and sequence != expected_feedback_sequence:
+                raise FeedbackChangedError("operator feedback changed before the corpus write")
+            if review is not None and session is not None:
+                memory = reviewed_memory(
+                    memory,
+                    state=session["state"],
+                    verdict=review["verdict"],
+                    corrected_cause=review["corrected_cause"],
+                )
             values = [
                 self.corpus_id,
                 *(_bind(name, getattr(memory, name)) for name in _RECORD_FIELDS),

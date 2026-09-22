@@ -24,7 +24,7 @@ from maver.contracts.artifacts import LearningPacket, LearningResult, RoleTraceS
 from maver.contracts.events import StageEvent
 from maver.contracts.runtime import RunState
 from maver.memory.distil import distil
-from maver.memory.ports import AgentRunRecord, LearningIntent, SessionStore
+from maver.memory.ports import AgentRunRecord, FeedbackChangedError, LearningIntent, SessionStore
 from maver.orchestration.jobs import bound_deployment
 from maver.orchestration.nodes import capture_run, context_metadata
 from maver.orchestration.outcome_feedback import latest_feedback_packet
@@ -269,6 +269,10 @@ async def run_learning(
     """
     if not deployment.settings.memory.learning_enabled:
         return "disabled"
+    # Capture before packet assembly. If a review arrives during assembly, rejecting
+    # this pass is conservative; capturing afterwards could bless a stale packet.
+    reviews = deployment.storage.sessions.feedback_for(session_id)
+    feedback_sequence = reviews[-1].sequence if reviews else 0
     packet = build_packet(deployment, session_id, external_feedback=external_feedback)
     if packet is None:
         return "nothing_to_distil"
@@ -348,14 +352,22 @@ async def run_learning(
                     )
                     if latest_state is not None:
                         packet = packet.model_copy(update={"lifecycle_state": latest_state})
-                    distil(
-                        packet,
-                        outcome.artifact,
-                        index=deployment.storage.index,
-                        sessions=deployment.storage.sessions,
-                        settings=deployment.settings.memory,
-                    )
-                    status = "distilled"
+                    try:
+                        distil(
+                            packet,
+                            outcome.artifact,
+                            index=deployment.storage.index,
+                            sessions=deployment.storage.sessions,
+                            settings=deployment.settings.memory,
+                            expected_feedback_sequence=feedback_sequence,
+                        )
+                    except FeedbackChangedError:
+                        _log.warning(
+                            "operator feedback changed before learning committed for %s", session_id
+                        )
+                        status = "feedback_changed"
+                    else:
+                        status = "distilled"
             else:
                 _log.warning("learning produced nothing for %s: %s", session_id, outcome.error)
         finally:
