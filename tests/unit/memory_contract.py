@@ -179,6 +179,48 @@ class MemoryStoreContract:
 
     # SessionStore ---------------------------------------------------------------
 
+    def test_replan_admission_closes_once_and_rolls_back_with_its_replacement(
+        self, store: OperationalStore
+    ) -> None:
+        """An uncertain write cannot be closed without a durable linked successor."""
+        old = store.create_session({"alertname": "UnresolvedWrite"})
+        store.set_run_status(
+            old.session_id,
+            RunStatus.NEEDS_RECONCILIATION,
+            current_stage="execution",
+            checkpoint={"stage": "execution"},
+        )
+        runtime = {
+            "selection": {"name": "default"},
+            "metadata": {"reconciliation_of": old.session_id},
+        }
+        replacement = store.open_replan_session(
+            old.session_id, runtime=runtime, notes="operator observed continued failure"
+        )
+        assert replacement is not None
+        assert replacement.alert == old.alert
+        assert replacement.runtime == runtime
+        assert replacement.run_status == RunStatus.RUNNING.value
+        closed = store.get_session(old.session_id)
+        assert closed is not None
+        assert closed.run_status == RunStatus.FAILED.value
+        assert closed.checkpoint == {"stage": "execution"}
+        assert replacement.session_id in (closed.notes or "")
+        assert store.open_replan_session(old.session_id, runtime=runtime, notes="retry") is None
+        assert [run.session_id for run in store.running_sessions()] == [replacement.session_id]
+
+        another = store.create_session({"alertname": "SecondWrite"})
+        store.set_run_status(another.session_id, RunStatus.NEEDS_RECONCILIATION)
+        with pytest.raises(TypeError):
+            store.open_replan_session(
+                another.session_id, runtime={"invalid": object()}, notes="bad replacement"
+            )
+        untouched = store.get_session(another.session_id)
+        assert untouched is not None
+        assert untouched.run_status == RunStatus.NEEDS_RECONCILIATION.value
+        assert untouched.ended_at is None
+        assert [run.session_id for run in store.running_sessions()] == [replacement.session_id]
+
     def test_a_session_round_trips(self, store: OperationalStore) -> None:
         alert = {"name": "PodCrashLooping", "labels": {"ns": "prod", "sévérité": "critique"}}
         created = store.create_session(alert)
