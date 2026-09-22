@@ -141,6 +141,7 @@ def _normalise_tool_calls(raw_calls: list[Any]) -> tuple[list[ToolCall], list[st
     calls: list[ToolCall] = []
     notes: list[str] = []
     seen: set[str] = set()
+    supplied = {str(getattr(raw, "id", "") or "") for raw in raw_calls}
 
     for index, raw in enumerate(raw_calls):
         function = getattr(raw, "function", None)
@@ -172,6 +173,11 @@ def _normalise_tool_calls(raw_calls: list[Any]) -> tuple[list[ToolCall], list[st
         if not call_id or call_id in seen:
             reason = "missing" if not call_id else "duplicate"
             call_id = f"call_{index}_{name or 'unnamed'}"
+            base = call_id
+            suffix = 1
+            while call_id in seen or call_id in supplied:
+                call_id = f"{base}_{suffix}"
+                suffix += 1
             notes.append(f"synthesised {reason} tool_call_id -> {call_id}")
         seen.add(call_id)
 

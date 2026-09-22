@@ -213,6 +213,28 @@ class TestToolCallNormalisation:
 
 
 class TestResponseRepair:
+    async def test_repaired_ids_do_not_collide_with_provider_ids(self) -> None:
+        client, _ = _client(
+            completion=_returns(
+                _Raw(
+                    _Msg(
+                        tool_calls=[
+                            _Call("call_2_c", "a", "{}"),
+                            _Call("x", "b", "{}"),
+                            _Call("x", "c", "{}"),
+                            _Call(None, "d", "{}"),
+                            _Call("call_3_d", "e", "{}"),
+                        ]
+                    )
+                )
+            )
+        )
+        response = await _complete(client)
+        ids = [call.id for call in response.tool_calls]
+        assert len(set(ids)) == 5
+        assert ids[0] == "call_2_c"
+        assert ids[4] == "call_3_d"
+
     def test_a_truncated_tool_call_is_dropped_and_noted(self) -> None:
         """Q1: echoing incomplete argument JSON makes the provider reject the NEXT
         request, and a result for a dropped call would dangle."""
