@@ -24,6 +24,7 @@ __all__ = [
     "ApprovalStatus",
     "ApprovalStore",
     "DecisionStatus",
+    "QuarantineRecord",
     "RunStore",
     "SearchHit",
     "SearchScope",
@@ -89,6 +90,19 @@ class SessionRecord:
     notes: str | None = None
     runtime: dict[str, Any] = field(default_factory=dict)
     """Private pipeline state, isolated from model-visible artifacts and alert input."""
+
+
+@dataclass
+class QuarantineRecord:
+    """A Kafka record that could not be admitted, preserved for explicit retry."""
+
+    record_id: str
+    source: str
+    key: str
+    raw_base64: str
+    reason: str
+    created_at: str
+    retry_session_id: str | None = None
 
 
 @dataclass
@@ -268,9 +282,29 @@ class SessionStore(Protocol):
         ...
 
     def bind_intake_receipt(
-        self, source: str, key: str, request_hash: str, session_id: str,
+        self,
+        source: str,
+        key: str,
+        request_hash: str,
+        session_id: str,
     ) -> SessionRecord:
         """Attach another delivery key to an already running session atomically."""
+        ...
+
+    def quarantine(self, source: str, key: str, raw_base64: str, reason: str) -> QuarantineRecord:
+        """Persist or return a rejected delivery before acknowledging it."""
+        ...
+
+    def list_quarantine(self) -> list[QuarantineRecord]:
+        """List quarantined deliveries, oldest first."""
+        ...
+
+    def get_quarantine(self, record_id: str) -> QuarantineRecord | None:
+        """Read a quarantined delivery by id."""
+        ...
+
+    def mark_quarantine_retried(self, record_id: str, session_id: str) -> None:
+        """Keep the admission reached by an explicit retry."""
         ...
 
     def get_session(self, session_id: str) -> SessionRecord | None:

@@ -312,3 +312,18 @@ def test_intake_receipt_survives_restart_and_rejects_changed_request(
             "kafka:group:alerts:0", "request-1", "hash-b", {}, {}
         )
         assert opened and independent.session_id != created.session_id
+
+
+def test_quarantine_survives_restart_and_preserves_retry_reference(tmp_path: pathlib.Path) -> None:
+    path = tmp_path / "quarantine.db"
+    with contextlib.closing(SqliteStore(path)) as store:
+        first = store.quarantine("kafka:group:alerts:0", "7", "bm90IEpTT04=", "invalid JSON")
+        same = store.quarantine("kafka:group:alerts:0", "7", "changed", "later reason")
+        assert same.record_id == first.record_id
+        assert same.raw_base64 == first.raw_base64
+        store.mark_quarantine_retried(first.record_id, "session-1")
+    with contextlib.closing(SqliteStore(path)) as store:
+        restored = store.get_quarantine(first.record_id)
+        assert restored is not None
+        assert restored.retry_session_id == "session-1"
+        assert store.list_quarantine() == [restored]

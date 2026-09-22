@@ -1,6 +1,7 @@
 """Optional Kafka alert intake, sharing HTTP's admission and pipeline selection."""
 
 import asyncio
+import base64
 import logging
 from contextlib import suppress
 from typing import Any
@@ -66,26 +67,30 @@ class QueueConsumer:
             async for message in self.consumer:
                 if self.service.runs.draining:
                     break
+                partition = self.topic_partition(message.topic, message.partition)
+                source = (
+                    f"kafka:{self.service.deployment.settings.intake.kafka.group_id}:"
+                    f"{message.topic}:{message.partition}"
+                )
+                key = str(message.offset)
                 try:
                     body = IncidentRequest.model_validate_json(message.value)
-                except ValidationError as exc:
-                    raise ValueError(
-                        f"invalid alert at {message.topic}:{message.partition}:{message.offset}"
-                    ) from exc
+                except ValidationError:
+                    await self._quarantine(source, key, message.value, "invalid incident JSON")
+                    await self.consumer.commit({partition: message.offset + 1})
+                    continue
                 try:
-                    source = (
-                        f"kafka:{self.service.deployment.settings.intake.kafka.group_id}:"
-                        f"{message.topic}:{message.partition}"
-                    )
-                    receipt = await accept_incident(
-                        body, self.service, intake_id=(source, str(message.offset))
-                    )
+                    receipt = await accept_incident(body, self.service, intake_id=(source, key))
                 except HTTPException as exc:
                     if exc.status_code not in (429, 503):
-                        raise ValueError(
-                            f"rejected alert at {message.topic}:{message.partition}:{message.offset}: "
-                            f"HTTP {exc.status_code}"
-                        ) from exc
+                        await self._quarantine(
+                            source,
+                            key,
+                            message.value,
+                            f"admission rejected: HTTP {exc.status_code}",
+                        )
+                        await self.consumer.commit({partition: message.offset + 1})
+                        continue
                     # Keep the offset uncommitted and retry this record when capacity or
                     # storage returns. Advancing the iterator would skip it until restart.
                     self.consumer.seek(
@@ -93,7 +98,6 @@ class QueueConsumer:
                     )
                     await asyncio.sleep(1)
                     continue
-                partition = self.topic_partition(message.topic, message.partition)
                 await self.consumer.commit({partition: message.offset + 1})
                 _log.info(
                     "admitted Kafka record %s:%d:%d as incident %s",
@@ -107,3 +111,16 @@ class QueueConsumer:
         except Exception as exc:
             self.error = exc
             _log.exception("Kafka intake stopped; /readyz will report it unhealthy")
+
+    async def _quarantine(self, source: str, key: str, raw: bytes, reason: str) -> None:
+        """Write the rejected bytes durably before their offset can advance."""
+        record = await asyncio.to_thread(
+            self.service.deployment.storage.sessions.quarantine,
+            source,
+            key,
+            base64.b64encode(raw).decode("ascii"),
+            reason,
+        )
+        _log.warning(
+            "quarantined Kafka record %s:%s as %s: %s", source, key, record.record_id, reason
+        )

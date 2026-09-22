@@ -117,8 +117,13 @@ and the default consumer group is `maver`; `MAVER_INTAKE__KAFKA__TOPIC` and
 same body as `POST /api/v1/incidents`, for example
 `{"alert":{"alertname":"HighErrorRate","namespace":"shop"},"target_stage":"full"}`.
 The consumer acknowledges a message after the session is stored. Backpressure retries
-the same offset; a malformed or rejected message stops the consumer unacknowledged and
-causes `/readyz` to return 503 until the message is repaired or skipped by an operator.
+the same offset. Malformed or permanently rejected messages are saved with their original
+bytes in the configured session database, then acknowledged so later records can proceed.
+A failed quarantine write leaves the offset uncommitted and `/readyz` unhealthy. Inspect
+with `maver queue list` and `maver queue show RECORD_ID` in the deployment environment.
+Retry explicitly with `maver queue retry RECORD_ID --url http://localhost:8080`; pass
+`--corrected incident.json` for malformed input. A retry uses normal admission and keeps
+its session reference on the quarantine record.
 Set `MAVER_INTAKE__HTTP_ENABLED=false` for queue-only intake. Kafka delivery is at
 least once: a durable receipt keyed by group, topic, partition and offset returns the
 original session if a record is redelivered after admission. HTTP callers can send

@@ -53,6 +53,7 @@ from maver.memory.ports import (
     ApprovalRecord,
     ApprovalStatus,
     DecisionStatus,
+    QuarantineRecord,
     SearchScope,
     SessionMemory,
     SessionRecord,
@@ -101,6 +102,17 @@ CREATE TABLE IF NOT EXISTS intake_receipts (
     request_hash TEXT NOT NULL,
     session_id TEXT NOT NULL,
     PRIMARY KEY (source, intake_key)
+);
+
+CREATE TABLE IF NOT EXISTS intake_quarantine (
+    record_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    intake_key TEXT NOT NULL,
+    raw_base64 TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    retry_session_id TEXT,
+    UNIQUE (source, intake_key)
 );
 
 CREATE TABLE IF NOT EXISTS approvals (
@@ -188,6 +200,19 @@ _RECORD_INSERT = (
 _TERMINAL_RUN_STATUSES = frozenset(
     {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
 )
+
+
+def _to_quarantine(row: sqlite3.Row) -> QuarantineRecord:
+    return QuarantineRecord(
+        record_id=row["record_id"],
+        source=row["source"],
+        key=row["intake_key"],
+        raw_base64=row["raw_base64"],
+        reason=row["reason"],
+        created_at=row["created_at"],
+        retry_session_id=row["retry_session_id"],
+    )
+
 
 # What the payload blob carries: every record field that has no column of its own. The
 # labels have one, so a payload written by a build that put them here is read from the
@@ -337,7 +362,19 @@ class _SqliteSchema(StoreSchema):
             2: self._add_labels,
             3: self._add_runtime,
             4: self._add_intake_receipts,
+            5: self._add_intake_quarantine,
         }
+
+    def _add_intake_quarantine(self) -> None:
+        with self._db.write() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS intake_quarantine ("
+                "record_id TEXT PRIMARY KEY, source TEXT NOT NULL, "
+                "intake_key TEXT NOT NULL, raw_base64 TEXT NOT NULL, "
+                "reason TEXT NOT NULL, created_at TEXT NOT NULL, "
+                "retry_session_id TEXT, UNIQUE (source, intake_key))"
+            )
+            _stamp(conn, 6)
 
     def _add_intake_receipts(self) -> None:
         with self._db.write() as conn:
@@ -481,6 +518,43 @@ class SqliteStore:
         self._db.close()
 
     # SessionStore ---------------------------------------------------------------
+
+    def quarantine(self, source: str, key: str, raw_base64: str, reason: str) -> QuarantineRecord:
+        """Persist a poison record, reusing a prior quarantine on redelivery."""
+        with self._db.write() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO intake_quarantine "
+                "(record_id, source, intake_key, raw_base64, reason, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), source, key, raw_base64, reason, _now()),
+            )
+            row = conn.execute(
+                "SELECT * FROM intake_quarantine WHERE source = ? AND intake_key = ?", (source, key)
+            ).fetchone()
+        assert row is not None
+        return _to_quarantine(row)
+
+    def list_quarantine(self) -> list[QuarantineRecord]:
+        """List persisted poison records in admission order."""
+        with self._db.read() as conn:
+            rows = conn.execute("SELECT * FROM intake_quarantine ORDER BY created_at").fetchall()
+        return [_to_quarantine(row) for row in rows]
+
+    def get_quarantine(self, record_id: str) -> QuarantineRecord | None:
+        """Read one poison record."""
+        with self._db.read() as conn:
+            row = conn.execute(
+                "SELECT * FROM intake_quarantine WHERE record_id = ?", (record_id,)
+            ).fetchone()
+        return None if row is None else _to_quarantine(row)
+
+    def mark_quarantine_retried(self, record_id: str, session_id: str) -> None:
+        """Attach the accepted retry session to the poison record."""
+        with self._db.write() as conn:
+            conn.execute(
+                "UPDATE intake_quarantine SET retry_session_id = ? WHERE record_id = ?",
+                (session_id, record_id),
+            )
 
     def get_intake_receipt(
         self,

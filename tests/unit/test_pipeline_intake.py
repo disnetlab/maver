@@ -493,3 +493,31 @@ async def test_http_idempotency_key_returns_completed_session_without_new_run(
             assert conflict.status_code == 409
     finally:
         deploy.storage.close()
+
+
+async def test_quarantine_retry_admits_once_and_keeps_session_reference(tmp_path: Path) -> None:
+    model = DiagnosisModel()
+    deploy = _deployment(tmp_path, model)
+    record = deploy.storage.sessions.quarantine(
+        "kafka:test:alerts:0", "7", "bm90IEpTT04=", "invalid incident JSON"
+    )
+    app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://maver"
+        ) as client:
+            missing = await client.post(f"/api/v1/quarantine/{record.record_id}/retry")
+            assert missing.status_code == 422
+            body = {"alert": ALERT, "target_stage": "diagnose"}
+            first = await client.post(f"/api/v1/quarantine/{record.record_id}/retry", json=body)
+            assert first.status_code == 202
+            await _settle(app.state.service)
+            second = await client.post(f"/api/v1/quarantine/{record.record_id}/retry", json=body)
+            assert second.status_code == 202
+            assert second.json() == first.json()
+            assert len(model.requests) == 1
+            saved = deploy.storage.sessions.get_quarantine(record.record_id)
+            assert saved is not None
+            assert saved.retry_session_id == first.json()["session_id"]
+    finally:
+        deploy.storage.close()

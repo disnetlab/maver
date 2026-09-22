@@ -20,7 +20,7 @@ __all__ = ["STORE_SCHEMA_VERSION", "StoreSchema", "StoreSchemaTooNew"]
 
 _log = logging.getLogger(__name__)
 
-STORE_SCHEMA_VERSION = 5
+STORE_SCHEMA_VERSION = 6
 """Version of the store *layout*: which tables, columns and indexes a database holds.
 
 Not :data:`maver.contracts.SCHEMA_VERSION`, which versions the submission schemas and the
@@ -34,6 +34,7 @@ text. Version 2 indexes the normalised terms of :mod:`maver.memory.lexemes` inst
 Version 3 carries the environment's own labels beside each record, unindexed.
 Version 4 persists private pipeline and agent runtime state beside each session.
 Version 5 records durable intake keys beside their initialized sessions.
+Version 6 quarantines permanently rejected Kafka records for operator retry.
 """
 
 

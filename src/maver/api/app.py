@@ -31,6 +31,7 @@ from maver.api.deps import Service
 from maver.api.health import router as health_router
 from maver.api.hitl import router as hitl_router
 from maver.api.incidents import router as incidents_router
+from maver.api.quarantine import router as quarantine_router
 from maver.api.queue import QueueConsumer
 from maver.api.reconciliation import router as reconciliation_router
 from maver.api.recover import recover_active
@@ -324,6 +325,7 @@ def create_app(
     app.include_router(health_router)
     app.include_router(incidents_router, prefix=API_PREFIX)
     app.include_router(reconciliation_router, prefix=API_PREFIX)
+    app.include_router(quarantine_router, prefix=API_PREFIX)
     app.include_router(hitl_router, prefix=API_PREFIX)
     for router in _adapter_routers(active):
         app.include_router(router, prefix=API_PREFIX)

@@ -103,22 +103,97 @@ async def test_queue_retries_capacity_without_acknowledging(
 
 
 @pytest.mark.asyncio
-async def test_queue_halts_on_poison_record_without_acknowledging() -> None:
+async def test_queue_quarantines_poison_record_before_acknowledging() -> None:
     consumer = FakeConsumer([message(b"not JSON")])
+    saved = []
+
+    def quarantine(source, key, raw_base64, reason):
+        assert consumer.commits == 0
+        saved.append((source, key, raw_base64, reason))
+        return SimpleNamespace(record_id="q1")
+
     queue = QueueConsumer(
         SimpleNamespace(
             runs=SimpleNamespace(draining=False),
             deployment=SimpleNamespace(
                 settings=SimpleNamespace(
                     intake=SimpleNamespace(kafka=SimpleNamespace(group_id="test"))
-                )
+                ),
+                storage=SimpleNamespace(sessions=SimpleNamespace(quarantine=quarantine)),
             ),
         )
     )
     queue.consumer = consumer
+    queue.topic_partition = lambda topic, partition: (topic, partition)
     await queue._run()
-    assert isinstance(queue.error, ValueError)
+    assert queue.error is None
+    assert consumer.commits == 1
+    assert saved == [("kafka:test:alerts:0", "7", "bm90IEpTT04=", "invalid incident JSON")]
+
+
+@pytest.mark.asyncio
+async def test_queue_does_not_acknowledge_when_quarantine_write_fails() -> None:
+    consumer = FakeConsumer([message(b"not JSON")])
+
+    def fail(*args):
+        raise OSError("storage unavailable")
+
+    queue = QueueConsumer(
+        SimpleNamespace(
+            runs=SimpleNamespace(draining=False),
+            deployment=SimpleNamespace(
+                settings=SimpleNamespace(
+                    intake=SimpleNamespace(kafka=SimpleNamespace(group_id="test"))
+                ),
+                storage=SimpleNamespace(sessions=SimpleNamespace(quarantine=fail)),
+            ),
+        )
+    )
+    queue.consumer = consumer
+    queue.topic_partition = lambda topic, partition: (topic, partition)
+    await queue._run()
+    assert isinstance(queue.error, OSError)
     assert consumer.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_queue_quarantines_permanent_rejection_and_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    consumer = FakeConsumer([message(), message()])
+    saved = []
+    attempts = 0
+
+    def quarantine(source, key, raw_base64, reason):
+        saved.append(reason)
+        return SimpleNamespace(record_id="q1")
+
+    async def admit(body, service, *, intake_id):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise HTTPException(status_code=422, detail="invalid pipeline")
+        return {"session_id": "s1"}
+
+    queue = QueueConsumer(
+        SimpleNamespace(
+            runs=SimpleNamespace(draining=False),
+            deployment=SimpleNamespace(
+                settings=SimpleNamespace(
+                    intake=SimpleNamespace(kafka=SimpleNamespace(group_id="test"))
+                ),
+                storage=SimpleNamespace(sessions=SimpleNamespace(quarantine=quarantine)),
+            ),
+        )
+    )
+    queue.consumer = consumer
+    queue.topic_partition = lambda topic, partition: (topic, partition)
+    monkeypatch.setattr(queue_module, "accept_incident", admit)
+    await queue._run()
+    assert queue.error is None
+    assert saved == ["admission rejected: HTTP 422"]
+    assert consumer.commits == 2
+    assert attempts == 2
 
 
 def test_recovery_refuses_write_stage_and_adapter(monkeypatch: pytest.MonkeyPatch) -> None:

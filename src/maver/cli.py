@@ -11,10 +11,12 @@ render a request through the same projection, so the two cannot describe one req
 differently.
 """
 
+import base64
 import json
 import logging
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -52,11 +54,86 @@ incidents_app = typer.Typer(help="Submit incidents to a running deployment.", no
 audit_app = typer.Typer(
     help="Export complete private audit evidence offline.", no_args_is_help=True
 )
+queue_app = typer.Typer(help="Inspect and retry quarantined queue records.", no_args_is_help=True)
 app.add_typer(audit_app, name="audit")
 app.add_typer(config_app, name="config")
 app.add_typer(approvals_app, name="approvals")
 app.add_typer(memory_app, name="memory")
 app.add_typer(incidents_app, name="incidents")
+app.add_typer(queue_app, name="queue")
+
+
+@queue_app.command("list")
+def queue_list() -> None:
+    """List records the local deployment quarantined."""
+    storage = build_storage(_resolved())
+    try:
+        records = storage.sessions.list_quarantine()
+    finally:
+        storage.close()
+    typer.echo(
+        json.dumps(
+            [
+                {
+                    "record_id": r.record_id,
+                    "source": r.source,
+                    "key": r.key,
+                    "reason": r.reason,
+                    "created_at": r.created_at,
+                    "retry_session_id": r.retry_session_id,
+                }
+                for r in records
+            ],
+            indent=2,
+        )
+    )
+
+
+@queue_app.command("show")
+def queue_show(record_id: str) -> None:
+    """Show a local quarantine record and its original message bytes as text.
+
+    Args:
+        record_id: The record to inspect.
+    """
+    storage = build_storage(_resolved())
+    try:
+        record = storage.sessions.get_quarantine(record_id)
+    finally:
+        storage.close()
+    if record is None:
+        typer.echo("quarantine record not found", err=True)
+        raise typer.Exit(code=1)
+    result = asdict(record)
+    result["raw_text"] = base64.b64decode(record.raw_base64).decode("utf-8", errors="replace")
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@queue_app.command("retry")
+def queue_retry(
+    record_id: str,
+    corrected: Annotated[
+        Path | None, typer.Option("--corrected", help="Corrected incident JSON.")
+    ] = None,
+    url: Annotated[
+        str, typer.Option("--url", help="The running MAVER deployment.")
+    ] = "http://127.0.0.1:8080",
+) -> None:
+    """Explicitly retry a quarantined delivery through the running server.
+
+    Args:
+        record_id: The local quarantine record id.
+        corrected: Replacement incident request, needed for malformed JSON.
+        url: The running deployment with access to the same store.
+    """
+    body = _json_object(corrected) if corrected else None
+    try:
+        receipt = _api(url, "POST", f"/quarantine/{record_id}/retry", json=body)
+    except httpx.HTTPStatusError as exc:
+        typer.echo(_detail(exc.response), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(receipt, indent=2, sort_keys=True))
+
 
 UrlOption = Annotated[
     str | None,
