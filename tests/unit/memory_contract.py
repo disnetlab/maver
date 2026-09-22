@@ -42,6 +42,7 @@ from maver.memory.ports import (
     AgentRunRecord,
     ApprovalRecord,
     ApprovalStore,
+    OutcomeFeedback,
     RunStore,
     SessionMemory,
     SessionStore,
@@ -268,6 +269,69 @@ class MemoryStoreContract:
 
         # A session that is not there is not an error, as it is not anywhere else here.
         store.set_state("no-such-session", LifecycleState.INVALIDATED)
+
+    def test_feedback_order_and_memory_metadata_are_one_store_contract(
+        self, store: OperationalStore, records: TextSearch
+    ) -> None:
+        """Clock order cannot disagree with the session and indexed review standing."""
+        session = store.create_session({"alertname": "bad-port"})
+        store.set_run_status(session.session_id, RunStatus.COMPLETED)
+        store.set_state(session.session_id, LifecycleState.TENTATIVE_SUCCESS)
+        original = a_record(
+            session.session_id,
+            evidence="pods failed readiness",
+            lesson="suspected image fault",
+            lifecycle_state=LifecycleState.TENTATIVE_SUCCESS.value,
+        )
+        records.upsert_summary(original)
+        first = store.record_feedback(
+            OutcomeFeedback(
+                feedback_id="review-1",
+                session_id=session.session_id,
+                verdict="corrected",
+                decided_by="operator-a",
+                reason="checked service",
+                evidence="no listener at targetPort",
+                corrected_cause="wrong targetPort",
+                created_at="2026-09-22T12:00:01+00:00",
+            )
+        )
+        session_after_first = store.get_session(session.session_id)
+        memory_after_first = records.open_record(session.session_id)
+        assert session_after_first is not None and memory_after_first is not None
+        assert first.sequence == 1
+        assert session_after_first.state == LifecycleState.INVALIDATED.value
+        assert memory_after_first.lifecycle_state == session_after_first.state
+        assert memory_after_first.corrected_cause == "wrong targetPort"
+        assert memory_after_first.evidence_text == original.evidence_text
+        assert memory_after_first.lesson_text == original.lesson_text
+
+        second = store.record_feedback(
+            OutcomeFeedback(
+                feedback_id="review-2",
+                session_id=session.session_id,
+                verdict="confirmed",
+                decided_by="operator-b",
+                reason="rechecked",
+                evidence="recovery held",
+                corrected_cause="",
+                created_at="2026-09-22T12:00:00+00:00",
+            )
+        )
+        assert (first.sequence, second.sequence) == (1, 2)
+        assert store.feedback_for(session.session_id) == [first, second]
+        assert store.get_session(session.session_id).state == LifecycleState.HUMAN_VERIFIED.value
+        memory_after_second = records.open_record(session.session_id)
+        assert memory_after_second is not None
+        assert memory_after_second.lifecycle_state == LifecycleState.HUMAN_VERIFIED.value
+        assert memory_after_second.corrected_cause == ""
+
+        # A delayed Learning write carrying the old state cannot restore it.
+        records.upsert_summary(original)
+        refreshed = records.open_record(session.session_id)
+        assert refreshed is not None
+        assert refreshed.lifecycle_state == LifecycleState.HUMAN_VERIFIED.value
+        assert refreshed.evaluation_source == "operator"
 
     def test_the_run_status_and_its_checkpoint_move_together(self, store: OperationalStore) -> None:
         """No reader may see `awaiting_human` without the checkpoint that goes with it,
