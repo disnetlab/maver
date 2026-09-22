@@ -107,7 +107,16 @@ async def test_queue_retries_pending_reconciliation_without_acknowledging(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     consumer = FakeConsumer([message(), message()])
-    queue = QueueConsumer(service())
+    queue = QueueConsumer(
+        SimpleNamespace(
+            runs=SimpleNamespace(draining=False),
+            deployment=SimpleNamespace(
+                settings=SimpleNamespace(
+                    intake=SimpleNamespace(kafka=SimpleNamespace(group_id="test"))
+                )
+            ),
+        )
+    )
     queue.consumer = consumer
     queue.topic_partition = lambda topic, partition: (topic, partition)
     attempts = 0

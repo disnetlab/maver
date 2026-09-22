@@ -104,23 +104,10 @@ async def accept_incident(
     intake_id: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     """Admit an already validated alert from HTTP or a queue."""
-    unresolved = await asyncio.to_thread(
-        service.deployment.storage.sessions.reconciliation_sessions
-    )
-    key = fingerprint(body.alert)
-    for record in unresolved:
-        if fingerprint(record.alert) == key:
-            raise HTTPException(
-                status_code=409,
-                detail=f"alert is held by incident {record.session_id} pending reconciliation",
-                headers={"Retry-After": "30"},
-            )
-    # Validate explicit names before reserving capacity or opening a session. Resolving
-    # selectors is deferred until this request owns the alert, so retries cannot run
-    # selection middleware repeatedly for one incident.
-    explicit = _requested_pipeline(body, service.deployment)
     sessions = service.deployment.storage.sessions
     request_hash = _request_hash(body)
+    # An exact delivery replay owns its original session even when that session is
+    # parked for reconciliation or its selected pipeline is no longer configured.
     if intake_id is not None:
         try:
             prior = await asyncio.to_thread(sessions.get_intake_receipt, *intake_id, request_hash)
@@ -128,6 +115,19 @@ async def accept_incident(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if prior is not None:
             return _receipt(body, service.deployment, prior)
+    unresolved = await asyncio.to_thread(sessions.reconciliation_sessions)
+    key = fingerprint(body.alert)
+    for parked in unresolved:
+        if fingerprint(parked.alert) == key:
+            raise HTTPException(
+                status_code=409,
+                detail=f"alert is held by incident {parked.session_id} pending reconciliation",
+                headers={"Retry-After": "30"},
+            )
+    # Validate explicit names before reserving capacity or opening a session. Resolving
+    # selectors is deferred until this request owns the alert, so retries cannot run
+    # selection middleware repeatedly for one incident.
+    explicit = _requested_pipeline(body, service.deployment)
     claim = admit(service, fingerprint=fingerprint(body.alert))
 
     # A retrying alert source posting the same alert twice wants one incident, not two

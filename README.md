@@ -139,18 +139,21 @@ and the default consumer group is `maver`; `MAVER_INTAKE__KAFKA__TOPIC` and
 same body as `POST /api/v1/incidents`, for example
 `{"alert":{"alertname":"HighErrorRate","namespace":"shop"},"target_stage":"full"}`.
 The consumer acknowledges a message after the session is stored. Backpressure retries
-the same offset. Malformed, tombstone, or permanently rejected messages are saved with their original
-bytes in the configured session database, then acknowledged so later records can proceed.
+the same offset. Malformed, tombstone (null value), or permanently rejected messages
+are saved with their original bytes and a reason in the configured session database,
+then acknowledged so later records can proceed.
 A failed quarantine write leaves the offset uncommitted and `/readyz` unhealthy. Inspect
 with `maver queue list` and `maver queue show RECORD_ID` in the deployment environment.
 Retry explicitly with `maver queue retry RECORD_ID --url http://localhost:8080`; pass
-`--corrected incident.json` for malformed input. A retry uses normal admission and keeps
-its session reference on the quarantine record.
-Set `MAVER_INTAKE__HTTP_ENABLED=false` for queue-only intake. Kafka delivery is at
+`--corrected incident.json` for malformed input or a tombstone. A retry uses normal
+admission and keeps its session reference on the quarantine record.
+Set `MAVER_INTAKE__HTTP_ENABLED=false` to disable HTTP incident submission while
+keeping read and operator routes available. Kafka delivery is at
 least once: a durable receipt keyed by group, topic, partition and offset returns the
 original session if a record is redelivered after admission. HTTP callers can send
 `Idempotency-Key` to get the same behavior across retries. A key reused with a
 different request returns 409. Requests without a key retain live alert deduplication.
+An exact-key retry returns the original session even if it is parked for reconciliation.
 
 `MAVER_SERVER__RESUME_INTERRUPTED_INCIDENTS=true` opts into startup recovery of
 ordinary running incidents. It saves a pre-stage checkpoint and serially resumes
@@ -174,7 +177,8 @@ maver incidents reconcile-decide SESSION_ID --action replan --observed-state "sy
 
 `close` ends the uncertain attempt. `replan` closes it and starts a linked new incident
 from the stored alert and exact selected pipeline; the old write is never replayed.
-New intake for the same alert is refused while reconciliation is pending.
+New delivery keys and unkeyed intake for the same alert are refused while
+reconciliation is pending; exact-key retries return the original session.
 Replan refuses adapter-owned episodes, incomplete checkpoints and changed pipeline
 compositions. One successful decision is allowed per case; if opening the replacement
 fails, the case returns to `needs_reconciliation` so the decision can be retried. The
