@@ -403,7 +403,7 @@ class _SqliteSchema(StoreSchema):
             _stamp(conn, 5)
 
     def _add_outcome_feedback(self) -> None:
-        """Add durable later verdicts in their original version-five shape."""
+        """Add durable later verdicts before commit-order sequencing was introduced."""
         with self._db.write() as conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS outcome_feedback ("

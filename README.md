@@ -189,6 +189,9 @@ durable SQLite volume or PostgreSQL store; it does not reattach external episode
 The enabled mode withholds local `bash_exec` and `code_exec` from replayable stages,
 and a stage with unvetted custom tools is not auto-resumed.
 The flag defaults to false, preserving the measured run behavior.
+Durable intake receipts prevent duplicate admission; they do not enable restart
+recovery by themselves. With recovery disabled, an exact-key retry still names the
+original incident and does not start its interrupted work again.
 
 ## Customising your deployment
 
@@ -334,6 +337,11 @@ named so an adopter can judge the risk themselves.
   does not, measured against a live server.
 - The store layout is versioned. A build that opens a store written by a later build
   refuses it and names both versions rather than writing past columns it does not know.
+- Delayed Learning jobs survive restarts once scheduled. A failure to schedule a job,
+  or an operator verdict changing during distillation, currently leaves the incident
+  undistilled without an automatic retry. Catch-up needs to preserve each run's
+  eligibility and external feedback; blindly processing every undistilled session
+  would also learn from diagnosis-only and externally graded episodes.
 
 **Evaluation posture.** The approval gate ran in automatic mode in every measured
 campaign. The paragraph under the claims table above says what that does and does not

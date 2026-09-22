@@ -32,12 +32,8 @@ class LifecycleState(StrEnum):
     to false, and it is not a signal to bury the record. See the module docstring: a
     failed attempt is informative precedent.
 
-    Note on ``HUMAN_VERIFIED``: the prototype declared this state and weighted it in
-    ranking, but no code path ever wrote it, so the only way to reach it was a manual
-    database update. MAVER must either wire it to a real operator action, which the
-    approval surface makes natural, or drop it. That decision belongs to the memory and
-    approval work, not here; the state is declared now because it is named in the
-    published description of the system.
+    ``HUMAN_VERIFIED`` records an explicit operator outcome review through the
+    feedback API or CLI. Approving a proposed tool call does not verify its outcome.
     """
 
     PENDING = "pending"
