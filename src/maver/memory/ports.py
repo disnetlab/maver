@@ -467,8 +467,10 @@ class SessionStore(Protocol):
         """Atomically close a reconciliation case, retaining its checkpoint and evidence."""
         ...
 
-    def reopen_reconciliation(self, session_id: str, *, notes: str) -> bool:
-        """Repark a claimed case when opening its replacement incident failed."""
+    def open_replan_session(
+        self, session_id: str, *, runtime: dict[str, Any], notes: str
+    ) -> SessionRecord | None:
+        """Atomically close an unresolved case and open its linked replacement."""
         ...
 
     def mark_distilled(self, session_id: str) -> None:

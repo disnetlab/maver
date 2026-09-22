@@ -11,13 +11,13 @@ import dataclasses
 import importlib
 import json
 import pathlib
+import threading
 from typing import Any
 from unittest.mock import Mock
 
 import httpx
 import pytest
 import yaml
-from fastapi import HTTPException
 
 from maver.api.app import _drain, create_app, validate_deployment
 from maver.api.deps import Service
@@ -403,13 +403,11 @@ async def test_interrupted_write_needs_explicit_reconciliation(
     await recover_active(service)
     started: list[dict[str, Any]] = []
 
-    async def start_fresh(alert: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-        started.append({"alert": alert, **kwargs})
-        if len(started) == 1:
-            raise HTTPException(status_code=503, detail="replacement store unavailable")
-        return {"session_id": "fresh-incident", "status": "accepted"}
+    def schedule_fresh(prepared: Any, **kwargs: Any) -> dict[str, Any]:
+        started.append({"prepared": prepared, **kwargs})
+        return {"session_id": prepared.session_id, "status": "accepted"}
 
-    monkeypatch.setattr("maver.api.reconciliation.start_incident", start_fresh)
+    monkeypatch.setattr("maver.api.reconciliation.schedule_prepared_incident", schedule_fresh)
     async with client(app) as http:
         path = f"/api/v1/incidents/{replacement.session_id}/reconciliation"
         decision = {
@@ -418,20 +416,119 @@ async def test_interrupted_write_needs_explicit_reconciliation(
             "observed_state": "fresh probe still fails",
             "decided_by": "operator",
         }
-        failed = await http.post(path, json=decision)
-        assert failed.status_code == 503
-        retryable = deploy.storage.sessions.get_session(replacement.session_id)
-        assert retryable is not None
-        assert retryable.run_status == RunStatus.NEEDS_RECONCILIATION
-        assert retryable.ended_at is None
-        assert retryable.checkpoint == replacement_checkpoint
         response = await http.post(path, json=decision)
         assert response.status_code == 200
-        assert response.json()["new_incident"]["session_id"] == "fresh-incident"
+        new_id = response.json()["new_incident"]["session_id"]
         assert (await http.post(path, json=decision)).status_code == 409
-    assert len(started) == 2
-    assert started[1]["metadata"] == {"reconciliation_of": replacement.session_id}
-    assert started[1]["selection"].pipeline.name == selected.name
+    assert len(started) == 1
+    assert started[0]["metadata"] == {"reconciliation_of": replacement.session_id}
+    assert started[0]["selection"].pipeline.name == selected.name
+    linked = deploy.storage.sessions.get_session(replacement.session_id)
+    fresh = deploy.storage.sessions.get_session(new_id)
+    assert linked is not None and linked.run_status == RunStatus.FAILED
+    assert f"new incident: {new_id}" in (linked.notes or "")
+    assert fresh is not None and fresh.run_status == RunStatus.RUNNING
+    assert fresh.runtime["metadata"] == {"reconciliation_of": replacement.session_id}
+    assert fresh.alert == replacement.alert
+    # Simulate a crash before the replacement task starts: the initialized session
+    # survives, and enabled startup recovery parks its missing checkpoint for review.
+    await recover_active(service)
+    stranded = deploy.storage.sessions.get_session(new_id)
+    assert stranded is not None and stranded.run_status == RunStatus.NEEDS_RECONCILIATION
+    assert stranded.checkpoint is None
+
+
+def test_replan_session_transaction_rolls_back_when_replacement_is_invalid(
+    tmp_path: pathlib.Path,
+) -> None:
+    deploy = deployment(tmp_path, mode="auto")
+    old = deploy.storage.sessions.create_session(ALERT)
+    deploy.storage.sessions.set_run_status(old.session_id, RunStatus.NEEDS_RECONCILIATION)
+
+    with pytest.raises(TypeError):
+        deploy.storage.sessions.open_replan_session(
+            old.session_id, runtime={"invalid": object()}, notes="operator chose replan"
+        )
+
+    unchanged = deploy.storage.sessions.get_session(old.session_id)
+    assert unchanged is not None
+    assert unchanged.run_status == RunStatus.NEEDS_RECONCILIATION
+    assert unchanged.ended_at is None
+    assert deploy.storage.sessions.running_sessions() == []
+
+
+async def test_cancelled_replan_request_still_schedules_committed_replacement(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deploy = deployment(tmp_path, mode="auto")
+    old = deploy.storage.sessions.create_session(ALERT)
+    selected = deploy.pipelines.get(deploy.pipelines.default)
+    checkpoint = {
+        "kind": "active_stage",
+        "version": 1,
+        "stage": "execution",
+        "state": {
+            "session_id": old.session_id,
+            "target_stage": "full",
+            "runtime": {
+                "deployment_digest": deploy.runtime_digest,
+                "selection": {
+                    "name": selected.name,
+                    "digest": selected.digest,
+                    "composition": selected.manifest(),
+                    "source": "default",
+                },
+            },
+        },
+    }
+    sessions = deploy.storage.sessions
+    sessions.set_run_status(
+        old.session_id,
+        RunStatus.NEEDS_RECONCILIATION,
+        current_stage="execution",
+        checkpoint=checkpoint,
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    scheduled = asyncio.Event()
+    real_open = sessions.open_replan_session
+
+    def slow_open(*args: Any, **kwargs: Any) -> Any:
+        entered.set()
+        assert release.wait(timeout=5)
+        return real_open(*args, **kwargs)
+
+    def mark_scheduled(prepared: Any, **kwargs: Any) -> dict[str, Any]:
+        scheduled.set()
+        return {"session_id": prepared.session_id, "status": "accepted"}
+
+    monkeypatch.setattr(sessions, "open_replan_session", slow_open)
+    monkeypatch.setattr("maver.api.reconciliation.schedule_prepared_incident", mark_scheduled)
+    app = create_app(deployment=deploy)
+    async with client(app) as http:
+        request = asyncio.create_task(
+            http.post(
+                f"/api/v1/incidents/{old.session_id}/reconciliation",
+                json={
+                    "action": "replan",
+                    "reason": "still broken",
+                    "observed_state": "fresh probe failed",
+                    "decided_by": "operator",
+                },
+            )
+        )
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            request.cancel()
+        finally:
+            release.set()
+        await asyncio.gather(request, return_exceptions=True)
+        await asyncio.wait_for(scheduled.wait(), timeout=2)
+    closed = sessions.get_session(old.session_id)
+    assert closed is not None and closed.run_status == RunStatus.FAILED
+    replacements = sessions.running_sessions()
+    assert len(replacements) == 1
+    assert replacements[0].runtime["metadata"]["reconciliation_of"] == old.session_id
 
 
 async def test_intake_answers_with_the_shape_the_harness_reads(tmp_path: pathlib.Path) -> None:

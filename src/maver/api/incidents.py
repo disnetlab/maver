@@ -30,6 +30,7 @@ from maver.api.deps import Service, ServiceDep, admit
 from maver.contracts.lifecycle import LifecycleState, RunStatus
 from maver.contracts.runtime import RunState
 from maver.contracts.state import TargetStage
+from maver.memory.ports import SessionRecord
 from maver.middleware.authority import ApprovalPending
 from maver.orchestration.jobs import record_cancellation
 from maver.orchestration.runner import Deployment, run_incident
@@ -365,6 +366,25 @@ async def start_incident(
             headers={"Retry-After": "30"},
         ) from exc
 
+    return schedule_prepared_incident(
+        record,
+        target_stage=target_stage,
+        service=service,
+        selection=selection,
+        metadata=metadata,
+    )
+
+
+def schedule_prepared_incident(
+    record: SessionRecord,
+    *,
+    target_stage: str,
+    service: Service,
+    selection: SelectedPipeline,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Start the task for a session whose alert, selection and status are already durable."""
+    alert = record.alert
     # Registered before the task, so a run that finishes inside one loop iteration
     # cannot be unregistered before it was ever registered.
     service.runs.register(record.session_id, fingerprint=fingerprint(alert))

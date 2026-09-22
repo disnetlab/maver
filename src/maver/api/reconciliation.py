@@ -1,17 +1,21 @@
 """Operator decisions for interrupted runs with uncertain external effects."""
 
 import asyncio
+import logging
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from maver.api.deps import ServiceDep, admit
-from maver.api.incidents import fingerprint, start_incident
+from maver.api.incidents import fingerprint, schedule_prepared_incident
 from maver.contracts.lifecycle import RunStatus
+from maver.contracts.runtime import RunState
 from maver.pipelines import restore_selection
 
 router = APIRouter()
+_log = logging.getLogger(__name__)
+_pending_decisions: set[asyncio.Task[dict[str, Any]]] = set()
 
 
 class ReconciliationDecision(BaseModel):
@@ -65,9 +69,17 @@ async def decide_reconciliation(
             )
         if not isinstance(state, dict) or state.get("session_id") != session_id:
             raise HTTPException(status_code=409, detail="saved checkpoint is incomplete")
-        target = state.get("target_stage")
-        if target not in {"full", "diagnose"}:
+        saved_target = state.get("target_stage")
+        if saved_target not in {"full", "diagnose"}:
             raise HTTPException(status_code=409, detail="saved target stage cannot be restored")
+        target = str(saved_target)
+        saved_runtime = state.get("runtime")
+        if not isinstance(saved_runtime, dict):
+            raise HTTPException(status_code=409, detail="saved runtime is incomplete")
+        if saved_runtime.get("deployment_digest") != service.deployment.runtime_digest:
+            raise HTTPException(
+                status_code=409, detail="deployment behavior changed since admission"
+            )
         try:
             catalog = service.deployment.pipelines
             if catalog is None:
@@ -82,34 +94,46 @@ async def decide_reconciliation(
         f"Reconciliation by {body.decided_by}: {body.action}; "
         f"observed state: {body.observed_state}; reason: {body.reason}"
     )
-    claim = admit(service, fingerprint=fingerprint(record.alert)) if selected else None
-    try:
+    if selected is None:
         decided = await asyncio.to_thread(sessions.decide_reconciliation, session_id, notes=note)
         if not decided:
             raise HTTPException(status_code=409, detail="reconciliation already decided")
-        if selected is None:
-            return {"session_id": session_id, "status": "closed"}
+        return {"session_id": session_id, "status": "closed"}
+
+    claim = admit(service, fingerprint=fingerprint(record.alert))
+    metadata = {"reconciliation_of": session_id}
+    runtime = RunState(selection=selected.manifest(), metadata=metadata)
+
+    async def commit_and_schedule() -> dict[str, Any]:
         try:
-            receipt = await start_incident(
-                record.alert,
+            prepared = await asyncio.to_thread(
+                sessions.open_replan_session,
+                session_id,
+                runtime=runtime.model_dump(mode="json"),
+                notes=note,
+            )
+            if prepared is None:
+                raise HTTPException(status_code=409, detail="reconciliation already decided")
+            receipt = schedule_prepared_incident(
+                prepared,
                 target_stage=target,
                 service=service,
                 selection=selected,
-                metadata={"reconciliation_of": session_id},
+                metadata=metadata,
             )
-        except Exception:
-            await asyncio.to_thread(
-                sessions.reopen_reconciliation,
-                session_id,
-                notes=f"{note}; replacement admission failed; decision may be retried",
-            )
-            raise
-        await asyncio.to_thread(
-            sessions.update_artefacts,
-            session_id,
-            notes=f"{note}; new incident: {receipt['session_id']}",
-        )
-        return {"session_id": session_id, "status": "replanned", "new_incident": receipt}
-    finally:
-        if claim is not None:
+            return {"session_id": session_id, "status": "replanned", "new_incident": receipt}
+        finally:
             service.runs.release(claim)
+
+    # The transaction may commit after an HTTP caller disconnects. Keep a strong task
+    # reference and finish scheduling even when that caller is cancelled.
+    decision = asyncio.create_task(commit_and_schedule())
+    _pending_decisions.add(decision)
+
+    def settled(task: asyncio.Task[dict[str, Any]]) -> None:
+        _pending_decisions.discard(task)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            _log.error("replan decision for %s failed: %s", session_id, error)
+
+    decision.add_done_callback(settled)
+    return await asyncio.shield(decision)

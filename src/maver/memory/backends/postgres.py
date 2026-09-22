@@ -1316,21 +1316,44 @@ class PostgresStore:
             )
             return changed.rowcount == 1
 
-    def reopen_reconciliation(self, session_id: str, *, notes: str) -> bool:
-        """Restore the case after replacement admission failed."""
+    def open_replan_session(
+        self, session_id: str, *, runtime: dict[str, Any], notes: str
+    ) -> SessionRecord | None:
+        """Close the uncertain run and persist its replacement in one transaction."""
+        replacement_id = str(uuid.uuid4())
+        started_at = _now()
         with self._db.write() as conn:
             changed = conn.execute(
-                "UPDATE sessions SET run_status = %s, notes = %s, ended_at = NULL "
-                "WHERE corpus_id = %s AND session_id = %s AND run_status = %s",
+                "UPDATE sessions SET run_status = %s, notes = %s, "
+                "ended_at = COALESCE(ended_at, %s) WHERE corpus_id = %s "
+                "AND session_id = %s AND run_status = %s",
                 (
-                    RunStatus.NEEDS_RECONCILIATION.value,
-                    scrub_optional(notes),
+                    RunStatus.FAILED.value,
+                    scrub_optional(f"{notes}; new incident: {replacement_id}"),
+                    started_at,
                     self.corpus_id,
                     session_id,
-                    RunStatus.FAILED.value,
+                    RunStatus.NEEDS_RECONCILIATION.value,
                 ),
             )
-            return changed.rowcount == 1
+            if changed.rowcount != 1:
+                return None
+            created = conn.execute(
+                "INSERT INTO sessions (corpus_id, session_id, started_at, state, "
+                "run_status, alert, runtime) SELECT corpus_id, %s, %s, %s, %s, "
+                "alert, %s FROM sessions WHERE corpus_id = %s AND session_id = %s RETURNING *",
+                (
+                    replacement_id,
+                    started_at,
+                    LifecycleState.PENDING.value,
+                    RunStatus.RUNNING.value,
+                    _json(runtime),
+                    self.corpus_id,
+                    session_id,
+                ),
+            ).fetchone()
+            assert created is not None
+        return _to_session(created)
 
     def mark_distilled(self, session_id: str) -> None:
         """Record that a session's lesson has been written to the corpus.
