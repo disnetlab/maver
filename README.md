@@ -279,11 +279,11 @@ implementation behavior; they do not establish comparative recovery rates.
   does not, measured against a live server.
 - The store layout is versioned. A build that opens a store written by a later build
   refuses it and names both versions rather than writing past columns it does not know.
-- Delayed Learning jobs survive restarts once scheduled. A failure to schedule a job,
-  or an operator verdict changing during distillation, currently leaves the incident
-  undistilled without an automatic retry. Catch-up needs to preserve each run's
-  eligibility and external feedback; blindly processing every undistilled session
-  would also learn from diagnosis-only and externally graded episodes.
+- Eligible delayed Learning persists its intent and external feedback before
+  scheduling. Startup restores pending work, and failed passes retry serially with
+  backoff, including when operator feedback changes during distillation. Recovery
+  does not backfill diagnosis-only runs or take over externally graded episodes.
+  See [incident operations](docs/operations.md#delayed-learning-and-retries).
 
 **Evaluation posture.** The approval gate ran in automatic mode in every measured
 campaign. The paragraph under the claims table above says what that does and does not

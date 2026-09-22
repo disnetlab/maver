@@ -9,6 +9,19 @@ published comparisons, which are single-variable only while the schema does not 
 with the configuration. The procedure is in STYLE_GUIDE.md, "Typed artifacts are
 frozen".
 
+## Admission shutdown, durable Learning, and approval recovery
+
+Shutdown now tracks pipeline selection and session initialization as well as active
+runs. Late admissions cannot start a pipeline after the drain. Delayed Learning
+persists explicit eligibility and external feedback, restores pending work after a
+restart, and retries unsuccessful passes serially with backoff. Storage layout 9
+adds Learning intents to both backends.
+
+With restart recovery enabled, interrupted approval continuations require operator
+reconciliation; approved operations are not replayed automatically. Concurrent
+continuation jobs in one process dispatch once, and new continuations wait while the service drains.
+The operations guide documents these behaviors and the upgrade requirements.
+
 ## Operational robustness and documentation
 
 Releasing an intake reservation twice no longer frees another incident's capacity

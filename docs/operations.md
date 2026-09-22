@@ -55,6 +55,13 @@ Admission returns HTTP 429 when capacity is exhausted and HTTP 503 when draining
 Temporary initialization refusals can also return HTTP 503. New deliveries for an alert awaiting reconciliation
 return HTTP 409 with `Retry-After`; exact-key retries still return their saved receipt.
 
+Shutdown tracks admission from pipeline selection through session initialization,
+as well as running incidents and delayed Learning. Work already accepted shares the
+configured drain window. An admission that finishes after that window cannot start a
+pipeline; with restart recovery enabled it is retained for reconciliation, otherwise
+it is recorded as cancelled. Database work that is still settling keeps its storage
+open until process exit rather than using a store already closed by shutdown.
+
 ## Decide a pending approval
 
 With prompt-based write authority, an incident can park before a tool executes.
@@ -137,6 +144,12 @@ and unvetted custom tools require reconciliation. Recovery mode withholds
 It does not reattach external benchmark episodes. Keep one process and retain the
 configured SQLite volume or PostgreSQL database across restarts.
 
+An interrupted approval continuation also requires reconciliation. Once continuation
+has begun, its approved operation may have taken effect even if no result was saved.
+With recovery enabled, startup parks interrupted `resuming` sessions for review;
+MAVER does not automatically replay their approved operations. An incident still
+waiting for an approval decision retains the usual approval workflow.
+
 The flag defaults to false. Durable intake receipts prevent duplicate admission
 independently of this flag; a receipt alone does not resume interrupted work.
 
@@ -203,8 +216,24 @@ same transaction, leaving original agent artifacts and observation text intact.
 
 Delayed Learning receives the latest review as external feedback. Review text is
 therefore model-visible to Learning. If a review changes during distillation, that
-pass does not write its stale lesson; automatic rescheduling is not currently
-implemented. Existing stored lessons retain their original text when reviewed.
+pass does not write its stale lesson and is retried with the latest review. Existing
+stored lessons retain their original text when reviewed.
+
+## Delayed Learning and retries
+
+Eligible delayed Learning records an intent in the session database before scheduling
+the job. The intent retains its due time and supplied external feedback. Startup
+restores these intents, and a periodic sweep repairs missing scheduled jobs. Failed
+passes retry after one minute, with exponential backoff capped at fifteen minutes;
+retries continue until successful distillation. Restored jobs run one at a time, and
+an already distilled session does not incur another model call.
+
+Eligibility remains part of the workflow: diagnosis-only runs are excluded, and
+adapter-owned episodes keep their synchronous Learning pass after external grading.
+MAVER does not backfill every undistilled session. Existing scheduled Learning jobs
+are adopted with their saved feedback during upgrade. The saved deployment and
+pipeline configuration must still match; restore that configuration to unblock work
+that was deferred because behavior changed.
 
 ## Health, storage and upgrades
 
@@ -213,8 +242,8 @@ configuration, draining state, storage and the enabled queue consumer. A stopped
 inspect the server log, correct the cause and restart the service. Readiness is not
 a complete check of model-provider or telemetry availability.
 
-Storage migrations run when the configured store is opened. Layout version 8 includes
-durable intake receipts, quarantine and ordered operator feedback. Older layouts
+Storage migrations run when the configured store is opened. Layout version 9 includes
+durable intake receipts, quarantine, ordered operator feedback and Learning intents. Older layouts
 upgrade automatically; a binary that encounters a newer layout refuses to open it.
 Back up durable state before upgrading and restore a matching database backup when
 rolling back across layout versions.
