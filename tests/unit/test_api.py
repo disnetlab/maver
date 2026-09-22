@@ -33,6 +33,7 @@ from maver.middleware.authority import ApprovalPending
 from maver.middleware.human_approval import authorities
 from maver.orchestration import learning, scheduler
 from maver.orchestration.control import RunRegistry
+from maver.orchestration.inflight import hold_episode
 from maver.orchestration.jobs import bind_deployment, resume_approval, unbind_deployment
 from maver.orchestration.runner import Deployment, resume_after_decision, run_incident
 from maver.roles import registry as role_registry
@@ -451,6 +452,47 @@ async def test_two_decided_approval_jobs_dispatch_only_one_continuation(
         assert dispatched == [request_id]
         release.set()
         assert await first == "success"
+    finally:
+        unbind_deployment()
+        deploy.storage.close()
+
+
+async def test_held_approval_continuation_is_tracked_and_single_flight(
+    tmp_path: pathlib.Path
+) -> None:
+    """An adapter's held episode obeys the same drain and duplicate-job guard."""
+    deploy = deployment(tmp_path)
+    session = deploy.storage.sessions.create_session(ALERT)
+    with pytest.raises(ApprovalPending):
+        await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+    parked = deploy.storage.sessions.get_session(session.session_id)
+    assert parked is not None and parked.awaiting_request_id is not None
+    request_id = parked.awaiting_request_id
+    assert deploy.storage.approvals.decide(request_id, status="approved", decided_by="operator")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    async def finish(request: str) -> str:
+        calls.append(request)
+        entered.set()
+        await release.wait()
+        return "success"
+
+    hold_episode(session.session_id, Mock(name="adapter"), finish)
+    runs = RunRegistry()
+    bind_deployment(deploy, runs=runs)
+    try:
+        first = asyncio.create_task(resume_approval(request_id))
+        await entered.wait()
+        assert runs.live() == [session.session_id]
+        assert await resume_approval(request_id) == "already_resuming"
+        runs.begin_draining()
+        assert await resume_approval(request_id) == "draining"
+        assert calls == [request_id]
+        release.set()
+        assert await first == "success"
+        assert runs.live() == []
     finally:
         unbind_deployment()
         deploy.storage.close()

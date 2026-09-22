@@ -200,7 +200,9 @@ async def resume_approval(request_id: str, **_: Any) -> str:
         return "needs_reconciliation"
 
     if held is not None:
-        return await held.finish(request_id)
+        return await _resume_tracked(
+            checkpoint.session_id, request_id, deployment, checkpoint, held.finish
+        )
     if checkpoint.adapter:
         return await _abandon(checkpoint.session_id, checkpoint.adapter, request_id, deployment)
     return await _resume_tracked(checkpoint.session_id, request_id, deployment, checkpoint)
@@ -211,6 +213,7 @@ async def _resume_tracked(
     request_id: str,
     deployment: Deployment,
     approval_checkpoint: ApprovalCheckpoint,
+    continuation: Callable[[str], Awaitable[str]] | None = None,
 ) -> str:
     """Continue a parked incident as a run this process can see it is carrying.
 
@@ -234,6 +237,8 @@ async def _resume_tracked(
     if task is not None:
         _RUNS.attach(session_id, task)
     try:
+        if continuation is not None:
+            return await continuation(request_id)
         return await resume_after_decision(request_id, deployment)
     except asyncio.CancelledError:
         _log.info("the continuation of session %s was cancelled", session_id)
