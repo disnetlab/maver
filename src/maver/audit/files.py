@@ -105,9 +105,16 @@ class AuditFiles:
         """
         self.capture("audit_event", event)
         path = self.root / "events" / f"{self.session_key(str(event['session_id']))}.jsonl"
-        descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        with os.fdopen(descriptor, "ab") as handle:
+        descriptor = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+        with os.fdopen(descriptor, "a+b") as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
+            # A previous process may have stopped after writing only part of a line.
+            # Keep that fragment for inspection, then start the new event on its own
+            # line so one interrupted append cannot corrupt the next event as well.
+            if handle.seek(0, os.SEEK_END) > 0:
+                handle.seek(-1, os.SEEK_END)
+                if handle.read(1) != b"\n":
+                    handle.write(b"\n")
             handle.write(encoded(event) + b"\n")
             handle.flush()
             os.fsync(handle.fileno())

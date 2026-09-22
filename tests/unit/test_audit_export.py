@@ -206,3 +206,22 @@ def test_valid_checksums_do_not_claim_capture_or_database_completeness(tmp_path:
     assert summary["database_projection"]["delivery"] == "best_effort"
     assert summary["database_projection"]["pending_markers_are_exhaustive"] is False
     assert json.loads(result.stdout)["capture_coverage"] == "limited"
+
+
+def test_next_event_survives_an_interrupted_jsonl_append(tmp_path: Path) -> None:
+    source = AuditFiles(tmp_path / "audit")
+    append(source, 1, {"kind": "before"})
+    stream = source.root / "events" / f"{source.session_key('incident-1')}.jsonl"
+    with stream.open("ab") as handle:
+        handle.write(b'{"session_id":"incident-1","sequence":2')
+    append(source, 3, {"kind": "after"})
+
+    target = tmp_path / "bundle"
+    result = export(source.root, target)
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads((target / "manifest.json").read_text())
+    assert summary["event_count"] == 2
+    assert summary["stream_read_issues"] == [{"line": 2, "reason": "JSONDecodeError"}]
+    assert summary["missing_sequence_ranges"] == [[2, 2]]
+    assert json.loads(stream.read_text().splitlines()[2])["payload"]["kind"] == "after"
