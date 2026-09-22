@@ -55,9 +55,9 @@ from maver.orchestration.jobs import (
     schedule_approval_timeout,
     unbind_deployment,
 )
-from maver.orchestration.learning import restore_learning_intents
+from maver.orchestration.learning import active_learning_tasks, restore_learning_intents
 from maver.orchestration.runner import Deployment, TransportFactory
-from maver.orchestration.scheduler import shutdown_scheduler
+from maver.orchestration.scheduler import pause_scheduler, shutdown_scheduler
 from maver.roles.registry import load_plugin_roles, validate_roles
 from maver.secondpass.strategies import policy_for
 from maver.settings.authority import Mode
@@ -252,19 +252,23 @@ async def _drain(service: Service, timeout_s: float) -> None:
             "shut down with %d admission(s) still using storage; storage must remain open",
             len(pending_admissions),
         )
-    while service.runs.live() and time.monotonic() < deadline:
-        _log.info("draining %d incident(s) before shutdown", len(service.runs.live()))
-        await asyncio.sleep(1.0)
+    while (service.runs.live() or active_learning_tasks()) and time.monotonic() < deadline:
+        _log.info(
+            "draining %d incident(s) and %d Learning job(s) before shutdown",
+            len(service.runs.live()),
+            len(active_learning_tasks()),
+        )
+        await asyncio.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
 
     remaining = service.runs.live()
-    if not remaining:
+    carrying = service.runs.tasks() | active_learning_tasks()
+    if not remaining and not carrying:
         service.runs.finish_draining()
         return
 
     # Cancellation lets each handler settle its record. With opt-in recovery the stage
     # checkpoint remains running for the next process; otherwise cancellation is final.
     _log.warning("cancelling %d incident(s) that did not drain: %s", len(remaining), remaining)
-    carrying = service.runs.tasks()
     for task in carrying:
         task.cancel()
     if carrying:
@@ -273,6 +277,20 @@ async def _drain(service: Service, timeout_s: float) -> None:
     if still_live:
         _log.error("shut down with %d incident(s) unrecorded: %s", len(still_live), still_live)
     service.runs.finish_draining()
+
+
+async def _stop_scheduler() -> None:
+    """Settle coroutine jobs before closing the stores they use."""
+    shutdown_scheduler()
+    # AsyncIOScheduler queues its shutdown callback; wait=True does not await its
+    # coroutine executor. Let cancellation reach any job queued before the pause.
+    await asyncio.sleep(0)
+    pending = {task for task in active_learning_tasks() if not task.done()}
+    for task in pending:
+        if not task.cancelling():
+            task.cancel()
+    if pending:
+        await asyncio.wait(pending, timeout=_CANCELLATION_GRACE_S)
 
 
 def create_app(
@@ -303,16 +321,18 @@ def create_app(
         # and a failed queue stop must not skip draining, unbinding, or closing storage.
         async with AsyncExitStack() as cleanup:
             if owned:
+
                 def close_storage() -> None:
                     pending = [
                         task
                         for task in app.state.service.runs.admissions()
                         | app.state.service.runs.tasks()
+                        | active_learning_tasks()
                         if not task.done()
                     ]
                     if pending:
                         _log.error(
-                            "leaving storage open: %d admission or run task(s) remain after drain",
+                            "leaving storage open: %d admission, run, or Learning task(s) remain after drain",
                             len(pending),
                         )
                         return
@@ -321,12 +341,13 @@ def create_app(
                 cleanup.callback(close_storage)
                 cleanup.callback(_flush_sink, active.sink)
             cleanup.callback(unbind_deployment)
-            cleanup.callback(shutdown_scheduler)
+            cleanup.push_async_callback(_stop_scheduler)
             cleanup.push_async_callback(
                 _drain, app.state.service, active.settings.server.drain_timeout_s
             )
             if queue is not None:
                 cleanup.push_async_callback(queue.stop)
+            cleanup.callback(pause_scheduler)
             cleanup.callback(app.state.service.runs.begin_draining)
 
             bind_deployment(active, runs=app.state.service.runs)

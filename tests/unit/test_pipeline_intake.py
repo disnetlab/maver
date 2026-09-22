@@ -597,6 +597,7 @@ async def test_shutdown_tracks_admission_before_registration(
     sessions = deploy.storage.sessions
 
     if phase == "selector":
+
         class Selector:
             async def select(self, alert: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:
                 entered.set()

@@ -28,9 +28,10 @@ from maver.audit.journal import ListSink
 from maver.contracts.lifecycle import RunStatus
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from maver.memory.factory import build_storage
+from maver.memory.ports import LearningIntent
 from maver.middleware.authority import ApprovalPending
 from maver.middleware.human_approval import authorities
-from maver.orchestration import scheduler
+from maver.orchestration import learning, scheduler
 from maver.orchestration.control import RunRegistry
 from maver.orchestration.jobs import bind_deployment, resume_approval, unbind_deployment
 from maver.orchestration.runner import Deployment, resume_after_decision, run_incident
@@ -207,6 +208,53 @@ async def settle(service: Service) -> None:
     """Wait for every incident this process started."""
     while pending := {task for task in service.runs.tasks() if not task.done()}:
         await asyncio.gather(*pending, return_exceptions=True)
+
+
+async def test_shutdown_settles_learning_before_closing_owned_storage(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = importlib.import_module("maver.api.app")
+    dep = deployment(tmp_path)
+    object.__setattr__(dep.settings.memory, "learning_enabled", True)
+    object.__setattr__(dep.settings.server, "drain_timeout_s", 0.0)
+    settled: list[str] = []
+    started = asyncio.Event()
+    close = Mock(wraps=dep.storage.close)
+    dep = dataclasses.replace(dep, storage=dataclasses.replace(dep.storage, close=close))
+    monkeypatch.setattr(module, "build_deployment", lambda settings: dep)
+    monkeypatch.setattr(module, "load_settings", lambda: dep.settings)
+    monkeypatch.setattr(module, "register_post_incident_hooks", lambda settings: None)
+    monkeypatch.setattr(scheduler, "_SCHEDULER", None)
+
+    async def blocked(session_id, deployment, **kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await asyncio.sleep(0)
+            assert not close.called
+            deployment.storage.sessions.update_artefacts(session_id, notes="Learning interrupted")
+            settled.append(session_id)
+
+    monkeypatch.setattr(learning, "run_learning", blocked)
+    app = module.create_app()
+    async with app.router.lifespan_context(app):
+        session_id = dep.storage.sessions.create_session(ALERT).session_id
+        dep.storage.sessions.put_learning_intent(
+            LearningIntent(session_id, "2026-01-01T00:00:00+00:00")
+        )
+        task = asyncio.create_task(learning.run_learning_intent(session_id))
+        await asyncio.wait_for(started.wait(), timeout=1)
+    assert task.cancelled()
+    assert settled == [session_id]
+    close.assert_called_once()
+    assert not learning.active_learning_tasks()
+    reopened = build_storage(dep.settings)
+    try:
+        assert reopened.sessions.get_learning_intent(session_id) is not None
+        assert reopened.sessions.get_session(session_id).notes == "Learning interrupted"
+    finally:
+        reopened.close()
 
 
 async def test_opt_in_restart_resumes_an_interrupted_diagnosis(tmp_path: pathlib.Path) -> None:
@@ -829,9 +877,7 @@ async def test_owned_lifespan_keeps_storage_open_during_late_admission(
     try:
         async with app.router.lifespan_context(app):
             request = asyncio.create_task(
-                incidents.accept_incident(
-                    incidents.IncidentRequest(alert=ALERT), app.state.service
-                )
+                incidents.accept_incident(incidents.IncidentRequest(alert=ALERT), app.state.service)
             )
             assert await asyncio.to_thread(entered.wait, 5)
         closed.assert_not_called()

@@ -224,7 +224,8 @@ async def _resume_tracked(
     # No await between these checks and registration: two decided-request jobs in
     # this process must not both replay the same approved call. A drain also keeps
     # the durable awaiting_human row for the next process's approval sweep.
-    if _RUNS.draining:
+    draining_at_entry = _RUNS.draining
+    if draining_at_entry:
         return "draining"
     if session_id in _RUNS.live():
         return "already_resuming"

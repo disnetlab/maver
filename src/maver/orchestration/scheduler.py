@@ -19,7 +19,7 @@ from typing import Any
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-__all__ = ["scheduler_for", "shutdown_scheduler"]
+__all__ = ["pause_scheduler", "scheduler_for", "shutdown_scheduler"]
 
 _log = logging.getLogger(__name__)
 
@@ -63,6 +63,12 @@ def scheduler_for(workdir: Path) -> AsyncIOScheduler:
     _SCHEDULER = scheduler
     _log.info("scheduler started with a persistent job store at %s", directory)
     return scheduler
+
+
+def pause_scheduler() -> None:
+    """Stop starting jobs while in-flight work drains; new jobs remain persisted."""
+    if _SCHEDULER is not None:
+        _SCHEDULER.pause()
 
 
 def shutdown_scheduler(*, wait: bool = False) -> None:
