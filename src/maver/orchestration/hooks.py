@@ -81,6 +81,7 @@ async def fire_hooks(
     *,
     workdir: Path,
     sessions: SessionStore | None = None,
+    built_in_learning_enabled: bool = True,
     **extra: Any,
 ) -> None:
     """Schedule every hook that matches this incident's outcome.
@@ -90,6 +91,7 @@ async def fire_hooks(
         session_id: The incident.
         workdir: The deployment's workspace, which locates the job store.
         sessions: Session store for durable built-in Learning intents.
+        built_in_learning_enabled: Whether the selected pipeline bound Learning.
         **extra: Passed to the job alongside its own configured arguments. This is how
             an adapter carries an external grade through the registry instead of
             calling the job directly and bypassing it.
@@ -99,6 +101,8 @@ async def fire_hooks(
             continue
         due_at = datetime.now(UTC) + timedelta(seconds=hook.delay_seconds)
         learning = import_module("maver.orchestration.learning")
+        if hook.job_fn is learning.distil_incident and not built_in_learning_enabled:
+            continue
         if hook.job_fn is learning.distil_incident and sessions is not None:
             feedback = {**dict(hook.kwargs), **extra}.get("external_feedback")
             try:

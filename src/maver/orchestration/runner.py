@@ -1064,6 +1064,7 @@ async def _run_mode(
             session_id,
             workdir=deployment.settings.server.workdir,
             sessions=deployment.storage.sessions,
+            built_in_learning_enabled=pipeline is None or pipeline.learning_agent is not None,
         )
 
     _record_completion(journal, final_state, record, deps.policy)
@@ -1320,6 +1321,9 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
                     checkpoint.session_id,
                     workdir=deployment.settings.server.workdir,
                     sessions=deployment.storage.sessions,
+                    built_in_learning_enabled=(
+                        pipeline is None or pipeline.learning_agent is not None
+                    ),
                 )
             _record_completion(journal, final_state, outcome, deps.policy)
             return outcome.outcome.value

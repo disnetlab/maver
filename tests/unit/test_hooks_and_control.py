@@ -139,6 +139,41 @@ async def test_eligible_learning_survives_scheduler_failure(
         store.close()
 
 
+async def test_unbound_pipeline_skips_only_built_in_learning(
+    scheduler: FakeScheduler,
+    tmp_path: pathlib.Path,
+) -> None:
+    store = SqliteStore(tmp_path / "memory.sqlite")
+    session = store.create_session({"alertname": "test"})
+    register_hook(
+        PostIncidentHook(
+            name="learning",
+            job_fn=learning_module.distil_incident,
+            on_outcomes=frozenset({Outcome.SUCCESS}),
+        )
+    )
+    register_hook(
+        PostIncidentHook(
+            name="custom",
+            job_fn=distil,
+            on_outcomes=frozenset({Outcome.SUCCESS}),
+        )
+    )
+    try:
+        await fire_hooks(
+            Outcome.SUCCESS,
+            session.session_id,
+            workdir=tmp_path,
+            sessions=store,
+            built_in_learning_enabled=False,
+        )
+        assert store.get_learning_intent(session.session_id) is None
+        assert len(scheduler.jobs) == 1
+        assert scheduler.jobs[0]["id"] == f"custom:{session.session_id}"
+    finally:
+        store.close()
+
+
 async def test_re_running_an_incident_replaces_its_job_rather_than_queueing_a_second(
     scheduler: FakeScheduler, tmp_path: pathlib.Path
 ) -> None:
