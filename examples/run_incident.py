@@ -44,7 +44,9 @@ def main() -> int:
 
         deadline = time.monotonic() + args.timeout
         while time.monotonic() < deadline:
-            incident = client.get(f"/api/v1/incidents/{session_id}").json()
+            response = client.get(f"/api/v1/incidents/{session_id}")
+            response.raise_for_status()
+            incident = response.json()
             status = incident.get("run_status")
             if status in TERMINAL:
                 print(json.dumps(incident, indent=2))
@@ -54,6 +56,13 @@ def main() -> int:
                 # `maver approvals` or the HTTP surface continues this same incident.
                 print(json.dumps(incident, indent=2))
                 print("parked on a human decision", file=sys.stderr)
+                return 0
+            if status == "needs_reconciliation":
+                print(json.dumps(incident, indent=2))
+                print(
+                    "operator reconciliation required before this incident can continue",
+                    file=sys.stderr,
+                )
                 return 0
             print(f"  {status} at {incident.get('current_stage') or 'startup'}", file=sys.stderr)
             time.sleep(args.poll)
