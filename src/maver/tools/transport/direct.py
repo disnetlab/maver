@@ -29,11 +29,9 @@ around, and it will try again, differently, and again.
 """
 
 import asyncio
-import contextlib
 import logging
 import os
 import shutil
-import signal
 import time
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -44,6 +42,7 @@ import httpx
 from maver.audit.context import current_call
 from maver.settings.groups import TransportSettings
 from maver.tools.errors import format_exit_result, timed_out, tool_error
+from maver.tools.processes import stop_process_group
 from maver.tools.transport.base import ToolTransport, TraceOperation
 
 __all__ = ["DirectTransport", "direct_transport"]
@@ -64,8 +63,6 @@ _RANGE_POINTS = 100
 _MIN_STEP_SECONDS = 15
 """Bounds on a range query's resolution, so one query cannot fill a context window."""
 
-_REAP_SECONDS = 5.0
-"""How long a killed kubectl is waited on before the call returns without it."""
 
 _NO_ROLLBACK = (
     "rollback is not available on this transport: undoing a cluster write means "
@@ -198,17 +195,11 @@ class DirectTransport:
         timeout = float(self._settings.timeout_s)
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        except asyncio.CancelledError:
+            await stop_process_group(process)
+            raise
         except TimeoutError:
-            # Signalling the group rather than the process is what makes the deadline a
-            # bound. kill() reaches kubectl alone, and wait() returns only once every
-            # copy of the pipes is closed, so anything kubectl started that inherited
-            # them — a wrapper script, an exec credential plugin holding kubectl's own
-            # stderr — kept the call alive for its whole life while the model was told
-            # it had been abandoned on time. The reap is bounded for the same reason.
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(process.wait(), _REAP_SECONDS)
+            await stop_process_group(process)
             return timed_out(
                 "kubectl",
                 timeout,

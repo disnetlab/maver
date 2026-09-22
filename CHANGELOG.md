@@ -9,6 +9,13 @@ published comparisons, which are single-variable only while the schema does not 
 with the configuration. The procedure is in STYLE_GUIDE.md, "Typed artifacts are
 frozen".
 
+## Local tool cancellation cleanup
+
+Cancelling a tool now kills and reaps its local process group across shell, Python,
+SSH, and direct/proxied kubectl paths. Timeout cleanup also reaches children whose
+parent has already exited. Cancellation does not establish whether an already
+submitted remote operation took effect; interrupted writes still need reconciliation.
+
 ## Gemini 3.5 Flash-Lite diagnostic profile and request pacing
 
 A hosted Gemini 3.5 Flash-Lite model profile is available for isolated diagnosis

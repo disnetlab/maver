@@ -20,15 +20,13 @@ prompts that name it, is post-parity work.
 """
 
 import asyncio
-import contextlib
-import os
 import re
-import signal
 
 from maver.tools.context import ToolContext, redact
 from maver.tools.errors import EXEC_OUTPUT_LIMIT, timed_out, tool_error
 from maver.tools.execution import command_segments, runs_kubectl
 from maver.tools.policy import always_writes
+from maver.tools.processes import stop_process_group
 from maver.tools.registry import tool
 
 __all__ = ["ssh_exec"]
@@ -36,7 +34,6 @@ __all__ = ["ssh_exec"]
 _EXECUTION_STAGES = frozenset({"execution"})
 _NODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _TIMEOUT_SECONDS = 45
-_REAP_SECONDS = 5.0
 _MAX_COMMAND_CHARS = 4096
 
 # The binaries this tool exists to run. The argument goes to the node's login shell, and
@@ -249,14 +246,11 @@ async def ssh_exec(ctx: ToolContext, node: str, command: str) -> str:
     )
     try:
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=_TIMEOUT_SECONDS)
+    except asyncio.CancelledError:
+        await stop_process_group(process)
+        raise
     except TimeoutError:
-        # kill() reaches ssh alone, and anything it left behind keeps the inherited
-        # pipes open after the model has been told the call was abandoned on time. The
-        # reap is bounded for the same reason the call is.
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(process.wait(), _REAP_SECONDS)
+        await stop_process_group(process)
         return timed_out("ssh_exec", _TIMEOUT_SECONDS)
 
     rendered = redact(

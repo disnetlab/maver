@@ -25,7 +25,6 @@ import json
 import os
 import shlex
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -43,6 +42,7 @@ from maver.tools.kubernetes import (
     classify,
     leading_verb,
 )
+from maver.tools.processes import stop_process_group
 
 __all__ = [
     "PROXY_ROUTE",
@@ -245,16 +245,11 @@ async def run_via_proxy(
 
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_s)
+    except asyncio.CancelledError:
+        await stop_process_group(process)
+        raise
     except TimeoutError:
-        # Signalling the group rather than the process is what makes the deadline a
-        # bound. kill() reaches kubectl alone, and the reap that follows returns only
-        # once every copy of the pipes is closed, so anything kubectl started that
-        # inherited them keeps the call alive for its whole life while the caller has
-        # already been told it was abandoned on time.
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(process.wait(), _REAP_SECONDS)
+        await stop_process_group(process)
         return _TIMED_OUT, f"kubectl timed out after {timeout_s:.0f}s"
 
     code = process.returncode or 0

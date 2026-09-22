@@ -42,6 +42,7 @@ from pathlib import Path
 from maver.tools.context import ToolContext, deliver, kubectl_proxy_url
 from maver.tools.errors import EXEC_OUTPUT_LIMIT, format_exit_result, timed_out, tool_error
 from maver.tools.policy import read_only
+from maver.tools.processes import stop_process_group
 from maver.tools.registry import tool
 from maver.tools.sandbox import SANDBOX_ERROR_PREFIX, sandboxed_command
 
@@ -205,11 +206,15 @@ async def _run(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         env=subprocess_env(ctx),
+        start_new_session=True,
     )
     try:
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.CancelledError:
+        await stop_process_group(process)
+        raise
     except TimeoutError:
-        process.kill()
+        await stop_process_group(process)
         return timed_out(killed, timeout)
 
     output = stdout.decode(errors="replace")
