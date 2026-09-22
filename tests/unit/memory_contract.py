@@ -42,6 +42,7 @@ from maver.memory.ports import (
     AgentRunRecord,
     ApprovalRecord,
     ApprovalStore,
+    LearningIntent,
     OutcomeFeedback,
     RunStore,
     SessionMemory,
@@ -205,6 +206,33 @@ class MemoryStoreContract:
             awaiting_request_id="approval-1",
         )
         assert store.resuming_sessions() == []
+
+    def test_learning_intent_is_idempotent_and_durable(self, reopen: Callable[[], Any]) -> None:
+        """Eligibility, exact external grade and retry state survive each reopen."""
+        due = "2026-09-22T12:00:00+00:00"
+        retry_due = "2026-09-22T12:01:00+00:00"
+        feedback = {"source": "benchmark", "diagnosis": {"success": False}, "score": 0}
+        with closing(reopen()) as store:
+            session = store.create_session({"alertname": "HighErrorRate"})
+            intent = LearningIntent(session.session_id, due, feedback)
+            store.put_learning_intent(intent)
+            store.put_learning_intent(LearningIntent(session.session_id, retry_due, {"score": 1}))
+            assert store.pending_learning_intents() == [intent]
+
+        with closing(reopen()) as store:
+            assert store.get_learning_intent(session.session_id) == intent
+            store.advance_learning_intent(session.session_id, retry_due)
+            retry = store.get_learning_intent(session.session_id)
+            assert retry == LearningIntent(session.session_id, retry_due, feedback, attempts=1)
+
+        with closing(reopen()) as store:
+            assert store.pending_learning_intents() == [retry]
+            store.complete_learning_intent(session.session_id)
+            store.complete_learning_intent(session.session_id)
+            assert store.get_learning_intent(session.session_id) is None
+
+        with closing(reopen()) as store:
+            assert store.pending_learning_intents() == []
 
     def test_replan_admission_closes_once_and_rolls_back_with_its_replacement(
         self, store: OperationalStore

@@ -23,6 +23,10 @@ import pytest
 from maver.audit.journal import ListSink
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from maver.memory.factory import build_storage
+from maver.orchestration import learning as learning_module
+from maver.orchestration.hooks import PostIncidentHook, clear_hooks, fire_hooks, register_hook
+from maver.orchestration.learning import distil_incident, run_learning_intent
+from maver.orchestration.outcomes import Outcome
 from maver.orchestration.runner import Deployment, run_incident
 from maver.settings.groups import MemorySettings, ServerSettings, VerifySettings
 from maver.settings.profiles import load_profile
@@ -59,10 +63,23 @@ EXECUTION: dict[str, Any] = {
     "final_state_summary": "svc/user has endpoints",
     "confidence": 0.8,
 }
+LEARNING: dict[str, Any] = {
+    "observations": ["svc/user had no endpoints"],
+    "attempted_hypothesis": "the service targeted a port nothing listens on",
+    "attempted_action": "patched targetPort to 8080",
+    "observed_outcome": "endpoints appeared",
+    "case_negative_constraints": ["restarting the deployment does not help"],
+    "corrected_cause": "",
+    "discriminator": "check service endpoints before restarting",
+    "summary": "the Service targeted the wrong port",
+    "fault_category": "misconfiguration",
+    "verification_verdict": "recovered",
+}
 SUBMISSIONS = {
     "rca": ("submit_root_cause", ROOT_CAUSE),
     "planning": ("submit_plan", PLAN),
     "execution": ("submit_execution_result", EXECUTION),
+    "learning": ("submit_learning_result", LEARNING),
 }
 
 
@@ -143,3 +160,82 @@ async def test_an_incident_runs_end_to_end_on_postgres(tmp_path: pathlib.Path) -
         assert all(r.started_at for r in runs)
     finally:
         storage.close()
+
+
+@pytest.mark.skipif(not DSN, reason="set POSTGRES_TEST_DSN to run this")
+async def test_delayed_learning_survives_postgres_reopen_without_duplicate_model_spend(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = f"maver_learn_{uuid.uuid4().hex[:8]}"
+    settings = Settings(
+        server=ServerSettings(workdir=tmp_path),
+        memory=MemorySettings(
+            backend="postgres",
+            postgres_dsn=DSN,
+            postgres_schema=schema,
+            enabled=True,
+            learning_enabled=True,
+        ),
+        verify=VerifySettings(enabled=False),
+    )
+    model = FakeModel()
+    first = build_storage(settings)
+    clear_hooks()
+    try:
+        deploy = Deployment(
+            settings=settings,
+            storage=first,
+            completion=model,
+            profile=PROFILE,
+            transport_for=lambda session_id: FakeTransport(),
+            sink=ListSink(),
+        )
+        session = first.sessions.create_session(ALERT)
+        await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+        register_hook(
+            PostIncidentHook(
+                name="learning",
+                job_fn=distil_incident,
+                on_outcomes=frozenset({Outcome.SUCCESS}),
+                delay_seconds=0,
+            )
+        )
+        monkeypatch.setattr(learning_module, "schedule_learning_intent", lambda *_: None)
+        feedback = {"source": "benchmark", "diagnosis": {"success": False}}
+        await fire_hooks(
+            Outcome.SUCCESS,
+            session.session_id,
+            workdir=tmp_path,
+            sessions=first.sessions,
+            external_feedback=feedback,
+        )
+        assert first.sessions.get_learning_intent(session.session_id) is not None
+    finally:
+        first.close()
+        clear_hooks()
+
+    reopened = build_storage(settings)
+    try:
+        resumed = Deployment(
+            settings=settings,
+            storage=reopened,
+            completion=model,
+            profile=PROFILE,
+            transport_for=lambda session_id: FakeTransport(),
+            sink=ListSink(),
+        )
+        monkeypatch.setattr(learning_module, "bound_deployment", lambda: resumed)
+        assert await run_learning_intent(session.session_id) == "distilled"
+        assert reopened.sessions.get_learning_intent(session.session_id) is None
+        stored = reopened.sessions.get_session(session.session_id)
+        assert stored is not None and stored.distilled
+        lesson = reopened.index.open_record(session.session_id)
+        assert lesson is not None
+        assert lesson.evaluation_diagnosis_success is False
+        calls = model.callers.count("learning")
+        assert calls == 1
+        assert await run_learning_intent(session.session_id) == "no_intent"
+        assert model.callers.count("learning") == calls
+    finally:
+        reopened.close()

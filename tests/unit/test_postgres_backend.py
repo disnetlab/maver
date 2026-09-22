@@ -105,6 +105,18 @@ class TestPostgresBackend(MemoryStoreContract):
         return stamp
 
 
+def test_version_eight_adds_learning_intents(schema: str) -> None:
+    with closing(PostgresStore(DSN, schema=schema)) as store:
+        session = store.create_session({"alertname": "HighErrorRate"})
+    with _raw_connection(schema) as conn:
+        conn.execute("DROP TABLE learning_intents")
+        conn.execute("UPDATE schema_version SET version = 8")
+    with closing(PostgresStore(DSN, schema=schema)) as reopened:
+        assert reopened.schema_version == STORE_SCHEMA_VERSION
+        assert reopened.pending_learning_intents() == []
+        assert reopened.get_session(session.session_id) is not None
+
+
 def test_old_feedback_table_accepts_new_reviews_after_sequence_migration(schema: str) -> None:
     """ALTER appends the sequence column, so inserts must name their columns."""
     with closing(PostgresStore(DSN, schema=schema)) as store:

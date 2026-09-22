@@ -58,6 +58,20 @@ class TestSqliteBackend(MemoryStoreContract):
         return stamp
 
 
+def test_version_eight_adds_learning_intents(tmp_path: pathlib.Path) -> None:
+    database = tmp_path / "version-eight.sqlite"
+    with contextlib.closing(SqliteStore(database)) as store:
+        session = store.create_session({"alertname": "HighErrorRate"})
+    with contextlib.closing(sqlite3.connect(database)) as conn:
+        conn.execute("DROP TABLE learning_intents")
+        conn.execute("UPDATE schema_version SET version = 8")
+        conn.commit()
+    with contextlib.closing(SqliteStore(database)) as reopened:
+        assert reopened.schema_version == STORE_SCHEMA_VERSION
+        assert reopened.pending_learning_intents() == []
+        assert reopened.get_session(session.session_id) is not None
+
+
 def test_a_file_database_is_created_and_survives_reopening(tmp_path: pathlib.Path) -> None:
     """The one thing the contract cannot cover, because it runs against ":memory:"."""
     path = tmp_path / "nested" / "maver.db"
