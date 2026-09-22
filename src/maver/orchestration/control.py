@@ -22,6 +22,7 @@ class _Held:
 
     opened: asyncio.Event = field(default_factory=asyncio.Event)
     session_id: str | None = None
+    released: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,6 +225,9 @@ class RunRegistry:
         """
         if not claim.ours:
             return
+        if claim._held.released:
+            return
+        claim._held.released = True
         self._reserved = max(0, self._reserved - 1)
         if claim.fingerprint is None:
             return

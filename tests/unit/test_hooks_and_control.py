@@ -37,6 +37,19 @@ class FakeScheduler:
         self.jobs.append({"fn": fn, "trigger": trigger, **kwargs})
 
 
+def test_releasing_a_claim_twice_preserves_other_reservations() -> None:
+    """A stale cleanup must not make capacity available while another claim holds it."""
+    registry = RunRegistry()
+    first = registry.claim("first", 2)
+    second = registry.claim("second", 2)
+    assert first is not None and second is not None
+    registry.release(first)
+    registry.release(first)
+    assert registry.at_capacity(2) is False
+    assert registry.claim("third", 2) is not None
+    assert registry.at_capacity(2)
+
+
 @pytest.fixture
 def scheduler(monkeypatch: pytest.MonkeyPatch) -> FakeScheduler:
     hooks.clear_hooks()
