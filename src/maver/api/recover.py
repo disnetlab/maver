@@ -5,9 +5,10 @@ import logging
 from typing import Any, cast
 
 from maver.api.deps import Service
-from maver.api.incidents import fingerprint, run_incident_task
+from maver.api.incidents import _record_failure, fingerprint, run_incident_task
 from maver.contracts.lifecycle import RunStatus
 from maver.contracts.state import TargetStage
+from maver.orchestration.jobs import record_cancellation
 from maver.orchestration.recovery import safe_stage
 from maver.pipelines import SelectedPipeline, restore_selection
 
@@ -61,3 +62,24 @@ async def recover_active(service: Service) -> None:
 
         task = asyncio.create_task(continue_one(), name=f"maver-recover-{record.session_id}")
         service.runs.attach(record.session_id, task)
+
+        def settle_recovery(
+            finished: asyncio.Task[None], session_id: str = record.session_id
+        ) -> None:
+            # A task cancelled before its first instruction, or while waiting for the
+            # serial slot, never enters run_incident_task's own finally block.
+            if session_id not in service.runs.live():
+                return
+            try:
+                if finished.cancelled():
+                    if not (
+                        service.runs.draining
+                        and deployment.settings.server.resume_interrupted_incidents
+                    ):
+                        record_cancellation(deployment, session_id)
+                elif error := finished.exception():
+                    _record_failure(deployment, session_id, error)
+            finally:
+                service.runs.unregister(session_id)
+
+        task.add_done_callback(settle_recovery)

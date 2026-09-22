@@ -246,6 +246,87 @@ async def test_opt_in_restart_resumes_an_interrupted_diagnosis(tmp_path: pathlib
     assert model.calls == 2
 
 
+@pytest.mark.parametrize("draining", [False, True])
+@pytest.mark.parametrize("before_start", [False, True])
+async def test_cancelled_queued_recovery_does_not_leak_a_live_run(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    draining: bool,
+    before_start: bool,
+) -> None:
+    """A queued task can be cancelled before the incident runner ever starts."""
+    deploy = deployment(tmp_path, mode="auto")
+    deploy = dataclasses.replace(
+        deploy,
+        settings=deploy.settings.model_copy(
+            update={
+                "server": deploy.settings.server.model_copy(
+                    update={
+                        "resume_interrupted_incidents": True,
+                    }
+                ),
+            }
+        ),
+    )
+    selection = deploy.pipelines.get(deploy.pipelines.default)
+    sessions = []
+    for alert_name in ("first", "second"):
+        session = deploy.storage.sessions.create_session({"alertname": alert_name})
+        checkpoint = {
+            "kind": "active_stage",
+            "version": 1,
+            "stage": "rca",
+            "state": {
+                "session_id": session.session_id,
+                "target_stage": "full",
+                "runtime": {
+                    "selection": {
+                        "name": selection.name,
+                        "digest": selection.digest,
+                        "composition": selection.manifest(),
+                        "source": "default",
+                    },
+                    "deployment_digest": deploy.runtime_digest,
+                },
+            },
+        }
+        deploy.storage.sessions.set_run_status(
+            session.session_id,
+            RunStatus.RUNNING,
+            current_stage="rca",
+            checkpoint=checkpoint,
+        )
+        sessions.append(session)
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_first(*, session_id: str, **kwargs: Any) -> None:
+        if session_id == sessions[0].session_id:
+            entered.set()
+            await release.wait()
+
+    monkeypatch.setattr("maver.api.recover.run_incident_task", hold_first)
+    service = Service(deployment=deploy, schedule_resume=lambda request_id: None)
+    await recover_active(service)
+    if not before_start:
+        await entered.wait()
+    if draining:
+        service.runs.begin_draining()
+    assert service.runs.cancel(sessions[1].session_id)
+    await entered.wait()
+    release.set()
+    await asyncio.gather(*service.runs.tasks(), return_exceptions=True)
+    await asyncio.sleep(0)  # let the task completion callbacks settle the registry
+
+    assert service.runs.live() == []
+    queued = deploy.storage.sessions.get_session(sessions[1].session_id)
+    assert queued is not None
+    assert queued.run_status == (RunStatus.RUNNING if draining else RunStatus.CANCELLED)
+    if draining:
+        assert queued.checkpoint is not None
+
+
 async def test_interrupted_write_needs_explicit_reconciliation(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
