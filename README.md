@@ -154,7 +154,9 @@ maver incidents reconcile-decide SESSION_ID --action replan --observed-state "sy
 from the stored alert and exact selected pipeline; the old write is never replayed.
 New intake for the same alert is refused while reconciliation is pending.
 Replan refuses adapter-owned episodes, incomplete checkpoints and changed pipeline
-compositions. One successful decision is allowed per case. The API exposes only stage
+compositions. One successful decision is allowed per case; if opening the replacement
+fails, the case returns to `needs_reconciliation` so the decision can be retried. The
+API exposes only stage
 and evidence-presence metadata at `GET /api/v1/incidents/{id}/reconciliation`; the CLI
 reads detailed evidence locally. This recovery assumes one MAVER process over a
 durable SQLite volume or PostgreSQL store; it does not reattach external episodes.

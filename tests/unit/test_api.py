@@ -17,6 +17,7 @@ from unittest.mock import Mock
 import httpx
 import pytest
 import yaml
+from fastapi import HTTPException
 
 from maver.api.app import _drain, create_app, validate_deployment
 from maver.api.deps import Service
@@ -323,36 +324,33 @@ async def test_interrupted_write_needs_explicit_reconciliation(
 
     async def start_fresh(alert: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         started.append({"alert": alert, **kwargs})
+        if len(started) == 1:
+            raise HTTPException(status_code=503, detail="replacement store unavailable")
         return {"session_id": "fresh-incident", "status": "accepted"}
 
     monkeypatch.setattr("maver.api.reconciliation.start_incident", start_fresh)
     async with client(app) as http:
         path = f"/api/v1/incidents/{replacement.session_id}/reconciliation"
-        response = await http.post(
-            path,
-            json={
-                "action": "replan",
-                "reason": "symptom persists",
-                "observed_state": "fresh probe still fails",
-                "decided_by": "operator",
-            },
-        )
+        decision = {
+            "action": "replan",
+            "reason": "symptom persists",
+            "observed_state": "fresh probe still fails",
+            "decided_by": "operator",
+        }
+        failed = await http.post(path, json=decision)
+        assert failed.status_code == 503
+        retryable = deploy.storage.sessions.get_session(replacement.session_id)
+        assert retryable is not None
+        assert retryable.run_status == RunStatus.NEEDS_RECONCILIATION
+        assert retryable.ended_at is None
+        assert retryable.checkpoint == replacement_checkpoint
+        response = await http.post(path, json=decision)
         assert response.status_code == 200
         assert response.json()["new_incident"]["session_id"] == "fresh-incident"
-        assert (
-            await http.post(
-                path,
-                json={
-                    "action": "replan",
-                    "reason": "symptom persists",
-                    "observed_state": "fresh probe still fails",
-                    "decided_by": "operator",
-                },
-            )
-        ).status_code == 409
-    assert len(started) == 1
-    assert started[0]["metadata"] == {"reconciliation_of": replacement.session_id}
-    assert started[0]["selection"].pipeline.name == selected.name
+        assert (await http.post(path, json=decision)).status_code == 409
+    assert len(started) == 2
+    assert started[1]["metadata"] == {"reconciliation_of": replacement.session_id}
+    assert started[1]["selection"].pipeline.name == selected.name
 
 
 async def test_intake_answers_with_the_shape_the_harness_reads(tmp_path: pathlib.Path) -> None:

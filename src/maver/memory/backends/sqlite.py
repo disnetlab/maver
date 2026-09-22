@@ -889,6 +889,21 @@ class SqliteStore:
             )
             return changed.rowcount == 1
 
+    def reopen_reconciliation(self, session_id: str, *, notes: str) -> bool:
+        """Restore the case after replacement admission failed."""
+        with self._db.write() as conn:
+            changed = conn.execute(
+                "UPDATE sessions SET run_status = ?, notes = ?, ended_at = NULL "
+                "WHERE session_id = ? AND run_status = ?",
+                (
+                    RunStatus.NEEDS_RECONCILIATION.value,
+                    scrub_optional(notes),
+                    session_id,
+                    RunStatus.FAILED.value,
+                ),
+            )
+            return changed.rowcount == 1
+
     def mark_distilled(self, session_id: str) -> None:
         """Record that a session's lesson has been written to the corpus.
 

@@ -1176,6 +1176,22 @@ class PostgresStore:
             )
             return changed.rowcount == 1
 
+    def reopen_reconciliation(self, session_id: str, *, notes: str) -> bool:
+        """Restore the case after replacement admission failed."""
+        with self._db.write() as conn:
+            changed = conn.execute(
+                "UPDATE sessions SET run_status = %s, notes = %s, ended_at = NULL "
+                "WHERE corpus_id = %s AND session_id = %s AND run_status = %s",
+                (
+                    RunStatus.NEEDS_RECONCILIATION.value,
+                    scrub_optional(notes),
+                    self.corpus_id,
+                    session_id,
+                    RunStatus.FAILED.value,
+                ),
+            )
+            return changed.rowcount == 1
+
     def mark_distilled(self, session_id: str) -> None:
         """Record that a session's lesson has been written to the corpus.
 

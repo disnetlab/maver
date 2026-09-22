@@ -442,6 +442,10 @@ class SessionStore(Protocol):
         """Atomically close a reconciliation case, retaining its checkpoint and evidence."""
         ...
 
+    def reopen_reconciliation(self, session_id: str, *, notes: str) -> bool:
+        """Repark a claimed case when opening its replacement incident failed."""
+        ...
+
     def mark_distilled(self, session_id: str) -> None:
         """Record that a session's lesson has been written to the corpus.
 

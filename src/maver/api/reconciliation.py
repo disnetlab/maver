@@ -89,13 +89,21 @@ async def decide_reconciliation(
             raise HTTPException(status_code=409, detail="reconciliation already decided")
         if selected is None:
             return {"session_id": session_id, "status": "closed"}
-        receipt = await start_incident(
-            record.alert,
-            target_stage=target,
-            service=service,
-            selection=selected,
-            metadata={"reconciliation_of": session_id},
-        )
+        try:
+            receipt = await start_incident(
+                record.alert,
+                target_stage=target,
+                service=service,
+                selection=selected,
+                metadata={"reconciliation_of": session_id},
+            )
+        except Exception:
+            await asyncio.to_thread(
+                sessions.reopen_reconciliation,
+                session_id,
+                notes=f"{note}; replacement admission failed; decision may be retried",
+            )
+            raise
         await asyncio.to_thread(
             sessions.update_artefacts,
             session_id,
