@@ -103,6 +103,34 @@ async def test_queue_retries_capacity_without_acknowledging(
 
 
 @pytest.mark.asyncio
+async def test_queue_retries_pending_reconciliation_without_acknowledging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    consumer = FakeConsumer([message(), message()])
+    queue = QueueConsumer(service())
+    queue.consumer = consumer
+    queue.topic_partition = lambda topic, partition: (topic, partition)
+    attempts = 0
+
+    async def admit(body, service, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise HTTPException(status_code=409, headers={"Retry-After": "30"})
+        return {"session_id": "s1"}
+
+    async def no_delay(seconds):
+        pass
+
+    monkeypatch.setattr(queue_module, "accept_incident", admit)
+    monkeypatch.setattr(queue_module.asyncio, "sleep", no_delay)
+    await queue._run()
+    assert queue.error is None
+    assert consumer.seeks == [(("alerts", 0), 7)]
+    assert consumer.commits == 1
+
+
+@pytest.mark.asyncio
 async def test_queue_quarantines_poison_record_before_acknowledging() -> None:
     consumer = FakeConsumer([message(b"not JSON")])
     saved = []

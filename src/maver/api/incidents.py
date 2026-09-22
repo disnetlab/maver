@@ -113,6 +113,7 @@ async def accept_incident(
             raise HTTPException(
                 status_code=409,
                 detail=f"alert is held by incident {record.session_id} pending reconciliation",
+                headers={"Retry-After": "30"},
             )
     # Validate explicit names before reserving capacity or opening a session. Resolving
     # selectors is deferred until this request owns the alert, so retries cannot run

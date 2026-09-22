@@ -82,7 +82,12 @@ class QueueConsumer:
                 try:
                     receipt = await accept_incident(body, self.service, intake_id=(source, key))
                 except HTTPException as exc:
-                    if exc.status_code not in (429, 503):
+                    retryable = exc.status_code in (429, 503) or (
+                        exc.status_code == 409
+                        and exc.headers is not None
+                        and "Retry-After" in exc.headers
+                    )
+                    if not retryable:
                         await self._quarantine(
                             source,
                             key,
