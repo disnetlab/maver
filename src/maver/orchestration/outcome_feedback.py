@@ -4,13 +4,11 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import uuid4
 
-from maver.memory.ports import OutcomeFeedback, SessionStore, TextSearch
-from maver.memory.review import reviewed_memory
+from maver.memory.ports import OutcomeFeedback, SessionStore
 
 
 def submit_feedback(
     sessions: SessionStore,
-    index: TextSearch,
     *,
     session_id: str,
     verdict: Literal["confirmed", "rejected", "corrected"],
@@ -19,7 +17,7 @@ def submit_feedback(
     evidence: str,
     corrected_cause: str = "",
 ) -> OutcomeFeedback:
-    """Persist a human verdict and refresh an existing distilled record's metadata."""
+    """Persist a human verdict and update any distilled record atomically."""
     feedback = OutcomeFeedback(
         feedback_id=str(uuid4()),
         session_id=session_id,
@@ -31,12 +29,6 @@ def submit_feedback(
         created_at=datetime.now(UTC).isoformat(),
     )
     feedback = sessions.record_feedback(feedback)
-    memory = index.open_record(session_id)
-    if memory is not None:
-        state = sessions.get_states([session_id])[session_id]
-        index.upsert_summary(
-            reviewed_memory(memory, state=state, verdict=verdict, corrected_cause=corrected_cause)
-        )
     return feedback
 
 

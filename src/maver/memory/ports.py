@@ -105,6 +105,8 @@ class OutcomeFeedback:
     evidence: str
     corrected_cause: str
     created_at: str
+    sequence: int = 0
+    """Order allocated while holding the session lock, independent of clock skew."""
 
 
 @dataclass

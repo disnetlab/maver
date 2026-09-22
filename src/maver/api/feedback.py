@@ -48,7 +48,6 @@ async def record_feedback(
         feedback = await asyncio.to_thread(
             submit_feedback,
             storage.sessions,
-            storage.index,
             session_id=session_id,
             **body.model_dump(),
         )

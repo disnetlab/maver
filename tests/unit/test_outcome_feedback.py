@@ -11,7 +11,7 @@ from maver.api.feedback import FeedbackRequest
 from maver.contracts.lifecycle import LifecycleState, RunStatus
 from maver.memory.backends.sqlite import SqliteStore
 from maver.memory.lifecycle import IllegalTransition
-from maver.memory.ports import SessionMemory
+from maver.memory.ports import OutcomeFeedback, SessionMemory
 from maver.orchestration.outcome_feedback import latest_feedback_packet, submit_feedback
 
 
@@ -38,7 +38,6 @@ def test_operator_review_updates_lifecycle_and_preserves_original_artifacts() ->
 
         feedback = submit_feedback(
             store,
-            store.records,
             session_id=session.session_id,
             verdict="corrected",
             decided_by="on-call",
@@ -86,7 +85,6 @@ def test_operator_review_updates_lifecycle_and_preserves_original_artifacts() ->
 
         submit_feedback(
             store,
-            store.records,
             session_id=session.session_id,
             verdict="confirmed",
             decided_by="reviewer",
@@ -109,10 +107,10 @@ def test_feedback_refuses_unfinished_runs_and_invalid_transition() -> None:
             "evidence": "metrics recovered",
         }
         with pytest.raises(ValueError, match="not complete"):
-            submit_feedback(store, store.records, **fields)
+            submit_feedback(store, **fields)
         store.set_run_status(session.session_id, RunStatus.COMPLETED)
         with pytest.raises(IllegalTransition):
-            submit_feedback(store, store.records, **fields)
+            submit_feedback(store, **fields)
         assert store.feedback_for(session.session_id) == []
 
 
@@ -130,7 +128,6 @@ def test_feedback_response_matches_sanitised_history() -> None:
         store.set_state(session.session_id, LifecycleState.TENTATIVE_SUCCESS)
         saved = submit_feedback(
             store,
-            store.records,
             session_id=session.session_id,
             verdict="confirmed",
             decided_by="op\x00s",
@@ -157,7 +154,6 @@ def test_existing_v4_store_gains_feedback_history(tmp_path: Path) -> None:
     with closing(SqliteStore(path)) as reopened:
         submit_feedback(
             reopened,
-            reopened.records,
             session_id=session.session_id,
             verdict="confirmed",
             decided_by="ops",
@@ -165,3 +161,37 @@ def test_existing_v4_store_gains_feedback_history(tmp_path: Path) -> None:
             evidence="request rate normal",
         )
         assert reopened.get_session(session.session_id).state == LifecycleState.HUMAN_VERIFIED.value
+
+
+def test_review_order_follows_commit_sequence_even_when_timestamps_reverse() -> None:
+    """A request waiting on the session lock cannot be mistaken for the latest review."""
+    with closing(SqliteStore(":memory:")) as store:
+        session = store.create_session({})
+        store.set_run_status(session.session_id, RunStatus.COMPLETED)
+        store.set_state(session.session_id, LifecycleState.TENTATIVE_SUCCESS)
+        later_clock = OutcomeFeedback(
+            feedback_id="b",
+            session_id=session.session_id,
+            verdict="rejected",
+            decided_by="b",
+            reason="bad",
+            evidence="failed check",
+            corrected_cause="",
+            created_at="2026-09-22T12:00:01+00:00",
+        )
+        earlier_clock = OutcomeFeedback(
+            feedback_id="a",
+            session_id=session.session_id,
+            verdict="confirmed",
+            decided_by="a",
+            reason="good",
+            evidence="recovered",
+            corrected_cause="",
+            created_at="2026-09-22T12:00:00+00:00",
+        )
+        first = store.record_feedback(later_clock)
+        second = store.record_feedback(earlier_clock)
+        assert (first.sequence, second.sequence) == (1, 2)
+        assert store.feedback_for(session.session_id) == [first, second]
+        assert store.get_session(session.session_id).state == LifecycleState.HUMAN_VERIFIED.value
+        assert latest_feedback_packet(store, session.session_id)["operator"] == "a"

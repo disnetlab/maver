@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS outcome_feedback (
     corpus_id TEXT NOT NULL,
     feedback_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
+    sequence BIGINT NOT NULL,
     verdict TEXT NOT NULL,
     decided_by TEXT NOT NULL,
     reason TEXT NOT NULL,
@@ -180,7 +181,9 @@ CREATE TABLE IF NOT EXISTS outcome_feedback (
     PRIMARY KEY (corpus_id, feedback_id)
 );
 CREATE INDEX IF NOT EXISTS idx_outcome_feedback_session
-    ON outcome_feedback(corpus_id, session_id, created_at);
+    ON outcome_feedback(corpus_id, session_id, sequence);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_outcome_feedback_order
+    ON outcome_feedback(corpus_id, session_id, sequence);
 
 CREATE TABLE IF NOT EXISTS approvals (
     corpus_id    TEXT NOT NULL,
@@ -685,14 +688,18 @@ class _PostgresSchema(StoreSchema):
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS outcome_feedback ("
                 "corpus_id TEXT NOT NULL, feedback_id TEXT NOT NULL, "
-                "session_id TEXT NOT NULL, verdict TEXT NOT NULL, "
+                "session_id TEXT NOT NULL, sequence BIGINT NOT NULL, verdict TEXT NOT NULL, "
                 "decided_by TEXT NOT NULL, reason TEXT NOT NULL, "
                 "evidence TEXT NOT NULL, corrected_cause TEXT NOT NULL, "
                 "created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (corpus_id, feedback_id))"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_outcome_feedback_session "
-                "ON outcome_feedback(corpus_id, session_id, created_at)"
+                "ON outcome_feedback(corpus_id, session_id, sequence)"
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_outcome_feedback_order "
+                "ON outcome_feedback(corpus_id, session_id, sequence)"
             )
             _stamp(conn, 7)
 
@@ -1032,12 +1039,20 @@ class PostgresStore:
             if row["run_status"] not in (RunStatus.COMPLETED.value, RunStatus.FAILED.value):
                 raise ValueError("incident is not complete")
             check_transition(LifecycleState(row["state"]), target)
+            next_row = conn.execute(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence "
+                "FROM outcome_feedback WHERE corpus_id = %s AND session_id = %s",
+                (self.corpus_id, feedback.session_id),
+            ).fetchone()
+            assert next_row is not None
+            stored = replace(stored, sequence=int(next_row["next_sequence"]))
             conn.execute(
-                "INSERT INTO outcome_feedback VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "INSERT INTO outcome_feedback VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     self.corpus_id,
                     feedback.feedback_id,
                     feedback.session_id,
+                    stored.sequence,
                     feedback.verdict,
                     stored.decided_by,
                     stored.reason,
@@ -1050,6 +1065,18 @@ class PostgresStore:
                 "UPDATE sessions SET state = %s WHERE corpus_id = %s AND session_id = %s",
                 (target.value, self.corpus_id, feedback.session_id),
             )
+            conn.execute(
+                "UPDATE records SET lifecycle_state = %s, evaluation_label = %s, "
+                "evaluation_source = 'operator', corrected_cause = %s "
+                "WHERE corpus_id = %s AND session_id = %s",
+                (
+                    target.value,
+                    "operator_confirmed" if stored.verdict == "confirmed" else "operator_rejected",
+                    stored.corrected_cause if stored.verdict == "corrected" else "",
+                    self.corpus_id,
+                    feedback.session_id,
+                ),
+            )
         return stored
 
     def feedback_for(self, session_id: str) -> list[OutcomeFeedback]:
@@ -1057,8 +1084,8 @@ class PostgresStore:
         with self._db.read() as conn:
             rows = conn.execute(
                 "SELECT feedback_id, session_id, verdict, decided_by, reason, evidence, "
-                "corrected_cause, created_at FROM outcome_feedback WHERE corpus_id = %s "
-                "AND session_id = %s ORDER BY created_at, feedback_id",
+                "corrected_cause, created_at, sequence FROM outcome_feedback WHERE corpus_id = %s "
+                "AND session_id = %s ORDER BY sequence",
                 (self.corpus_id, session_id),
             ).fetchall()
         return [
@@ -1733,7 +1760,7 @@ class PostgresRecordIndex:
                     review = conn.execute(
                         "SELECT verdict, corrected_cause FROM outcome_feedback "
                         "WHERE corpus_id = %s AND session_id = %s "
-                        "ORDER BY created_at DESC, feedback_id DESC LIMIT 1",
+                        "ORDER BY sequence DESC LIMIT 1",
                         (self.corpus_id, memory.session_id),
                     ).fetchone()
                     if review is not None:

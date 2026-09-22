@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS intake_quarantine (
 CREATE TABLE IF NOT EXISTS outcome_feedback (
     feedback_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
     verdict TEXT NOT NULL,
     decided_by TEXT NOT NULL,
     reason TEXT NOT NULL,
@@ -127,7 +128,9 @@ CREATE TABLE IF NOT EXISTS outcome_feedback (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_outcome_feedback_session
-    ON outcome_feedback(session_id, created_at);
+    ON outcome_feedback(session_id, sequence);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_outcome_feedback_order
+    ON outcome_feedback(session_id, sequence);
 
 CREATE TABLE IF NOT EXISTS approvals (
     request_id    TEXT PRIMARY KEY,
@@ -407,12 +410,17 @@ class _SqliteSchema(StoreSchema):
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS outcome_feedback ("
                 "feedback_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, "
+                "sequence INTEGER NOT NULL, "
                 "verdict TEXT NOT NULL, decided_by TEXT NOT NULL, reason TEXT NOT NULL, "
                 "evidence TEXT NOT NULL, corrected_cause TEXT NOT NULL, created_at TEXT NOT NULL)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_outcome_feedback_session "
-                "ON outcome_feedback(session_id, created_at)"
+                "ON outcome_feedback(session_id, sequence)"
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_outcome_feedback_order "
+                "ON outcome_feedback(session_id, sequence)"
             )
             _stamp(conn, 7)
 
@@ -756,11 +764,18 @@ class SqliteStore:
             if row["run_status"] not in (RunStatus.COMPLETED.value, RunStatus.FAILED.value):
                 raise ValueError("incident is not complete")
             check_transition(LifecycleState(row["state"]), target)
+            sequence = conn.execute(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence "
+                "FROM outcome_feedback WHERE session_id = ?",
+                (feedback.session_id,),
+            ).fetchone()["next_sequence"]
+            stored = replace(stored, sequence=int(sequence))
             conn.execute(
-                "INSERT INTO outcome_feedback VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO outcome_feedback VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     feedback.feedback_id,
                     feedback.session_id,
+                    stored.sequence,
                     feedback.verdict,
                     stored.decided_by,
                     stored.reason,
@@ -773,13 +788,37 @@ class SqliteStore:
                 "UPDATE sessions SET state = ? WHERE session_id = ?",
                 (target.value, feedback.session_id),
             )
+            # The FTS payload holds private record metadata. Rewrite only that payload
+            # while the session transaction is open, leaving evidence/lesson terms intact.
+            memory = conn.execute(
+                "SELECT payload_json FROM records_fts WHERE session_id = ?",
+                (feedback.session_id,),
+            ).fetchone()
+            if memory is not None:
+                payload = _loads_or_empty(memory["payload_json"])
+                payload.update(
+                    lifecycle_state=target.value,
+                    evaluation_label=(
+                        "operator_confirmed"
+                        if stored.verdict == "confirmed"
+                        else "operator_rejected"
+                    ),
+                    evaluation_source="operator",
+                    corrected_cause=(
+                        stored.corrected_cause if stored.verdict == "corrected" else ""
+                    ),
+                )
+                conn.execute(
+                    "UPDATE records_fts SET payload_json = ? WHERE session_id = ?",
+                    (_dumps(payload), feedback.session_id),
+                )
         return stored
 
     def feedback_for(self, session_id: str) -> list[OutcomeFeedback]:
         """Read the full operator verdict history."""
         with self._db.read() as conn:
             rows = conn.execute(
-                "SELECT * FROM outcome_feedback WHERE session_id = ? ORDER BY created_at, feedback_id",
+                "SELECT * FROM outcome_feedback WHERE session_id = ? ORDER BY sequence",
                 (session_id,),
             ).fetchall()
         return [OutcomeFeedback(**dict(row)) for row in rows]
@@ -1403,7 +1442,7 @@ class SqliteRecordIndex:
                 review = conn.execute(
                     "SELECT s.state, f.verdict, f.corrected_cause FROM outcome_feedback f "
                     "JOIN sessions s ON s.session_id = f.session_id "
-                    "WHERE f.session_id = ? ORDER BY f.created_at DESC, f.feedback_id DESC "
+                    "WHERE f.session_id = ? ORDER BY f.sequence DESC "
                     "LIMIT 1",
                     (memory.session_id,),
                 ).fetchone()
