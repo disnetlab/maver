@@ -120,9 +120,7 @@ async def accept_incident(
     # selection middleware repeatedly for one incident.
     explicit = _requested_pipeline(body, service.deployment)
     sessions = service.deployment.storage.sessions
-    request_hash = hashlib.sha256(
-        json.dumps(body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    request_hash = _request_hash(body)
     if intake_id is not None:
         try:
             prior = await asyncio.to_thread(sessions.get_intake_receipt, *intake_id, request_hash)
@@ -173,15 +171,38 @@ async def accept_incident(
 
     try:
         selection = await _select(body, service.deployment, explicit)
-        receipt = await start_incident(
-            body.alert,
-            target_stage=body.target_stage,
-            service=service,
-            selection=selection,
-            metadata=body.metadata,
-            intake_id=intake_id,
-            request_hash=request_hash,
+        admission = asyncio.create_task(
+            start_incident(
+                body.alert,
+                target_stage=body.target_stage,
+                service=service,
+                selection=selection,
+                metadata=body.metadata,
+                intake_id=intake_id,
+                request_hash=request_hash,
+            ),
+            name="maver-incident-admission",
         )
+        # A cancelled HTTP request must not cancel a thread after it commits the
+        # session but before this coroutine registers its run. Keep the claim until
+        # initialization either finishes or records a failure.
+        cancelled = False
+        while not admission.done():
+            try:
+                await asyncio.shield(admission)
+            except asyncio.CancelledError:
+                cancelled = True
+            except Exception:
+                break
+        if cancelled:
+            if not admission.cancelled():
+                error = admission.exception()
+                if error is not None:
+                    _log.error(
+                        "incident admission failed after request cancellation", exc_info=error
+                    )
+            raise asyncio.CancelledError
+        receipt = admission.result()
         if _show_pipeline(body, service.deployment):
             receipt["pipeline"] = selection.pipeline.name
         return receipt
@@ -377,6 +398,12 @@ def _receipt(body: IncidentRequest, deployment: Deployment, record: Any) -> dict
     if _show_pipeline(body, deployment):
         result["pipeline"] = record.runtime.get("selection", {}).get("name", "")
     return result
+
+
+def _request_hash(body: IncidentRequest) -> str:
+    """Digest every validated request field for durable key conflict detection."""
+    canonical = json.dumps(body.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 async def run_incident_task(

@@ -37,7 +37,7 @@ class FakeConsumer:
         self.seeks.append((partition, offset))
 
 
-def message(value: bytes = b'{"alert":{"alertname":"A"}}') -> Any:
+def message(value: bytes | None = b'{"alert":{"alertname":"A"}}') -> Any:
     return SimpleNamespace(value=value, topic="alerts", partition=0, offset=7)
 
 
@@ -321,3 +321,32 @@ async def test_draining_preserves_an_opt_in_recovery_checkpoint(
     with pytest.raises(asyncio.CancelledError):
         await task
     assert cancelled == []
+
+
+@pytest.mark.asyncio
+async def test_queue_quarantines_tombstone_with_distinct_reason() -> None:
+    consumer = FakeConsumer([message(None)])
+    saved = []
+
+    def quarantine(source, key, raw_base64, reason):
+        assert consumer.commits == 0
+        saved.append((raw_base64, reason))
+        return SimpleNamespace(record_id="q-tombstone")
+
+    queue = QueueConsumer(
+        SimpleNamespace(
+            runs=SimpleNamespace(draining=False),
+            deployment=SimpleNamespace(
+                settings=SimpleNamespace(
+                    intake=SimpleNamespace(kafka=SimpleNamespace(group_id="test"))
+                ),
+                storage=SimpleNamespace(sessions=SimpleNamespace(quarantine=quarantine)),
+            ),
+        )
+    )
+    queue.consumer = consumer
+    queue.topic_partition = lambda topic, partition: (topic, partition)
+    await queue._run()
+    assert queue.error is None
+    assert saved == [("", "Kafka tombstone (null value)")]
+    assert consumer.commits == 1

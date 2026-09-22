@@ -139,7 +139,7 @@ and the default consumer group is `maver`; `MAVER_INTAKE__KAFKA__TOPIC` and
 same body as `POST /api/v1/incidents`, for example
 `{"alert":{"alertname":"HighErrorRate","namespace":"shop"},"target_stage":"full"}`.
 The consumer acknowledges a message after the session is stored. Backpressure retries
-the same offset. Malformed or permanently rejected messages are saved with their original
+the same offset. Malformed, tombstone, or permanently rejected messages are saved with their original
 bytes in the configured session database, then acknowledged so later records can proceed.
 A failed quarantine write leaves the offset uncommitted and `/readyz` unhealthy. Inspect
 with `maver queue list` and `maver queue show RECORD_ID` in the deployment environment.

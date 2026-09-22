@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import threading
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -520,4 +521,65 @@ async def test_quarantine_retry_admits_once_and_keeps_session_reference(tmp_path
             assert saved is not None
             assert saved.retry_session_id == first.json()["session_id"]
     finally:
+        deploy.storage.close()
+
+
+@pytest.mark.parametrize("keyed", [False, True])
+async def test_cancelled_admission_finishes_registration_after_session_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    keyed: bool,
+) -> None:
+    model = DiagnosisModel()
+    deploy = _deployment(tmp_path, model)
+    app = create_app(deployment=deploy, schedule_resume=lambda request_id: None)
+    sessions = deploy.storage.sessions
+    entered = threading.Event()
+    release_write = threading.Event()
+    run_started = asyncio.Event()
+    release_run = asyncio.Event()
+    method = "open_idempotent_session" if keyed else "create_session"
+    original = getattr(sessions, method)
+
+    def delayed_write(*args):
+        record = original(*args)
+        entered.set()
+        assert release_write.wait(timeout=5)
+        return record
+
+    async def fake_run(*args, **kwargs):
+        run_started.set()
+        await release_run.wait()
+
+    monkeypatch.setattr(sessions, method, delayed_write)
+    monkeypatch.setattr(incidents, "run_incident", fake_run)
+    try:
+        request = incidents.IncidentRequest(alert=ALERT, target_stage="diagnose")
+        task = asyncio.create_task(
+            incidents.accept_incident(
+                request,
+                app.state.service,
+                intake_id=("http", "cancelled-request") if keyed else None,
+            )
+        )
+        assert await asyncio.wait_for(asyncio.to_thread(entered.wait), timeout=5)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        release_write.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.wait_for(run_started.wait(), timeout=5)
+        records = sessions.running_sessions()
+        assert len(records) == 1
+        assert records[0].session_id in app.state.service.runs.live()
+        if keyed:
+            prior = sessions.get_intake_receipt(
+                "http", "cancelled-request", incidents._request_hash(request)
+            )
+            assert prior is not None and prior.session_id == records[0].session_id
+    finally:
+        release_write.set()
+        release_run.set()
+        await _settle(app.state.service)
         deploy.storage.close()

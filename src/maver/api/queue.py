@@ -73,6 +73,10 @@ class QueueConsumer:
                     f"{message.topic}:{message.partition}"
                 )
                 key = str(message.offset)
+                if message.value is None:
+                    await self._quarantine(source, key, None, "Kafka tombstone (null value)")
+                    await self.consumer.commit({partition: message.offset + 1})
+                    continue
                 try:
                     body = IncidentRequest.model_validate_json(message.value)
                 except ValidationError:
@@ -117,13 +121,13 @@ class QueueConsumer:
             self.error = exc
             _log.exception("Kafka intake stopped; /readyz will report it unhealthy")
 
-    async def _quarantine(self, source: str, key: str, raw: bytes, reason: str) -> None:
+    async def _quarantine(self, source: str, key: str, raw: bytes | None, reason: str) -> None:
         """Write the rejected bytes durably before their offset can advance."""
         record = await asyncio.to_thread(
             self.service.deployment.storage.sessions.quarantine,
             source,
             key,
-            base64.b64encode(raw).decode("ascii"),
+            base64.b64encode(raw or b"").decode("ascii"),
             reason,
         )
         _log.warning(
