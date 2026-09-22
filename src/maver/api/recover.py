@@ -5,7 +5,8 @@ import logging
 from typing import Any, cast
 
 from maver.api.deps import Service
-from maver.api.incidents import _record_failure, fingerprint, run_incident_task
+from maver.api.incidents import fingerprint, run_incident_task
+from maver.contracts.lifecycle import RunStatus
 from maver.contracts.state import TargetStage
 from maver.orchestration.recovery import safe_stage
 from maver.pipelines import SelectedPipeline, restore_selection
@@ -14,7 +15,7 @@ _log = logging.getLogger(__name__)
 
 
 async def recover_active(service: Service) -> None:
-    """Schedule safe continuations serially; close ambiguous runs with a clear reason."""
+    """Schedule safe continuations; park ambiguous runs for explicit reconciliation."""
     deployment = service.deployment
     records = await asyncio.to_thread(deployment.storage.sessions.running_sessions)
     serial = asyncio.Semaphore(1)
@@ -25,10 +26,12 @@ async def recover_active(service: Service) -> None:
                 "incident %s needs reconciliation; its interrupted stage is unsafe to replay",
                 record.session_id,
             )
-            _record_failure(
-                deployment,
+            await asyncio.to_thread(
+                deployment.storage.sessions.set_run_status,
                 record.session_id,
-                RuntimeError("interrupted stage needs reconciliation; automatic replay is unsafe"),
+                RunStatus.NEEDS_RECONCILIATION,
+                current_stage=record.current_stage,
+                checkpoint=record.checkpoint,
             )
             continue
         checkpoint = record.checkpoint

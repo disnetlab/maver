@@ -245,6 +245,116 @@ async def test_opt_in_restart_resumes_an_interrupted_diagnosis(tmp_path: pathlib
     assert model.calls == 2
 
 
+async def test_interrupted_write_needs_explicit_reconciliation(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unsafe checkpoint stays available and one operator can close it once."""
+    deploy = deployment(tmp_path, mode="auto")
+    session = deploy.storage.sessions.create_session(ALERT)
+    # The checkpoint is intentionally an execution stage: its write may have reached
+    # Kubernetes before the process stopped, regardless of the last recorded result.
+    selected = deploy.pipelines.get(deploy.pipelines.default)
+    checkpoint = {
+        "kind": "active_stage",
+        "version": 1,
+        "stage": "execution",
+        "state": {
+            "session_id": session.session_id,
+            "target_stage": "full",
+            "runtime": {
+                "selection": {
+                    "name": selected.name,
+                    "digest": selected.digest,
+                    "composition": selected.manifest(),
+                    "source": "default",
+                },
+                "deployment_digest": deploy.runtime_digest,
+            },
+        },
+    }
+    deploy.storage.sessions.set_run_status(
+        session.session_id,
+        RunStatus.RUNNING,
+        current_stage="execution",
+        checkpoint=checkpoint,
+    )
+    service = Service(deployment=deploy, schedule_resume=lambda request_id: None)
+    await recover_active(service)
+    parked = deploy.storage.sessions.get_session(session.session_id)
+    assert parked is not None
+    assert parked.run_status == RunStatus.NEEDS_RECONCILIATION
+    assert parked.checkpoint == checkpoint
+    assert parked.ended_at is None
+
+    app = create_app(deployment=deploy)
+    async with client(app) as http:
+        case = await http.get(f"/api/v1/incidents/{session.session_id}/reconciliation")
+        assert case.status_code == 200
+        assert "checkpoint" not in case.json()
+        duplicate = await http.post("/api/v1/incidents", json={"alert": ALERT})
+        assert duplicate.status_code == 409
+        path = f"/api/v1/incidents/{session.session_id}/reconciliation"
+        body = {
+            "action": "close",
+            "reason": "manually checked",
+            "observed_state": "service already restored",
+            "decided_by": "operator",
+        }
+        decided = await http.post(path, json=body)
+        assert decided.status_code == 200
+        repeated = await http.post(path, json=body)
+        assert repeated.status_code == 409
+    finished = deploy.storage.sessions.get_session(session.session_id)
+    assert finished is not None and finished.run_status == RunStatus.FAILED
+    assert finished.checkpoint == checkpoint
+    assert "service already restored" in (finished.notes or "")
+
+    replacement = deploy.storage.sessions.create_session(ALERT)
+    replacement_checkpoint = json.loads(json.dumps(checkpoint))
+    replacement_checkpoint["state"]["session_id"] = replacement.session_id
+    deploy.storage.sessions.set_run_status(
+        replacement.session_id,
+        RunStatus.RUNNING,
+        current_stage="execution",
+        checkpoint=replacement_checkpoint,
+    )
+    await recover_active(service)
+    started: list[dict[str, Any]] = []
+
+    async def start_fresh(alert: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        started.append({"alert": alert, **kwargs})
+        return {"session_id": "fresh-incident", "status": "accepted"}
+
+    monkeypatch.setattr("maver.api.reconciliation.start_incident", start_fresh)
+    async with client(app) as http:
+        path = f"/api/v1/incidents/{replacement.session_id}/reconciliation"
+        response = await http.post(
+            path,
+            json={
+                "action": "replan",
+                "reason": "symptom persists",
+                "observed_state": "fresh probe still fails",
+                "decided_by": "operator",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["new_incident"]["session_id"] == "fresh-incident"
+        assert (
+            await http.post(
+                path,
+                json={
+                    "action": "replan",
+                    "reason": "symptom persists",
+                    "observed_state": "fresh probe still fails",
+                    "decided_by": "operator",
+                },
+            )
+        ).status_code == 409
+    assert len(started) == 1
+    assert started[0]["metadata"] == {"reconciliation_of": replacement.session_id}
+    assert started[0]["selection"].pipeline.name == selected.name
+
+
 async def test_intake_answers_with_the_shape_the_harness_reads(tmp_path: pathlib.Path) -> None:
     """Held contract. The four keys and their values are what an outside driver parses,
     and a run it can poll has to look started from the moment it is accepted."""

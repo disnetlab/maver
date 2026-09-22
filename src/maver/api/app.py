@@ -32,6 +32,7 @@ from maver.api.health import router as health_router
 from maver.api.hitl import router as hitl_router
 from maver.api.incidents import router as incidents_router
 from maver.api.queue import QueueConsumer
+from maver.api.reconciliation import router as reconciliation_router
 from maver.api.recover import recover_active
 from maver.audit.durable_sink import DurableAuditSink
 from maver.audit.journal import EventSink
@@ -322,6 +323,7 @@ def create_app(
     # that already names it.
     app.include_router(health_router)
     app.include_router(incidents_router, prefix=API_PREFIX)
+    app.include_router(reconciliation_router, prefix=API_PREFIX)
     app.include_router(hitl_router, prefix=API_PREFIX)
     for router in _adapter_routers(active):
         app.include_router(router, prefix=API_PREFIX)

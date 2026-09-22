@@ -129,8 +129,29 @@ different request returns 409. Requests without a key retain live alert deduplic
 ordinary running incidents. It saves a pre-stage checkpoint and serially resumes
 interrupted RCA, Planning, and Verify stages under the same selected pipeline and
 configuration. An interrupted Execution stage, an adapter-owned episode, or a changed
-configuration is marked failed with a reconciliation note instead of replaying a
-possibly completed cluster write. This recovery assumes one MAVER process over a
+configuration is parked as `needs_reconciliation` with its checkpoint and audit
+evidence intact instead of replaying a possibly completed cluster write. Inspect
+private evidence from a host with access to the configured store:
+
+```bash
+maver incidents reconcile-show SESSION_ID
+```
+
+Check the affected resource and service with fresh read-only observations. Then record
+the observation and a decision through the running server:
+
+```bash
+maver incidents reconcile-decide SESSION_ID --action close --observed-state "service healthy" --reason "write already applied" --by operator
+maver incidents reconcile-decide SESSION_ID --action replan --observed-state "symptom persists" --reason "needs a fresh plan" --by operator
+```
+
+`close` ends the uncertain attempt. `replan` closes it and starts a linked new incident
+from the stored alert and exact selected pipeline; the old write is never replayed.
+New intake for the same alert is refused while reconciliation is pending.
+Replan refuses adapter-owned episodes, incomplete checkpoints and changed pipeline
+compositions. One successful decision is allowed per case. The API exposes only stage
+and evidence-presence metadata at `GET /api/v1/incidents/{id}/reconciliation`; the CLI
+reads detailed evidence locally. This recovery assumes one MAVER process over a
 durable SQLite volume or PostgreSQL store; it does not reattach external episodes.
 The enabled mode withholds local `bash_exec` and `code_exec` from replayable stages,
 and a stage with unvetted custom tools is not auto-resumed.

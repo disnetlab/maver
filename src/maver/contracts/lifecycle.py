@@ -55,6 +55,7 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     AWAITING_HUMAN = "awaiting_human"
     RESUMING = "resuming"
+    NEEDS_RECONCILIATION = "needs_reconciliation"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"

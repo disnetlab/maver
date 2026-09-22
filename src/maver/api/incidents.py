@@ -104,6 +104,16 @@ async def accept_incident(
     intake_id: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     """Admit an already validated alert from HTTP or a queue."""
+    unresolved = await asyncio.to_thread(
+        service.deployment.storage.sessions.reconciliation_sessions
+    )
+    key = fingerprint(body.alert)
+    for record in unresolved:
+        if fingerprint(record.alert) == key:
+            raise HTTPException(
+                status_code=409,
+                detail=f"alert is held by incident {record.session_id} pending reconciliation",
+            )
     # Validate explicit names before reserving capacity or opening a session. Resolving
     # selectors is deferred until this request owns the alert, so retries cannot run
     # selection middleware repeatedly for one incident.

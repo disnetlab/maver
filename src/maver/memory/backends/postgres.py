@@ -924,6 +924,16 @@ class PostgresStore:
             ).fetchall()
         return [_to_session(row) for row in rows]
 
+    def reconciliation_sessions(self) -> list[SessionRecord]:
+        """Return unresolved interrupted writes for intake deduplication."""
+        with self._db.read() as conn:
+            rows = conn.execute(
+                "SELECT * FROM sessions WHERE corpus_id = %s AND run_status = %s "
+                "ORDER BY started_at",
+                (self.corpus_id, RunStatus.NEEDS_RECONCILIATION.value),
+            ).fetchall()
+        return [_to_session(row) for row in rows]
+
     def get_states(self, session_ids: Sequence[str]) -> dict[str, str]:
         """Read the lifecycle state of many sessions at once.
 
@@ -1061,6 +1071,24 @@ class PostgresStore:
                     session_id,
                 ),
             )
+
+    def decide_reconciliation(self, session_id: str, *, notes: str) -> bool:
+        """Claim one operator decision without clearing the interrupted checkpoint."""
+        with self._db.write() as conn:
+            changed = conn.execute(
+                "UPDATE sessions SET run_status = %s, notes = %s, "
+                "ended_at = COALESCE(ended_at, %s) WHERE corpus_id = %s "
+                "AND session_id = %s AND run_status = %s",
+                (
+                    RunStatus.FAILED.value,
+                    scrub_optional(notes),
+                    _now(),
+                    self.corpus_id,
+                    session_id,
+                    RunStatus.NEEDS_RECONCILIATION.value,
+                ),
+            )
+            return changed.rowcount == 1
 
     def mark_distilled(self, session_id: str) -> None:
         """Record that a session's lesson has been written to the corpus.

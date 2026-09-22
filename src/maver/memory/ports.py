@@ -310,6 +310,10 @@ class SessionStore(Protocol):
         """Read sessions left running by a prior process, oldest first."""
         ...
 
+    def reconciliation_sessions(self) -> list[SessionRecord]:
+        """Read sessions awaiting an operator's interrupted-write decision."""
+        ...
+
     def get_states(self, session_ids: Sequence[str]) -> dict[str, str]:
         """Read the lifecycle state of many sessions at once.
 
@@ -398,6 +402,10 @@ class SessionStore(Protocol):
             checkpoint: State to resume from, cleared when None.
             awaiting_request_id: The approval being waited on, cleared when None.
         """
+        ...
+
+    def decide_reconciliation(self, session_id: str, *, notes: str) -> bool:
+        """Atomically close a reconciliation case, retaining its checkpoint and evidence."""
         ...
 
     def mark_distilled(self, session_id: str) -> None:

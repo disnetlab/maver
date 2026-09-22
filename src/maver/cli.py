@@ -230,6 +230,84 @@ def incidents_start(
     typer.echo(json.dumps(receipt, indent=2, sort_keys=True))
 
 
+@incidents_app.command("reconcile-show")
+def incidents_reconcile_show(session_id: str) -> None:
+    """Inspect private checkpoint and last tool evidence from the configured local store."""
+    storage = build_storage(_resolved())
+    try:
+        record = storage.sessions.get_session(session_id)
+        if record is None:
+            typer.echo("incident not found", err=True)
+            raise typer.Exit(code=1)
+        if record.run_status != "needs_reconciliation":
+            typer.echo(f"incident is {record.run_status}", err=True)
+            raise typer.Exit(code=1)
+        events = [
+            event
+            for run in storage.runs.runs_for(session_id)
+            for event in storage.runs.events_for(run.agent_run_id)
+            if event.event_type in {"tool_call_started", "tool_call"}
+        ]
+        last = events[-1] if events else None
+        result = next(
+            (event for event in reversed(events) if event.event_type == "tool_call"), None
+        )
+        typer.echo(
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "interrupted_stage": record.current_stage,
+                    "checkpoint": record.checkpoint,
+                    "root_cause": record.root_cause,
+                    "plan": record.plan,
+                    "execution_result": record.execution_result,
+                    "verify_result": record.verify_result,
+                    "last_tool_action": None if last is None else last.payload,
+                    "last_recorded_tool_result": None if result is None else result.payload,
+                    "evidence_limit": "The external write may have completed without a recorded result. Inspect the live system.",
+                },
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
+        )
+    finally:
+        storage.close()
+
+
+@incidents_app.command("reconcile-decide")
+def incidents_reconcile_decide(
+    session_id: str,
+    action: Annotated[str, typer.Option("--action", help="close or replan")],
+    observed_state: Annotated[str, typer.Option("--observed-state")],
+    reason: Annotated[str, typer.Option("--reason")],
+    decided_by: Annotated[str, typer.Option("--by")],
+    url: Annotated[str, typer.Option("--url")] = "http://127.0.0.1:8080",
+) -> None:
+    """Record the live observation and decide through the running server."""
+    if action not in {"close", "replan"}:
+        raise typer.BadParameter("action must be close or replan")
+    try:
+        result = _api(
+            url,
+            "POST",
+            f"/incidents/{session_id}/reconciliation",
+            json={
+                "action": action,
+                "observed_state": observed_state,
+                "reason": reason,
+                "decided_by": decided_by,
+            },
+        )
+    except httpx.HTTPStatusError as exc:
+        typer.echo(_detail(exc.response), err=True)
+        raise typer.Exit(code=1) from exc
+    except httpx.RequestError as exc:
+        typer.echo(f"could not reach MAVER: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
 def _json_object(path: Path) -> dict[str, Any]:
     """Read one object without echoing private content in a parsing error."""
     try:
