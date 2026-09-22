@@ -104,7 +104,38 @@ async def accept_incident(
     *,
     intake_id: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Admit an already validated alert from HTTP or a queue."""
+    """Admit an alert while keeping its storage work in the shutdown drain."""
+    if service.runs.draining:
+        raise HTTPException(
+            status_code=503, detail="service is draining", headers={"Retry-After": "30"}
+        )
+    admission = asyncio.create_task(
+        _accept_incident(body, service, intake_id=intake_id),
+        name="maver-incident-admission",
+    )
+    service.runs.track_admission(admission)
+    cancelled = False
+    while not admission.done():
+        try:
+            await asyncio.shield(admission)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            break
+    if cancelled:
+        if not admission.cancelled() and (error := admission.exception()) is not None:
+            _log.error("incident admission failed after request cancellation", exc_info=error)
+        raise asyncio.CancelledError
+    return admission.result()
+
+
+async def _accept_incident(
+    body: IncidentRequest,
+    service: Service,
+    *,
+    intake_id: tuple[str, str] | None,
+) -> dict[str, Any]:
+    """Resolve the selection, persist the session, and schedule its run."""
     sessions = service.deployment.storage.sessions
     request_hash = _request_hash(body)
     # An exact delivery replay owns its original session even when that session is
@@ -172,38 +203,15 @@ async def accept_incident(
 
     try:
         selection = await _select(body, service.deployment, explicit)
-        admission = asyncio.create_task(
-            start_incident(
-                body.alert,
-                target_stage=body.target_stage,
-                service=service,
-                selection=selection,
-                metadata=body.metadata,
-                intake_id=intake_id,
-                request_hash=request_hash,
-            ),
-            name="maver-incident-admission",
+        receipt = await start_incident(
+            body.alert,
+            target_stage=body.target_stage,
+            service=service,
+            selection=selection,
+            metadata=body.metadata,
+            intake_id=intake_id,
+            request_hash=request_hash,
         )
-        # A cancelled HTTP request must not cancel a thread after it commits the
-        # session but before this coroutine registers its run. Keep the claim until
-        # initialization either finishes or records a failure.
-        cancelled = False
-        while not admission.done():
-            try:
-                await asyncio.shield(admission)
-            except asyncio.CancelledError:
-                cancelled = True
-            except Exception:
-                break
-        if cancelled:
-            if not admission.cancelled():
-                error = admission.exception()
-                if error is not None:
-                    _log.error(
-                        "incident admission failed after request cancellation", exc_info=error
-                    )
-            raise asyncio.CancelledError
-        receipt = admission.result()
         if _show_pipeline(body, service.deployment):
             receipt["pipeline"] = selection.pipeline.name
         return receipt
@@ -385,6 +393,21 @@ def schedule_prepared_incident(
 ) -> dict[str, Any]:
     """Start the task for a session whose alert, selection and status are already durable."""
     alert = record.alert
+    if service.runs.drain_finished:
+        # The admission outlived shutdown's bounded wait. Its writes are durable,
+        # but a pipeline launched now would run after the drain has stopped watching.
+        if service.deployment.settings.server.resume_interrupted_incidents:
+            service.deployment.storage.sessions.set_run_status(
+                record.session_id, RunStatus.NEEDS_RECONCILIATION
+            )
+        else:
+            record_cancellation(service.deployment, record.session_id)
+        return {
+            "session_id": record.session_id,
+            "status": "accepted",
+            "target_stage": target_stage,
+            "started_at": record.started_at,
+        }
     # Registered before the task, so a run that finishes inside one loop iteration
     # cannot be unregistered before it was ever registered.
     service.runs.register(record.session_id, fingerprint=fingerprint(alert))

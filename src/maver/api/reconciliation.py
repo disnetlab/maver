@@ -48,6 +48,34 @@ async def read_reconciliation(session_id: str, service: ServiceDep) -> dict[str,
 async def decide_reconciliation(
     session_id: str, body: ReconciliationDecision, service: ServiceDep
 ) -> dict[str, Any]:
+    """Keep the decision alive through shutdown, including its database commit."""
+    if service.runs.draining:
+        raise HTTPException(
+            status_code=503, detail="service is draining", headers={"Retry-After": "30"}
+        )
+    decision = asyncio.create_task(
+        _decide_reconciliation(session_id, body, service),
+        name="maver-reconciliation-decision",
+    )
+    service.runs.track_admission(decision)
+    cancelled = False
+    while not decision.done():
+        try:
+            await asyncio.shield(decision)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            break
+    if cancelled:
+        if not decision.cancelled() and (error := decision.exception()) is not None:
+            _log.error("reconciliation failed after request cancellation", exc_info=error)
+        raise asyncio.CancelledError
+    return decision.result()
+
+
+async def _decide_reconciliation(
+    session_id: str, body: ReconciliationDecision, service: ServiceDep
+) -> dict[str, Any]:
     """Close the uncertain run, optionally starting a fresh linked incident."""
     sessions = service.deployment.storage.sessions
     record = await asyncio.to_thread(sessions.get_session, session_id)
@@ -124,19 +152,4 @@ async def decide_reconciliation(
         finally:
             service.runs.release(claim)
 
-    # A cancelled request still waits for the committed admission to be scheduled.
-    # The request itself remains in the server's drain until this finishes.
-    decision = asyncio.create_task(commit_and_schedule())
-    cancelled = False
-    while not decision.done():
-        try:
-            await asyncio.shield(decision)
-        except asyncio.CancelledError:
-            cancelled = True
-        except Exception:
-            break
-    if cancelled:
-        if not decision.cancelled() and (error := decision.exception()) is not None:
-            _log.error("replan decision failed after request cancellation", exc_info=error)
-        raise asyncio.CancelledError
-    return decision.result()
+    return await commit_and_schedule()

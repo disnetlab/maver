@@ -19,6 +19,7 @@ import httpx
 import pytest
 import yaml
 
+from maver.api import incidents
 from maver.api.app import _drain, create_app, validate_deployment
 from maver.api.deps import Service
 from maver.api.incidents import fingerprint, run_incident_task
@@ -531,6 +532,127 @@ async def test_cancelled_replan_request_still_schedules_committed_replacement(
     replacements = sessions.running_sessions()
     assert len(replacements) == 1
     assert replacements[0].runtime["metadata"]["reconciliation_of"] == old.session_id
+
+
+async def test_shutdown_tracks_replan_commit_before_its_run_is_registered(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deploy = deployment(tmp_path, mode="auto")
+    sessions = deploy.storage.sessions
+    old = sessions.create_session(ALERT)
+    selected = deploy.pipelines.get(deploy.pipelines.default)
+    sessions.set_run_status(
+        old.session_id,
+        RunStatus.NEEDS_RECONCILIATION,
+        current_stage="execution",
+        checkpoint={
+            "kind": "active_stage",
+            "version": 1,
+            "stage": "execution",
+            "state": {
+                "session_id": old.session_id,
+                "target_stage": "full",
+                "runtime": {
+                    "deployment_digest": deploy.runtime_digest,
+                    "selection": {
+                        "name": selected.name,
+                        "digest": selected.digest,
+                        "composition": selected.manifest(),
+                        "source": "default",
+                    },
+                },
+            },
+        },
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    original = sessions.open_replan_session
+
+    def slow_open(*args: Any, **kwargs: Any) -> Any:
+        prepared = original(*args, **kwargs)
+        entered.set()
+        assert release.wait(timeout=5)
+        return prepared
+
+    monkeypatch.setattr(sessions, "open_replan_session", slow_open)
+    app = create_app(deployment=deploy)
+    try:
+        async with client(app) as http:
+            request = asyncio.create_task(
+                http.post(
+                    f"/api/v1/incidents/{old.session_id}/reconciliation",
+                    json={
+                        "action": "replan",
+                        "reason": "still broken",
+                        "observed_state": "fresh probe failed",
+                        "decided_by": "operator",
+                    },
+                )
+            )
+            assert await asyncio.to_thread(entered.wait, 5)
+            assert app.state.service.runs.admissions()
+            assert not app.state.service.runs.live()
+            await _drain(app.state.service, 0.0)
+            release.set()
+            response = await asyncio.wait_for(request, timeout=5)
+            assert response.status_code == 200
+            new_id = response.json()["new_incident"]["session_id"]
+            replacement = sessions.get_session(new_id)
+            assert replacement is not None and replacement.run_status == RunStatus.CANCELLED
+            assert not app.state.service.runs.live()
+    finally:
+        release.set()
+        deploy.storage.close()
+
+
+async def test_owned_lifespan_keeps_storage_open_during_late_admission(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = importlib.import_module("maver.api.app")
+    deploy = deployment(tmp_path, mode="auto")
+    object.__setattr__(deploy.settings.server, "drain_timeout_s", 0.0)
+    closed = Mock(wraps=deploy.storage.close)
+    deploy = dataclasses.replace(deploy, storage=dataclasses.replace(deploy.storage, close=closed))
+    monkeypatch.setattr(module, "build_deployment", lambda settings: deploy)
+    monkeypatch.setattr(module, "load_settings", lambda: deploy.settings)
+    monkeypatch.setattr(module, "shutdown_scheduler", lambda: None)
+    monkeypatch.setattr(module, "schedule_approval_sweep", lambda *args: None)
+    monkeypatch.setattr(module, "configure_tracing", lambda *args: None)
+    sessions = deploy.storage.sessions
+    entered = threading.Event()
+    release = threading.Event()
+    original = sessions.create_session
+
+    def slow_create(alert: dict[str, Any]) -> Any:
+        record = original(alert)
+        entered.set()
+        assert release.wait(timeout=5)
+        return record
+
+    monkeypatch.setattr(sessions, "create_session", slow_create)
+    app = module.create_app()
+    request = None
+    try:
+        async with app.router.lifespan_context(app):
+            request = asyncio.create_task(
+                incidents.accept_incident(
+                    incidents.IncidentRequest(alert=ALERT), app.state.service
+                )
+            )
+            assert await asyncio.to_thread(entered.wait, 5)
+        closed.assert_not_called()
+        assert request is not None and not request.done()
+        release.set()
+        receipt = await asyncio.wait_for(request, timeout=5)
+        record = sessions.get_session(receipt["session_id"])
+        assert record is not None and record.run_status == RunStatus.CANCELLED
+        assert not app.state.service.runs.live()
+        closed.assert_not_called()
+    finally:
+        release.set()
+        if request is not None:
+            await asyncio.gather(request, return_exceptions=True)
+        deploy.storage.close()
 
 
 async def test_intake_answers_with_the_shape_the_harness_reads(tmp_path: pathlib.Path) -> None:

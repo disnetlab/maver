@@ -54,9 +54,11 @@ class RunRegistry:
         """Start empty."""
         self._runs: dict[str, asyncio.Task[None] | None] = {}
         self._tasks: set[asyncio.Task[None]] = set()
+        self._admissions: set[asyncio.Task[object]] = set()
         self._alerts: dict[str, _Held] = {}
         self._reserved = 0
         self._draining = False
+        self._drain_finished = False
 
     def register(self, session_id: str, *, fingerprint: str | None = None) -> None:
         """Start tracking a run, filling in the claim its intake took.
@@ -133,6 +135,15 @@ class RunRegistry:
         """
         return set(self._tasks)
 
+    def track_admission(self, task: asyncio.Task[object]) -> None:
+        """Keep an intake or reconciliation decision alive until it has finished using storage."""
+        self._admissions.add(task)
+        task.add_done_callback(self._admissions.discard)
+
+    def admissions(self) -> set[asyncio.Task[object]]:
+        """Snapshot work that may still open or initialize a session."""
+        return set(self._admissions)
+
     def at_capacity(self, limit: int) -> bool:
         """Whether this process is already carrying as many incidents as it should.
 
@@ -168,6 +179,15 @@ class RunRegistry:
         arriving in the first place.
         """
         self._draining = True
+
+    @property
+    def drain_finished(self) -> bool:
+        """Whether shutdown has stopped waiting for work already accepted."""
+        return self._drain_finished
+
+    def finish_draining(self) -> None:
+        """Prevent late admissions from starting a pipeline after the drain."""
+        self._drain_finished = True
 
     def claim(self, fingerprint: str | None, limit: int) -> Claim | None:
         """Take one of this process's slots, and the alert with it, in a single step.

@@ -13,7 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 from maver.api import incidents
-from maver.api.app import create_app
+from maver.api.app import _drain, create_app
 from maver.api.deps import Service
 from maver.cli import app
 from maver.contracts.lifecycle import RunStatus
@@ -581,5 +581,68 @@ async def test_cancelled_admission_finishes_registration_after_session_commit(
     finally:
         release_write.set()
         release_run.set()
+        await _settle(app.state.service)
+        deploy.storage.close()
+
+
+@pytest.mark.parametrize("phase", ["selector", "commit"])
+async def test_shutdown_tracks_admission_before_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    """A late selector or DB write cannot launch an unwatched run after drain."""
+    model = DiagnosisModel()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    deploy = _deployment(tmp_path, model)
+    sessions = deploy.storage.sessions
+
+    if phase == "selector":
+        class Selector:
+            async def select(self, alert: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:
+                entered.set()
+                await release.wait()
+                return "diagnose"
+
+        deploy = replace(deploy, pipeline_selectors=(Selector(),))
+    else:
+        original = sessions.create_session
+        thread_entered = threading.Event()
+        thread_release = threading.Event()
+
+        def slow_create(alert: dict[str, Any]) -> Any:
+            record = original(alert)
+            thread_entered.set()
+            assert thread_release.wait(timeout=5)
+            return record
+
+        monkeypatch.setattr(sessions, "create_session", slow_create)
+
+    app = create_app(deployment=deploy)
+    try:
+        request = asyncio.create_task(
+            incidents.accept_incident(incidents.IncidentRequest(alert=ALERT), app.state.service)
+        )
+        if phase == "selector":
+            await asyncio.wait_for(entered.wait(), timeout=5)
+        else:
+            assert await asyncio.to_thread(thread_entered.wait, 5)
+        assert app.state.service.runs.admissions()
+        assert not app.state.service.runs.live()
+        await _drain(app.state.service, 0.0)
+        assert app.state.service.runs.drain_finished
+        assert not request.done()
+        if phase == "selector":
+            release.set()
+        else:
+            thread_release.set()
+        receipt = await asyncio.wait_for(request, timeout=5)
+        stored = sessions.get_session(receipt["session_id"])
+        assert stored is not None and stored.run_status == RunStatus.CANCELLED
+        assert not app.state.service.runs.live()
+        assert not model.requests
+    finally:
+        release.set()
+        if phase == "commit":
+            thread_release.set()
         await _settle(app.state.service)
         deploy.storage.close()

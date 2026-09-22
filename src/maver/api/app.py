@@ -236,13 +236,28 @@ async def _drain(service: Service, timeout_s: float) -> None:
         service: The process's resources.
         timeout_s: How long to wait. Zero exits immediately.
     """
+    service.runs.begin_draining()
     deadline = time.monotonic() + timeout_s
+    # A selector or database commit may still be admitting work before it has a run
+    # ID. Give it the same bounded drain window; never cancel a to_thread write here.
+    admissions = service.runs.admissions()
+    if admissions:
+        _log.info("draining %d admission(s) before shutdown", len(admissions))
+        await asyncio.wait(admissions, timeout=max(0.0, deadline - time.monotonic()))
+    pending_admissions = {task for task in service.runs.admissions() if not task.done()}
+    if pending_admissions:
+        service.runs.finish_draining()
+        _log.error(
+            "shut down with %d admission(s) still using storage; storage must remain open",
+            len(pending_admissions),
+        )
     while service.runs.live() and time.monotonic() < deadline:
         _log.info("draining %d incident(s) before shutdown", len(service.runs.live()))
         await asyncio.sleep(1.0)
 
     remaining = service.runs.live()
     if not remaining:
+        service.runs.finish_draining()
         return
 
     # Cancellation lets each handler settle its record. With opt-in recovery the stage
@@ -256,6 +271,7 @@ async def _drain(service: Service, timeout_s: float) -> None:
     still_live = service.runs.live()
     if still_live:
         _log.error("shut down with %d incident(s) unrecorded: %s", len(still_live), still_live)
+    service.runs.finish_draining()
 
 
 def create_app(
@@ -286,7 +302,22 @@ def create_app(
         # and a failed queue stop must not skip draining, unbinding, or closing storage.
         async with AsyncExitStack() as cleanup:
             if owned:
-                cleanup.callback(active.storage.close)
+                def close_storage() -> None:
+                    pending = [
+                        task
+                        for task in app.state.service.runs.admissions()
+                        | app.state.service.runs.tasks()
+                        if not task.done()
+                    ]
+                    if pending:
+                        _log.error(
+                            "leaving storage open: %d admission or run task(s) remain after drain",
+                            len(pending),
+                        )
+                        return
+                    active.storage.close()
+
+                cleanup.callback(close_storage)
                 cleanup.callback(_flush_sink, active.sink)
             cleanup.callback(unbind_deployment)
             cleanup.callback(shutdown_scheduler)
