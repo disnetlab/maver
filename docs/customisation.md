@@ -69,6 +69,13 @@ store. `enabled: false` disables it for that agent; `true` cannot create a store
 the deployment has disabled memory. Storage backends and credentials remain
 deployment resources.
 
+Custom lexical backends implement `TextSearch` in `maver.memory.ports`. Its
+`upsert_summary` method accepts `expected_feedback_sequence`: Learning supplies the
+operator review sequence used for its lesson, with zero meaning no review. Check
+that sequence atomically with the corpus write and raise `FeedbackChangedError`
+without changing the record if it no longer matches. MAVER then retries with fresh
+feedback. Omitting the argument permits corpus imports without a session record.
+
 ## Hosted Gemini diagnostic profile
 
 `configs/models/gemini-3.5-flash-lite.yaml` selects LiteLLM's native Gemini route.

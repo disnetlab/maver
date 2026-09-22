@@ -215,9 +215,11 @@ under the session lock. Session lifecycle and existing memory metadata change in
 same transaction, leaving original agent artifacts and observation text intact.
 
 Delayed Learning receives the latest review as external feedback. Review text is
-therefore model-visible to Learning. If a review changes during distillation, that
-pass does not write its stale lesson and is retried with the latest review. Existing
+therefore model-visible to Learning. If a review changes before the lesson is committed,
+that pass does not write its stale lesson and is retried with the latest review. Existing
 stored lessons retain their original text when reviewed.
+Both storage backends check the review sequence inside the corpus write transaction,
+including reviews that arrive after Learning's final application-level check.
 
 ## Delayed Learning and retries
 
@@ -227,6 +229,11 @@ restores these intents, and a periodic sweep repairs missing scheduled jobs. Fai
 passes retry after one minute, with exponential backoff capped at fifteen minutes;
 retries continue until successful distillation. Restored jobs run one at a time, and
 an already distilled session does not incur another model call.
+
+Temporarily disabling Learning retains pending intents and their feedback. Re-enable
+it on a later restart to restore that work. A long-running pass is not queued again
+by the repair sweep. Kafka shutdown also leaves unfinished admission and quarantine
+writes tracked while their storage operations settle.
 
 Eligibility remains part of the workflow: diagnosis-only runs are excluded, and
 adapter-owned episodes keep their synchronous Learning pass after external grading.

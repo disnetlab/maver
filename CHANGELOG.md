@@ -9,6 +9,19 @@ published comparisons, which are single-variable only while the schema does not 
 with the configuration. The procedure is in STYLE_GUIDE.md, "Typed artifacts are
 frozen".
 
+## Feedback and background-work race fixes
+
+Learning now retains pending intents when temporarily disabled, and its repair sweep
+does not queue a second copy of a running pass. The corpus write checks the operator
+review sequence in the same transaction, rejecting stale lesson text even when a
+review arrives after the final application-level check. Custom `TextSearch` backends
+must accept and enforce `expected_feedback_sequence` on `upsert_summary`.
+
+Kafka shutdown reaches the bounded incident drain while admission is still settling;
+quarantine writes remain tracked until their storage threads finish. Adapter-owned
+approval continuations now share the duplicate-run and draining guards. The storage
+layout remains version 9; no submission schemas or prompts changed.
+
 ## Admission shutdown, durable Learning, and approval recovery
 
 Shutdown now tracks pipeline selection and session initialization as well as active
