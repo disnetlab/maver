@@ -12,6 +12,7 @@ import importlib
 import json
 import pathlib
 from typing import Any
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -149,6 +150,53 @@ def deployment(tmp_path: pathlib.Path, *, mode: str = "prompt") -> Deployment:
 def client(app: Any) -> httpx.AsyncClient:
     """Speak to the application in this event loop, so its tasks are ours to await."""
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://maver")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["startup", "queue_stop"])
+async def test_lifespan_releases_resources_even_when_initialization_or_cleanup_fails(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    module = importlib.import_module("maver.api.app")
+    dep = deployment(tmp_path)
+    closed = Mock(wraps=dep.storage.close)
+    dep = dataclasses.replace(dep, storage=dataclasses.replace(dep.storage, close=closed))
+    monkeypatch.setattr(module, "build_deployment", lambda settings: dep)
+    monkeypatch.setattr(module, "load_settings", lambda: dep.settings)
+    stopped, unbound = Mock(), Mock()
+    monkeypatch.setattr(module, "shutdown_scheduler", stopped)
+    monkeypatch.setattr(module, "unbind_deployment", unbound)
+    monkeypatch.setattr(module, "bind_deployment", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "schedule_approval_sweep", lambda *args: None)
+
+    def fail(*args):
+        raise RuntimeError("injected failure")
+
+    if failure == "startup":
+        monkeypatch.setattr(module, "configure_tracing", fail)
+    else:
+        object.__setattr__(dep.settings.intake.kafka, "enabled", True)
+        monkeypatch.setattr(module, "configure_tracing", lambda *args: None)
+
+        class BrokenQueue:
+            def __init__(self, service):
+                pass
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                fail()
+
+        monkeypatch.setattr(module, "QueueConsumer", BrokenQueue)
+    app = module.create_app()
+    with pytest.raises(RuntimeError, match="injected failure"):
+        async with app.router.lifespan_context(app):
+            assert failure == "queue_stop"
+    assert app.state.service.runs.draining
+    stopped.assert_called_once()
+    unbound.assert_called_once()
+    closed.assert_called_once()
 
 
 async def settle(service: Service) -> None:

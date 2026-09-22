@@ -16,7 +16,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
 from fastapi import APIRouter, FastAPI
@@ -278,42 +278,32 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        # A restored job arrives with nothing but its keyword arguments, so the process
-        # has to tell it which deployment it belongs to.
-        bind_deployment(active, runs=app.state.service.runs)
-        register_post_incident_hooks(active.settings)
-        # A decision recorded straight into the store — by the CLI from inside the pod,
-        # or by anything else holding it — has nothing else to wake the incident it
-        # unblocks.
-        schedule_approval_sweep(active.settings.authority.poll_interval_s)
-        # Instrumented either way; only export depends on a collector being configured.
-        # Code that runs only when someone is watching is code the measured runs never
-        # exercised.
-        configure_tracing(active.settings)
         queue = QueueConsumer(app.state.service) if active.settings.intake.kafka.enabled else None
-        try:
+        # Register cleanup before initialization: a failed startup still owns resources,
+        # and a failed queue stop must not skip draining, unbinding, or closing storage.
+        async with AsyncExitStack() as cleanup:
+            if owned:
+                cleanup.callback(active.storage.close)
+                cleanup.callback(_flush_sink, active.sink)
+            cleanup.callback(unbind_deployment)
+            cleanup.callback(shutdown_scheduler)
+            cleanup.push_async_callback(
+                _drain, app.state.service, active.settings.server.drain_timeout_s
+            )
+            if queue is not None:
+                cleanup.push_async_callback(queue.stop)
+            cleanup.callback(app.state.service.runs.begin_draining)
+
+            bind_deployment(active, runs=app.state.service.runs)
+            register_post_incident_hooks(active.settings)
+            schedule_approval_sweep(active.settings.authority.poll_interval_s)
+            configure_tracing(active.settings)
             if active.settings.server.resume_interrupted_incidents:
                 await recover_active(app.state.service)
             if queue is not None:
                 await queue.start()
                 app.state.service.queue.consumer = queue
             yield
-        finally:
-            # Stop accepting, then wait. The order is the whole property: a drain that
-            # runs while the door is open waits for incidents it also keeps admitting.
-            app.state.service.runs.begin_draining()
-            if queue is not None:
-                await queue.stop()
-            await _drain(app.state.service, active.settings.server.drain_timeout_s)
-            shutdown_scheduler()
-            unbind_deployment()
-            if owned:
-                # Before the stores, because this is what writes to them: the sink
-                # queues its events rather than waiting on each one, so the tail of
-                # every incident is still in hand at this point. A deployment somebody
-                # else built is theirs to flush, like the stores under it.
-                _flush_sink(active.sink)
-                active.storage.close()
 
     docs = active.settings.server.environment != "production"
     app = FastAPI(
