@@ -299,6 +299,75 @@ async def test_learning_intent_retries_and_survives_reopen(
         deploy.storage.close()
 
 
+async def test_disabled_restart_keeps_learning_intent_and_feedback(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deploy, model = deployment(tmp_path, learning_enabled=False)
+    session_id = closed_incident(deploy)
+    feedback = {"source": "benchmark", "diagnosis": {"success": False}}
+    intent = LearningIntent(session_id, "2026-01-01T00:00:00+00:00", feedback)
+    deploy.storage.sessions.put_learning_intent(intent)
+    monkeypatch.setattr(learning_module, "bound_deployment", lambda: deploy)
+    scheduled: list[LearningIntent] = []
+    monkeypatch.setattr(
+        learning_module,
+        "schedule_learning_intent",
+        lambda workdir, pending: scheduled.append(pending),
+    )
+    try:
+        assert await run_learning_intent(session_id) == "disabled"
+        assert deploy.storage.sessions.get_learning_intent(session_id) == intent
+        assert scheduled == []
+        assert model.calls == 0
+    finally:
+        deploy.storage.close()
+
+    enabled, enabled_model = deployment(tmp_path)
+    monkeypatch.setattr(learning_module, "bound_deployment", lambda: enabled)
+    try:
+        assert enabled.storage.sessions.get_learning_intent(session_id) == intent
+        assert await run_learning_intent(session_id) == "distilled"
+        assert enabled.storage.sessions.get_learning_intent(session_id) is None
+        assert enabled_model.calls == 1
+    finally:
+        enabled.storage.close()
+
+
+async def test_duplicate_learning_job_does_not_queue_behind_running_pass(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deploy, _ = deployment(tmp_path)
+    session_id = closed_incident(deploy)
+    deploy.storage.sessions.put_learning_intent(
+        LearningIntent(session_id, "2026-01-01T00:00:00+00:00")
+    )
+    monkeypatch.setattr(learning_module, "bound_deployment", lambda: deploy)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def slow_run(*args: Any, **kwargs: Any) -> str:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return "distilled"
+
+    monkeypatch.setattr(learning_module, "run_learning", slow_run)
+    try:
+        first = asyncio.create_task(run_learning_intent(session_id))
+        await started.wait()
+        assert await run_learning_intent(session_id) == "already_running"
+        release.set()
+        assert await first == "distilled"
+        assert calls == 1
+    finally:
+        release.set()
+        deploy.storage.close()
+
+
 async def test_the_distilling_call_is_counted_like_every_other(
     tmp_path: pathlib.Path,
 ) -> None:

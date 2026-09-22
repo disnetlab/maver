@@ -53,6 +53,7 @@ __all__ = [
 
 _log = logging.getLogger(__name__)
 _active_tasks: set[asyncio.Task[Any]] = set()
+_running_intents: set[str] = set()
 _learning_capacity = asyncio.Semaphore(1)
 
 
@@ -122,8 +123,12 @@ async def sweep_learning_intents() -> None:
     _active_tasks.add(task)
     try:
         deployment = bound_deployment()
+        if not deployment.settings.memory.learning_enabled:
+            return
         scheduler = scheduler_for(deployment.settings.server.workdir)
         for intent in deployment.storage.sessions.pending_learning_intents():
+            if intent.session_id in _running_intents:
+                continue
             if scheduler.get_job(f"learning:{intent.session_id}") is None:
                 try:
                     schedule_learning_intent(deployment.settings.server.workdir, intent)
@@ -135,6 +140,9 @@ async def sweep_learning_intents() -> None:
 
 async def run_learning_intent(session_id: str) -> str:
     """Run a due intent and retain it until a successful corpus write."""
+    if session_id in _running_intents:
+        return "already_running"
+    _running_intents.add(session_id)
     task = asyncio.current_task()
     assert task is not None
     _active_tasks.add(task)
@@ -149,6 +157,11 @@ async def run_learning_intent(session_id: str) -> str:
             if due_at > datetime.now(UTC):
                 schedule_learning_intent(deployment.settings.server.workdir, intent)
                 return "not_due"
+            # A deployment can be restarted with Learning temporarily disabled.
+            # Keep the original eligibility and grade for a later enabled restart;
+            # no retry job is useful while this process keeps the flag disabled.
+            if not deployment.settings.memory.learning_enabled:
+                return "disabled"
             record = sessions.get_session(session_id)
             if record is not None and record.distilled:
                 sessions.complete_learning_intent(session_id)
@@ -178,6 +191,7 @@ async def run_learning_intent(session_id: str) -> str:
                     _log.exception("could not schedule Learning retry for %s", session_id)
             return status
     finally:
+        _running_intents.discard(session_id)
         _active_tasks.discard(task)
 
 
