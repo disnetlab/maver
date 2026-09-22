@@ -8,14 +8,21 @@ them could be exercised without the whole process standing up around them.
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Annotated, cast
+from typing import Annotated, Any, cast
 
 from fastapi import Depends, HTTPException, Request
 
 from maver.orchestration.control import Claim, RunRegistry
 from maver.orchestration.runner import Deployment
 
-__all__ = ["Service", "ServiceDep", "admit", "service"]
+__all__ = ["QueueStatus", "Service", "ServiceDep", "admit", "service"]
+
+
+@dataclass(slots=True)
+class QueueStatus:
+    """The optional consumer's process-local health, updated during lifespan."""
+
+    consumer: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +42,7 @@ class Service:
     """
     runs: RunRegistry = field(default_factory=RunRegistry)
     """The incidents running in this process right now, and the tasks carrying them."""
+    queue: QueueStatus = field(default_factory=QueueStatus)
 
 
 def service(request: Request) -> Service:

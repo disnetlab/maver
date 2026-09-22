@@ -175,21 +175,8 @@ class Settings(SettingsGroup):
         Raises:
             ValueError: When two groups are configured inconsistently.
         """
-        if self.intake.kafka.enabled:
-            # The group is configurable because the intake is designed; nothing consumes
-            # from it yet. Accepting the flag let it satisfy the check below, so a
-            # deployment with HTTP off and a queue configured started clean and could
-            # never receive an incident — the outcome that check exists to refuse.
-            raise ValueError(
-                "intake.kafka.enabled is set and the queue intake is not implemented: "
-                "nothing consumes from the topic, so this would start a service that "
-                "can never receive an incident. Use intake.http_enabled."
-            )
-        if not self.intake.http_enabled:
-            raise ValueError(
-                "no intake is enabled: set intake.http_enabled, otherwise the service "
-                "starts and can never receive an incident."
-            )
+        if not self.intake.http_enabled and not self.intake.kafka.enabled:
+            raise ValueError("no intake is enabled: enable HTTP or Kafka intake")
         if self.server.environment == "production" and self.authority.mode == "auto":
             # The escape hatch is a rule, not a flag, and that is the point. A
             # deployment that wants routine scaling to proceed unattended can say so;

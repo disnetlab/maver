@@ -42,8 +42,6 @@ DECLARED_FOR_UNBUILT_WORK = {
     # deleted because the shape of the configuration is part of the design, but an
     # operator setting one today changes nothing, and that is worth failing over the
     # day someone believes otherwise.
-    "intake.kafka.topic": "the queue intake is a phase-two extra",
-    "intake.kafka.group_id": "the queue intake is a phase-two extra",
     "model.request_timeout_s": "the profile's own limit is what the client sends",
     "model.num_retries": "the profile's own limit is what the client sends",
     "observability.metric_interval_ms": "no metric exporter is installed",

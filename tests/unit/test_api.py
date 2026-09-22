@@ -20,6 +20,7 @@ import yaml
 from maver.api.app import _drain, create_app, validate_deployment
 from maver.api.deps import Service
 from maver.api.incidents import fingerprint, run_incident_task
+from maver.api.recover import recover_active
 from maver.audit.journal import ListSink
 from maver.contracts.lifecycle import RunStatus
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
@@ -27,7 +28,7 @@ from maver.memory.factory import build_storage
 from maver.middleware.human_approval import authorities
 from maver.orchestration import scheduler
 from maver.orchestration.jobs import resume_approval
-from maver.orchestration.runner import Deployment, resume_after_decision
+from maver.orchestration.runner import Deployment, resume_after_decision, run_incident
 from maver.roles import registry as role_registry
 from maver.roles.registry import registered_roles
 from maver.settings.authority import AuthoritySettings
@@ -154,6 +155,46 @@ async def settle(service: Service) -> None:
     """Wait for every incident this process started."""
     while pending := {task for task in service.runs.tasks() if not task.done()}:
         await asyncio.gather(*pending, return_exceptions=True)
+
+
+async def test_opt_in_restart_resumes_an_interrupted_diagnosis(tmp_path: pathlib.Path) -> None:
+    """A stored pre-role snapshot resumes under one transcript and the original session."""
+    deploy = deployment(tmp_path, mode="auto")
+    settings = deploy.settings.model_copy(
+        update={
+            "server": deploy.settings.server.model_copy(
+                update={"resume_interrupted_incidents": True}
+            )
+        }
+    )
+
+    class CrashOnce:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.delegate = ParkingModel()
+
+        async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("simulated process loss during diagnosis")
+            return await self.delegate.complete(request, caller=caller)
+
+    model = CrashOnce()
+    deploy = dataclasses.replace(deploy, settings=settings, completion=model)
+    session = deploy.storage.sessions.create_session(ALERT)
+    deploy.storage.sessions.set_run_status(session.session_id, RunStatus.RUNNING)
+    with pytest.raises(RuntimeError, match="simulated process loss"):
+        await run_incident(ALERT, session.session_id, deploy, target_stage="diagnose")
+    saved = deploy.storage.sessions.get_session(session.session_id)
+    assert saved is not None and saved.checkpoint is not None
+    assert saved.checkpoint["stage"] == "rca"
+
+    service = Service(deployment=deploy, schedule_resume=lambda request_id: None)
+    await recover_active(service)
+    await settle(service)
+    finished = deploy.storage.sessions.get_session(session.session_id)
+    assert finished is not None and finished.run_status == RunStatus.COMPLETED
+    assert model.calls == 2
 
 
 async def test_intake_answers_with_the_shape_the_harness_reads(tmp_path: pathlib.Path) -> None:

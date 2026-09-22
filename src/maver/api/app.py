@@ -31,6 +31,8 @@ from maver.api.deps import Service
 from maver.api.health import router as health_router
 from maver.api.hitl import router as hitl_router
 from maver.api.incidents import router as incidents_router
+from maver.api.queue import QueueConsumer
+from maver.api.recover import recover_active
 from maver.audit.durable_sink import DurableAuditSink
 from maver.audit.journal import EventSink
 from maver.audit.store_sink import StoreSink
@@ -240,10 +242,8 @@ async def _drain(service: Service, timeout_s: float) -> None:
     if not remaining:
         return
 
-    # Cancelled rather than abandoned. A task the process walks away from leaves its
-    # session saying `running` for good: nothing resumes an incident, only an approval,
-    # so the record would say a run is in progress on a process that no longer exists.
-    # Cancelling gives each one's handler the chance to write that it is over.
+    # Cancellation lets each handler settle its record. With opt-in recovery the stage
+    # checkpoint remains running for the next process; otherwise cancellation is final.
     _log.warning("cancelling %d incident(s) that did not drain: %s", len(remaining), remaining)
     carrying = service.runs.tasks()
     for task in carrying:
@@ -290,12 +290,20 @@ def create_app(
         # Code that runs only when someone is watching is code the measured runs never
         # exercised.
         configure_tracing(active.settings)
+        queue = QueueConsumer(app.state.service) if active.settings.intake.kafka.enabled else None
         try:
+            if active.settings.server.resume_interrupted_incidents:
+                await recover_active(app.state.service)
+            if queue is not None:
+                await queue.start()
+                app.state.service.queue.consumer = queue
             yield
         finally:
             # Stop accepting, then wait. The order is the whole property: a drain that
             # runs while the door is open waits for incidents it also keeps admitting.
             app.state.service.runs.begin_draining()
+            if queue is not None:
+                await queue.stop()
             await _drain(app.state.service, active.settings.server.drain_timeout_s)
             shutdown_scheduler()
             unbind_deployment()

@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from maver.adapters.base import AdapterTool, EnvironmentAdapter
 from maver.agents import AgentDefinition
@@ -58,6 +58,7 @@ from maver.orchestration.hooks import fire_hooks
 from maver.orchestration.modes import MODES, ModeContext, resolve_mode
 from maver.orchestration.nodes import ContextBuilder, IncidentDeps, NodeFn, make_node
 from maver.orchestration.outcomes import OutcomeRecord, persist_outcome, resolve_outcome
+from maver.orchestration.recovery import recovery_tool_drop, safe_stage
 from maver.orchestration.resume import (
     ApprovalCheckpoint,
     denial_result,
@@ -423,7 +424,36 @@ def _nodes(
         nodes["rca"] = _second_pass_node(
             deployment, deps, resources, policy, nodes["rca"], pipeline
         )
+    if deployment.settings.server.resume_interrupted_incidents and pipeline is not None:
+        for stage, node in tuple(nodes.items()):
+            nodes[stage] = _checkpointed_node(stage, node, deployment)
     return nodes
+
+
+_STATE_ADAPTER = TypeAdapter(IncidentState)
+
+
+def _checkpointed_node(stage: str, node: NodeFn, deployment: Deployment) -> NodeFn:
+    """Persist pre-stage state; startup recovery refuses execution-stage replay."""
+
+    async def checkpointed(state: IncidentState) -> StateDelta:
+        checkpoint = {
+            "kind": "active_stage",
+            "version": 1,
+            "stage": stage,
+            "adapter": deployment.adapter.name if deployment.adapter is not None else "",
+            "state": _STATE_ADAPTER.dump_python(state, mode="json"),
+        }
+        await asyncio.to_thread(
+            deployment.storage.sessions.set_run_status,
+            state["session_id"],
+            RunStatus.RUNNING,
+            current_stage=stage,
+            checkpoint=checkpoint,
+        )
+        return await node(state)
+
+    return checkpointed
 
 
 def _second_pass_node(
@@ -691,7 +721,10 @@ def _context_builder(
                 spec.name,
                 tools,
                 extras=deployment.tool_extras,
-                drop=overlay.drop_tools if overlay is not None else frozenset(),
+                drop=(overlay.drop_tools if overlay is not None else frozenset())
+                | recovery_tool_drop(
+                    spec.name, deployment.settings.server.resume_interrupted_incidents
+                ),
                 description_overrides=overlay.tool_descriptions if overlay is not None else None,
                 names=definition.tool_names if definition is not None else None,
             ),
@@ -727,6 +760,7 @@ async def run_incident(
     withheld_record_ids: Sequence[str] = (),
     selection: SelectedPipeline | None = None,
     metadata: dict[str, Any] | None = None,
+    recovery: dict[str, Any] | None = None,
 ) -> IncidentState:
     """Run one incident to a terminal state and record what happened.
 
@@ -744,6 +778,7 @@ async def run_incident(
         target_stage: How far to run.
         selection: A selection already resolved at admission, or None to select here.
         metadata: Private JSON metadata available to middleware, never injected implicitly.
+        recovery: A pre-stage snapshot; only read-only stages are replayed.
         withheld_record_ids: Corpus records this incident may not retrieve, unioned with
             the process-wide floor in settings rather than replacing it. An environment
             adapter supplies one per episode; a plain deployment supplies none.
@@ -793,11 +828,21 @@ async def run_incident(
                     withheld_record_ids=withheld_record_ids,
                 )
             )
-            state["runtime"] = RunState(
-                selection=selection.manifest(),
-                metadata=metadata or {},
-                deployment_digest=deployment.runtime_digest,
-            )
+            if recovery is None:
+                state["runtime"] = RunState(
+                    selection=selection.manifest(),
+                    metadata=metadata or {},
+                    deployment_digest=deployment.runtime_digest,
+                )
+            else:
+                # Recheck at the runner boundary: callers cannot bypass the startup
+                # filter and replay a stage that may already have written to a cluster.
+                record = deployment.storage.sessions.get_session(session_id)
+                if record is None or safe_stage(record, deployment) != recovery.get("stage"):
+                    raise ValueError("interrupted stage is unsafe to replay")
+                state.update(_STATE_ADAPTER.validate_python(recovery["state"]))
+                state["session_id"] = session_id
+                state["alert"] = alert
             # Written before any role runs, and first. A campaign is reconstructible only if
             # the configuration it ran under is in the record beside its result — including
             # which schemas produced it, which is otherwise inferred from the date.
@@ -857,6 +902,7 @@ async def run_incident(
                     finalize_run_status=finalize_run_status,
                     incident_span=incident_span,
                     pipeline=pipeline,
+                    start=recovery["stage"] if recovery is not None else None,
                 )
 
 
@@ -934,12 +980,17 @@ async def _run_mode(
     finalize_run_status: bool,
     incident_span: Any,
     pipeline: ResolvedPipeline | None = None,
+    start: str | None = None,
 ) -> IncidentState:
     """Run the chosen mode and record what it came to."""
     nodes = _nodes(deployment, deps, resources, pipeline)
     try:
         final_state = (
-            await _engine(deployment, deps, nodes, pipeline).run(state)
+            await (
+                SequentialEngine(nodes, deps.policy, pipeline=pipeline).run(state, start=start)
+                if start is not None
+                else _engine(deployment, deps, nodes, pipeline).run(state)
+            )
             if pipeline is not None
             else await MODES[mode](
                 state,

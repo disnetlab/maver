@@ -85,6 +85,11 @@ async def create_incident(body: IncidentRequest, service: ServiceDep) -> dict[st
             status_code=503, detail="HTTP intake disabled (MAVER_INTAKE__HTTP_ENABLED=false)"
         )
 
+    return await accept_incident(body, service)
+
+
+async def accept_incident(body: IncidentRequest, service: Service) -> dict[str, Any]:
+    """Admit an already validated alert from HTTP or a queue."""
     # Validate explicit names before reserving capacity or opening a session. Resolving
     # selectors is deferred until this request owns the alert, so retries cannot run
     # selection middleware repeatedly for one incident.
@@ -299,6 +304,7 @@ async def run_incident_task(
     service: Service,
     selection: SelectedPipeline | None = None,
     metadata: dict[str, Any] | None = None,
+    recovery: dict[str, Any] | None = None,
 ) -> None:
     """Run one incident, and leave the session readable whatever happens to it.
 
@@ -309,6 +315,7 @@ async def run_incident_task(
         service: The process's resources.
         selection: The pinned admission choice; the runtime must not select it again.
         metadata: Private context, separate from all prompt input.
+        recovery: A validated pre-stage checkpoint from a previous process.
     """
     try:
         await run_incident(
@@ -318,19 +325,21 @@ async def run_incident_task(
             target_stage=target_stage,
             selection=selection,
             metadata=metadata,
+            recovery=recovery,
         )
     except ApprovalPending as pending:
         # Not a failure. The incident is parked on a person, with everything needed to
         # continue it already written down.
         _log.info("session %s is awaiting approval request %s", session_id, pending.request_id)
     except asyncio.CancelledError:
-        # Re-raised rather than absorbed: cooperative cancellation is what a drain and
-        # an operator's stop both depend on. Recorded first, though — a session left
-        # saying `running` after the process carrying it is gone is a session nothing
-        # will ever finish and nothing reports as over, and `cancelled` was a terminal
-        # status both backends already recognised and nothing ever wrote.
+        # A drain with opt-in recovery leaves the durable stage checkpoint active for
+        # the next process. An operator cancellation still closes the run immediately.
         _log.info("session %s was cancelled", session_id)
-        record_cancellation(service.deployment, session_id)
+        if not (
+            service.runs.draining
+            and service.deployment.settings.server.resume_interrupted_incidents
+        ):
+            record_cancellation(service.deployment, session_id)
         raise
     except Exception as exc:
         _log.exception("session %s crashed", session_id)

@@ -276,6 +276,10 @@ class SessionStore(Protocol):
         """
         ...
 
+    def running_sessions(self) -> list[SessionRecord]:
+        """Read sessions left running by a prior process, oldest first."""
+        ...
+
     def get_states(self, session_ids: Sequence[str]) -> dict[str, str]:
         """Read the lifecycle state of many sessions at once.
 

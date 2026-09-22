@@ -72,7 +72,7 @@ async def readyz(service: ServiceDep) -> JSONResponse:
         The same body either way, with 503 when a required check failed. The shape does
         not change with the verdict, so a reader parses one thing.
     """
-    checks = [_startup(service), _draining(service), _store(service)]
+    checks = [_startup(service), _draining(service), _store(service), _queue(service)]
     ready = all(check.ok for check in checks if check.required)
     body: dict[str, Any] = {
         "status": "ready" if ready else "not ready",
@@ -120,3 +120,19 @@ def _store(service: Service) -> Check:
         # A probe that throws is a failed probe. The endpoint's job is to report.
         return Check(name="store", ok=False, required=True, detail=f"{type(exc).__name__}: {exc}")
     return Check(name="store", ok=True, required=True, detail=f"{count} records")
+
+
+def _queue(service: Service) -> Check:
+    """A configured queue intake must still be consuming."""
+    if not service.deployment.settings.intake.kafka.enabled:
+        return Check(name="queue", ok=True, required=False, detail="disabled")
+    queue = service.queue.consumer
+    ok = queue is not None and queue.task is not None and not queue.task.done()
+    detail = (
+        str(queue.error)
+        if queue is not None and queue.error
+        else "consumer stopped"
+        if not ok
+        else "consuming"
+    )
+    return Check(name="queue", ok=ok, required=True, detail=detail)

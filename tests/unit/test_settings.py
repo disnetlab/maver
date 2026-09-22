@@ -72,16 +72,15 @@ class TestAliases:
 _COMPANIONS: dict[str, dict[str, str]] = {
     "MAVER_MEMORY__ENABLED": {"LEARNING_ENABLED": "false"},
     "MAVER_MEMORY__BACKEND": {"MEMORY_POSTGRES_DSN": "postgresql://u:p@db/maver"},
+    "MAVER_INTAKE__KAFKA__ENABLED": {"KAFKA_BOOTSTRAP_SERVERS": "broker:9092"},
+    "MAVER_INTAKE__HTTP_ENABLED": {
+        "KAFKA_ENABLED": "true",
+        "KAFKA_BOOTSTRAP_SERVERS": "broker:9092",
+    },
 }
 
-# A probe flips a boolean away from its default, which needs the other value to be a
-# configuration the settings will accept. These two have only one, and naming them here
-# is the honest way to say so: until something consumes from the queue, the queue intake
-# cannot be turned on and the HTTP intake cannot be turned off.
-_ONE_VALID_VALUE: dict[str, str] = {
-    "MAVER_INTAKE__KAFKA__ENABLED": "the queue intake is unbuilt, so enabling it is refused",
-    "MAVER_INTAKE__HTTP_ENABLED": "with no queue intake to fall back to, it cannot be off",
-}
+# All boolean probes are now independently valid when their companion intake is enabled.
+_ONE_VALID_VALUE: dict[str, str] = {}
 
 
 # Three shapes the annotation-derived probe cannot synthesise: a tuple of models, a URL,
@@ -736,22 +735,14 @@ def test_an_unattended_benchmark_is_still_allowed_outside_production(
     assert Settings().authority.mode == "auto"
 
 
-def test_a_queue_intake_that_consumes_nothing_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The check that refuses a service with no intake was satisfiable by a flag that
-    builds no consumer.
-
-    Nothing under `src/` reads from the topic, so a deployment with the HTTP intake off
-    and a broker configured validated, started clean, and could never receive an
-    incident — which is, word for word, the outcome that check exists to prevent. A flag
-    that answers a liveness question without supplying the liveness is worse than one
-    that is absent.
-    """
+def test_a_queue_only_service_is_valid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The enabled Kafka consumer can be the only intake."""
     monkeypatch.setenv("MAVER_INTAKE__HTTP_ENABLED", "false")
     monkeypatch.setenv("MAVER_INTAKE__KAFKA__ENABLED", "true")
     monkeypatch.setenv("MAVER_INTAKE__KAFKA__BOOTSTRAP_SERVERS", "broker:9092")
 
-    with pytest.raises(ValidationError, match="queue intake is not implemented"):
-        Settings()
+    settings = Settings()
+    assert settings.intake.kafka.enabled and not settings.intake.http_enabled
 
 
 def test_the_default_deployment_can_still_receive_an_incident() -> None:

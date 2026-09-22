@@ -51,6 +51,7 @@ data:
   # unbounded intake degrades every run in flight instead of queueing.
   MAVER_INTAKE__HTTP_ENABLED: "true"
   MAVER_INTAKE__KAFKA__ENABLED: "false"
+  MAVER_SERVER__RESUME_INTERRUPTED_INCIDENTS: "false"
   MAVER_SERVER__MAX_CONCURRENT_INCIDENTS: "4"
 
   # Telemetry backends. An unset endpoint is a description of the deployment rather than

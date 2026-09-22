@@ -1127,6 +1127,11 @@ class ServerSettings(SettingsGroup):
             "half-modified with nobody recording what was done."
         ),
     )
+    resume_interrupted_incidents: bool = setting(
+        False,
+        "MAVER_SERVER__RESUME_INTERRUPTED_INCIDENTS",
+        description="Recover safe stage checkpoints when this process restarts.",
+    )
     max_concurrent_incidents: int = setting(
         4,
         "MAVER_SERVER__MAX_CONCURRENT_INCIDENTS",

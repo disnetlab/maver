@@ -109,6 +109,31 @@ stops the process rather than being ignored. `uv run maver config show` prints t
 resolved configuration with secrets masked; `configs/arms/` holds the experiment
 configurations, each declaring what it holds constant.
 
+Kafka intake is optional. Install `maver[kafka]` (or build the image with
+`--build-arg EXTRAS=kafka`), then set `MAVER_INTAKE__KAFKA__ENABLED=true` and
+`MAVER_INTAKE__KAFKA__BOOTSTRAP_SERVERS=broker:9092`. The default topic is `alerts`
+and the default consumer group is `maver`; `MAVER_INTAKE__KAFKA__TOPIC` and
+`MAVER_INTAKE__KAFKA__GROUP_ID` override them. Each message is UTF-8 JSON with the
+same body as `POST /api/v1/incidents`, for example
+`{"alert":{"alertname":"HighErrorRate","namespace":"shop"},"target_stage":"full"}`.
+The consumer acknowledges a message after the session is stored. Backpressure retries
+the same offset; a malformed or rejected message stops the consumer unacknowledged and
+causes `/readyz` to return 503 until the message is repaired or skipped by an operator.
+Set `MAVER_INTAKE__HTTP_ENABLED=false` for queue-only intake. Kafka delivery is at
+least once: a crash after admission but before offset commit can create a duplicate
+incident after restart, so producers should avoid publishing repeated action alerts.
+
+`MAVER_SERVER__RESUME_INTERRUPTED_INCIDENTS=true` opts into startup recovery of
+ordinary running incidents. It saves a pre-stage checkpoint and serially resumes
+interrupted RCA, Planning, and Verify stages under the same selected pipeline and
+configuration. An interrupted Execution stage, an adapter-owned episode, or a changed
+configuration is marked failed with a reconciliation note instead of replaying a
+possibly completed cluster write. This recovery assumes one MAVER process over a
+durable SQLite volume or PostgreSQL store; it does not reattach external episodes.
+The enabled mode withholds local `bash_exec` and `code_exec` from replayable stages,
+and a stage with unvetted custom tools is not auto-resumed.
+The flag defaults to false, preserving the measured run behavior.
+
 ## Customising your deployment
 
 Clone and adapt the repository for your environment. Python agent subclasses define
@@ -221,9 +246,10 @@ named so an adopter can judge the risk themselves.
 - **Single tenant.** `memory.corpus_id` partitions the retrieval corpus, but nothing
   authenticates the caller who chose it. It is a research partition, not a security
   boundary; the supported deployment is one MAVER per tenant.
-- **No rate limiting** beyond the intake concurrency bound. A burst of alerts is queued,
-  not throttled. The turn budgets, the generation cap and the repeat breaker bound what
-  one incident can consume, not what a client can ask for.
+- **No rate limiting** beyond the intake concurrency bound. HTTP refuses excess alerts
+  with 429; Kafka leaves them on the broker until capacity returns. The turn budgets,
+  the generation cap and the repeat breaker bound what one incident can consume, not
+  what a client can ask for.
 - **Single process. No scale-out and no leader election.** The execution lock is
   in-process, so `replicas: 1`, the `Recreate` strategy and a ReadWriteOnce volume are
   load-bearing together rather than defaults.
