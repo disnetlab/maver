@@ -30,7 +30,7 @@ def submit_feedback(
         corrected_cause=corrected_cause,
         created_at=datetime.now(UTC).isoformat(),
     )
-    sessions.record_feedback(feedback)
+    feedback = sessions.record_feedback(feedback)
     memory = index.open_record(session_id)
     if memory is not None:
         state = sessions.get_states([session_id])[session_id]

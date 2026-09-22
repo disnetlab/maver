@@ -119,6 +119,28 @@ def test_feedback_refuses_unfinished_runs_and_invalid_transition() -> None:
 def test_corrected_verdict_requires_cause() -> None:
     with pytest.raises(ValidationError, match="corrected_cause"):
         FeedbackRequest(verdict="corrected", decided_by="ops", reason="reviewed", evidence="logs")
+    with pytest.raises(ValidationError, match="must contain text"):
+        FeedbackRequest(verdict="confirmed", decided_by="ops", reason="   ", evidence="logs")
+
+
+def test_feedback_response_matches_sanitised_history() -> None:
+    with closing(SqliteStore(":memory:")) as store:
+        session = store.create_session({})
+        store.set_run_status(session.session_id, RunStatus.COMPLETED)
+        store.set_state(session.session_id, LifecycleState.TENTATIVE_SUCCESS)
+        saved = submit_feedback(
+            store,
+            store.records,
+            session_id=session.session_id,
+            verdict="confirmed",
+            decided_by="op\x00s",
+            reason="re\x00viewed",
+            evidence="met\x00rics normal",
+        )
+        assert saved.decided_by == "ops"
+        assert saved.reason == "reviewed"
+        assert saved.evidence == "metrics normal"
+        assert store.feedback_for(session.session_id) == [saved]
 
 
 def test_existing_v4_store_gains_feedback_history(tmp_path: Path) -> None:

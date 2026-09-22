@@ -1009,6 +1009,13 @@ class PostgresStore:
 
     def record_feedback(self, feedback: OutcomeFeedback) -> OutcomeFeedback:
         """Write the operator verdict and its state change in one transaction."""
+        stored = replace(
+            feedback,
+            decided_by=scrub_text(feedback.decided_by),
+            reason=scrub_text(feedback.reason),
+            evidence=scrub_text(feedback.evidence),
+            corrected_cause=scrub_text(feedback.corrected_cause),
+        )
         target = (
             LifecycleState.HUMAN_VERIFIED
             if feedback.verdict == "confirmed"
@@ -1032,10 +1039,10 @@ class PostgresStore:
                     feedback.feedback_id,
                     feedback.session_id,
                     feedback.verdict,
-                    scrub_text(feedback.decided_by),
-                    scrub_text(feedback.reason),
-                    scrub_text(feedback.evidence),
-                    scrub_text(feedback.corrected_cause),
+                    stored.decided_by,
+                    stored.reason,
+                    stored.evidence,
+                    stored.corrected_cause,
                     feedback.created_at,
                 ),
             )
@@ -1043,7 +1050,7 @@ class PostgresStore:
                 "UPDATE sessions SET state = %s WHERE corpus_id = %s AND session_id = %s",
                 (target.value, self.corpus_id, feedback.session_id),
             )
-        return feedback
+        return stored
 
     def feedback_for(self, session_id: str) -> list[OutcomeFeedback]:
         """Read the full operator verdict history."""

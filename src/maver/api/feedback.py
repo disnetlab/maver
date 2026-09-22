@@ -26,9 +26,12 @@ class FeedbackRequest(BaseModel):
     @model_validator(mode="after")
     def require_correction(self) -> "FeedbackRequest":
         """A corrected verdict must supply the corrected cause."""
-        if not all(value.strip() for value in (self.decided_by, self.reason, self.evidence)):
+        if not all(
+            value.replace("\x00", "").strip()
+            for value in (self.decided_by, self.reason, self.evidence)
+        ):
             raise ValueError("decided_by, reason, and evidence must contain text")
-        if self.verdict == "corrected" and not self.corrected_cause.strip():
+        if self.verdict == "corrected" and not self.corrected_cause.replace("\x00", "").strip():
             raise ValueError("corrected_cause is required for a corrected verdict")
         if self.verdict != "corrected" and self.corrected_cause:
             raise ValueError("corrected_cause is only accepted with a corrected verdict")
