@@ -178,12 +178,9 @@ CREATE TABLE IF NOT EXISTS outcome_feedback (
     evidence TEXT NOT NULL,
     corrected_cause TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (corpus_id, feedback_id)
+    PRIMARY KEY (corpus_id, feedback_id),
+    UNIQUE (corpus_id, session_id, sequence)
 );
-CREATE INDEX IF NOT EXISTS idx_outcome_feedback_session
-    ON outcome_feedback(corpus_id, session_id, sequence);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_outcome_feedback_order
-    ON outcome_feedback(corpus_id, session_id, sequence);
 
 CREATE TABLE IF NOT EXISTS approvals (
     corpus_id    TEXT NOT NULL,
@@ -656,6 +653,7 @@ class _PostgresSchema(StoreSchema):
             4: self._add_intake_receipts,
             5: self._add_intake_quarantine,
             6: self._add_outcome_feedback,
+            7: self._order_outcome_feedback,
         }
 
     def _add_intake_quarantine(self) -> None:
@@ -683,25 +681,45 @@ class _PostgresSchema(StoreSchema):
             _stamp(conn, 5)
 
     def _add_outcome_feedback(self) -> None:
-        """Add durable later verdicts in the configured schema."""
+        """Add durable later verdicts in their original version-five shape."""
         with self._db.write() as conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS outcome_feedback ("
                 "corpus_id TEXT NOT NULL, feedback_id TEXT NOT NULL, "
-                "session_id TEXT NOT NULL, sequence BIGINT NOT NULL, verdict TEXT NOT NULL, "
+                "session_id TEXT NOT NULL, verdict TEXT NOT NULL, "
                 "decided_by TEXT NOT NULL, reason TEXT NOT NULL, "
                 "evidence TEXT NOT NULL, corrected_cause TEXT NOT NULL, "
                 "created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (corpus_id, feedback_id))"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_outcome_feedback_session "
-                "ON outcome_feedback(corpus_id, session_id, sequence)"
-            )
-            conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_outcome_feedback_order "
-                "ON outcome_feedback(corpus_id, session_id, sequence)"
+                "ON outcome_feedback(corpus_id, session_id, created_at)"
             )
             _stamp(conn, 7)
+
+    def _order_outcome_feedback(self) -> None:
+        """Backfill commit order as well as historical timestamps permit."""
+        with self._db.write() as conn:
+            table = conn.execute("SELECT to_regclass('outcome_feedback') AS relation").fetchone()
+            if table is not None and table["relation"] is not None:
+                conn.execute(
+                    "ALTER TABLE outcome_feedback ADD COLUMN IF NOT EXISTS sequence BIGINT"
+                )
+                conn.execute(
+                    "WITH ranked AS (SELECT corpus_id, feedback_id, "
+                    "ROW_NUMBER() OVER (PARTITION BY corpus_id, session_id "
+                    "ORDER BY created_at, feedback_id) AS ordinal FROM outcome_feedback) "
+                    "UPDATE outcome_feedback f SET sequence = ranked.ordinal "
+                    "FROM ranked WHERE f.corpus_id = ranked.corpus_id "
+                    "AND f.feedback_id = ranked.feedback_id AND f.sequence IS NULL"
+                )
+                conn.execute("ALTER TABLE outcome_feedback ALTER COLUMN sequence SET NOT NULL")
+                conn.execute("DROP INDEX IF EXISTS idx_outcome_feedback_session")
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_outcome_feedback_order "
+                    "ON outcome_feedback(corpus_id, session_id, sequence)"
+                )
+            _stamp(conn, 8)
 
     def _add_runtime(self) -> None:
         """Add private run state to existing sessions, without requiring that half."""

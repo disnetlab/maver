@@ -125,12 +125,9 @@ CREATE TABLE IF NOT EXISTS outcome_feedback (
     reason TEXT NOT NULL,
     evidence TEXT NOT NULL,
     corrected_cause TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    UNIQUE (session_id, sequence)
 );
-CREATE INDEX IF NOT EXISTS idx_outcome_feedback_session
-    ON outcome_feedback(session_id, sequence);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_outcome_feedback_order
-    ON outcome_feedback(session_id, sequence);
 
 CREATE TABLE IF NOT EXISTS approvals (
     request_id    TEXT PRIMARY KEY,
@@ -381,6 +378,7 @@ class _SqliteSchema(StoreSchema):
             4: self._add_intake_receipts,
             5: self._add_intake_quarantine,
             6: self._add_outcome_feedback,
+            7: self._order_outcome_feedback,
         }
 
     def _add_intake_quarantine(self) -> None:
@@ -405,24 +403,54 @@ class _SqliteSchema(StoreSchema):
             _stamp(conn, 5)
 
     def _add_outcome_feedback(self) -> None:
-        """Add durable later verdicts without rewriting session artifacts."""
+        """Add durable later verdicts in their original version-five shape."""
         with self._db.write() as conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS outcome_feedback ("
                 "feedback_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, "
-                "sequence INTEGER NOT NULL, "
                 "verdict TEXT NOT NULL, decided_by TEXT NOT NULL, reason TEXT NOT NULL, "
                 "evidence TEXT NOT NULL, corrected_cause TEXT NOT NULL, created_at TEXT NOT NULL)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_outcome_feedback_session "
-                "ON outcome_feedback(session_id, sequence)"
-            )
-            conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_outcome_feedback_order "
-                "ON outcome_feedback(session_id, sequence)"
+                "ON outcome_feedback(session_id, created_at)"
             )
             _stamp(conn, 7)
+
+    def _order_outcome_feedback(self) -> None:
+        """Assign existing reviews a deterministic order and enforce future uniqueness."""
+        with self._db.write() as conn:
+            table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'outcome_feedback'"
+            ).fetchone()
+            if table is not None:
+                columns = {
+                    row["name"] for row in conn.execute("PRAGMA table_info(outcome_feedback)")
+                }
+                if "sequence" not in columns:
+                    conn.execute(
+                        "CREATE TABLE outcome_feedback_new ("
+                        "feedback_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, "
+                        "sequence INTEGER NOT NULL, verdict TEXT NOT NULL, "
+                        "decided_by TEXT NOT NULL, reason TEXT NOT NULL, evidence TEXT NOT NULL, "
+                        "corrected_cause TEXT NOT NULL, created_at TEXT NOT NULL)"
+                    )
+                    conn.execute(
+                        "INSERT INTO outcome_feedback_new "
+                        "(feedback_id, session_id, sequence, verdict, decided_by, reason, "
+                        "evidence, corrected_cause, created_at) "
+                        "SELECT feedback_id, session_id, "
+                        "ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY created_at, feedback_id), "
+                        "verdict, decided_by, reason, evidence, corrected_cause, created_at "
+                        "FROM outcome_feedback"
+                    )
+                    conn.execute("DROP TABLE outcome_feedback")
+                    conn.execute("ALTER TABLE outcome_feedback_new RENAME TO outcome_feedback")
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_outcome_feedback_order "
+                    "ON outcome_feedback(session_id, sequence)"
+                )
+            _stamp(conn, 8)
 
     def _add_runtime(self) -> None:
         """Add private run state when the operational half of the store exists."""

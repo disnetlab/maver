@@ -195,3 +195,45 @@ def test_review_order_follows_commit_sequence_even_when_timestamps_reverse() -> 
         assert store.feedback_for(session.session_id) == [first, second]
         assert store.get_session(session.session_id).state == LifecycleState.HUMAN_VERIFIED.value
         assert latest_feedback_packet(store, session.session_id)["operator"] == "a"
+
+
+def test_v7_feedback_history_is_numbered_on_upgrade(tmp_path: Path) -> None:
+    path = tmp_path / "old-feedback.db"
+    with closing(SqliteStore(path)) as store:
+        session = store.create_session({})
+        store.set_run_status(session.session_id, RunStatus.COMPLETED)
+        store.set_state(session.session_id, LifecycleState.INVALIDATED)
+    with closing(sqlite3.connect(path)) as conn:
+        conn.execute("DROP TABLE outcome_feedback")
+        conn.execute(
+            "CREATE TABLE outcome_feedback (feedback_id TEXT PRIMARY KEY, "
+            "session_id TEXT NOT NULL, verdict TEXT NOT NULL, decided_by TEXT NOT NULL, "
+            "reason TEXT NOT NULL, evidence TEXT NOT NULL, corrected_cause TEXT NOT NULL, "
+            "created_at TEXT NOT NULL)"
+        )
+        for feedback_id, when in (
+            ("earlier", "2026-09-22T12:00:00+00:00"),
+            ("later", "2026-09-22T12:00:01+00:00"),
+        ):
+            conn.execute(
+                "INSERT INTO outcome_feedback VALUES (?, ?, 'rejected', 'ops', 'reason', "
+                "'evidence', '', ?)",
+                (feedback_id, session.session_id, when),
+            )
+        conn.execute("UPDATE schema_version SET version = 7")
+        conn.commit()
+    with closing(SqliteStore(path)) as reopened:
+        history = reopened.feedback_for(session.session_id)
+        assert [(item.feedback_id, item.sequence) for item in history] == [
+            ("earlier", 1),
+            ("later", 2),
+        ]
+        latest = submit_feedback(
+            reopened,
+            session_id=session.session_id,
+            verdict="confirmed",
+            decided_by="ops",
+            reason="reviewed",
+            evidence="recovered",
+        )
+        assert latest.sequence == 3

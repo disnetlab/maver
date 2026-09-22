@@ -38,7 +38,6 @@ def test_stamped_v4_store_migrates_to_combined_layout(tmp_path: Path) -> None:
         assert store.get_quarantine(poison.record_id) == poison
         feedback = submit_feedback(
             store,
-            store.records,
             session_id=old.session_id,
             verdict="confirmed",
             decided_by="on-call",
