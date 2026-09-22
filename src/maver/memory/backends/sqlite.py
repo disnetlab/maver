@@ -799,7 +799,9 @@ class SqliteStore:
             ).fetchone()["next_sequence"]
             stored = replace(stored, sequence=int(sequence))
             conn.execute(
-                "INSERT INTO outcome_feedback VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO outcome_feedback "
+                "(feedback_id, session_id, sequence, verdict, decided_by, reason, "
+                "evidence, corrected_cause, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     feedback.feedback_id,
                     feedback.session_id,

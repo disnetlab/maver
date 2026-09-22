@@ -1065,7 +1065,10 @@ class PostgresStore:
             assert next_row is not None
             stored = replace(stored, sequence=int(next_row["next_sequence"]))
             conn.execute(
-                "INSERT INTO outcome_feedback VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "INSERT INTO outcome_feedback "
+                "(corpus_id, feedback_id, session_id, sequence, verdict, decided_by, "
+                "reason, evidence, corrected_cause, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     self.corpus_id,
                     feedback.feedback_id,

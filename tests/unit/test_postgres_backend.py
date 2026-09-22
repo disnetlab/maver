@@ -35,11 +35,12 @@ from memory_contract import (
     an_event,
 )
 
-from maver.contracts.lifecycle import LifecycleState
+from maver.contracts.lifecycle import LifecycleState, RunStatus
 from maver.memory.backends.schema import STORE_SCHEMA_VERSION
 from maver.memory.backends.sqlite import SqliteStore
 from maver.memory.lexemes import lexemes
 from maver.memory.ports import TextSearch
+from maver.orchestration.outcome_feedback import submit_feedback
 
 DSN = os.environ.get("POSTGRES_TEST_DSN", "")
 
@@ -102,6 +103,51 @@ class TestPostgresBackend(MemoryStoreContract):
                 conn.execute("UPDATE schema_version SET version = %s", (version,))
 
         return stamp
+
+
+def test_old_feedback_table_accepts_new_reviews_after_sequence_migration(schema: str) -> None:
+    """ALTER appends the sequence column, so inserts must name their columns."""
+    with closing(PostgresStore(DSN, schema=schema)) as store:
+        session = store.create_session({})
+        store.set_run_status(session.session_id, RunStatus.COMPLETED)
+        store.set_state(session.session_id, LifecycleState.INVALIDATED)
+
+    with _raw_connection(schema) as conn:
+        conn.execute("DROP TABLE outcome_feedback")
+        conn.execute(
+            "CREATE TABLE outcome_feedback ("
+            "corpus_id TEXT NOT NULL, feedback_id TEXT NOT NULL, session_id TEXT NOT NULL, "
+            "verdict TEXT NOT NULL, decided_by TEXT NOT NULL, reason TEXT NOT NULL, "
+            "evidence TEXT NOT NULL, corrected_cause TEXT NOT NULL, "
+            "created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (corpus_id, feedback_id))"
+        )
+        for feedback_id, when in (
+            ("earlier", "2026-09-22T12:00:00Z"),
+            ("later", "2026-09-22T12:00:01Z"),
+        ):
+            conn.execute(
+                "INSERT INTO outcome_feedback VALUES "
+                "('default', %s, %s, 'rejected', 'ops', 'reason', 'evidence', '', %s)",
+                (feedback_id, session.session_id, when),
+            )
+        conn.execute("UPDATE schema_version SET version = 7")
+
+    with closing(PostgresStore(DSN, schema=schema)) as reopened:
+        history = reopened.feedback_for(session.session_id)
+        assert [(item.feedback_id, item.sequence) for item in history] == [
+            ("earlier", 1),
+            ("later", 2),
+        ]
+        submitted = submit_feedback(
+            reopened,
+            session_id=session.session_id,
+            verdict="confirmed",
+            decided_by="ops",
+            reason="reviewed",
+            evidence="recovered",
+        )
+        assert submitted.sequence == 3
+        assert reopened.get_session(session.session_id).state == LifecycleState.HUMAN_VERIFIED.value
 
 
 def test_the_byte_the_store_strips_is_one_this_database_refuses(
