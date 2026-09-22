@@ -531,3 +531,93 @@ def test_the_two_backends_build_the_same_pool_for_the_same_corpus(schema: str, s
     assert not pools["the and of"], "a stopword is not a search term"
     assert not pools["nothingmatchesthisterm"]
     assert sum(len(pool) for pool in pools.values()) > len(_QUERIES)
+
+
+def test_durable_intake_receipts_are_idempotent_and_corpus_scoped(schema: str) -> None:
+    """One delivery maps to one initialized session within its corpus."""
+    with (
+        closing(PostgresStore(DSN, schema=schema, corpus_id="one")) as first,
+        closing(PostgresStore(DSN, schema=schema, corpus_id="one")) as rival,
+        closing(PostgresStore(DSN, schema=schema, corpus_id="two")) as second,
+    ):
+        created, opened = first.open_idempotent_session(
+            "kafka:group:alerts:0",
+            "7",
+            "hash-a",
+            {"alertname": "A"},
+            {"selection": {"name": "multi"}},
+        )
+        assert opened
+        assert created.run_status == "running"
+        again, opened = first.open_idempotent_session(
+            "kafka:group:alerts:0", "7", "hash-a", {"alertname": "A"}, {}
+        )
+        assert not opened and again.session_id == created.session_id
+        assert again.runtime == {"selection": {"name": "multi"}}
+        with pytest.raises(ValueError, match="different request"):
+            first.open_idempotent_session("kafka:group:alerts:0", "7", "hash-b", {}, {})
+        assert (
+            first.bind_intake_receipt(
+                "kafka:group:alerts:0", "8", "hash-a", created.session_id
+            ).session_id
+            == created.session_id
+        )
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            attempts = list(
+                pool.map(
+                    lambda store: store.open_idempotent_session(
+                        "kafka:group:alerts:0", "9", "hash-c", {"alertname": "C"}, {}
+                    ),
+                    (first, rival),
+                )
+            )
+        assert sorted(admitted for _, admitted in attempts) == [False, True]
+        assert attempts[0][0].session_id == attempts[1][0].session_id
+        other, opened = second.open_idempotent_session(
+            "kafka:group:alerts:0", "7", "hash-b", {"alertname": "B"}, {}
+        )
+        assert opened and other.session_id != created.session_id
+        assert second.get_intake_receipt("kafka:group:alerts:0", "8", "hash-a") is None
+    with closing(PostgresStore(DSN, schema=schema, corpus_id="one")) as reopened:
+        restored = reopened.get_intake_receipt("kafka:group:alerts:0", "7", "hash-a")
+        assert restored is not None and restored.session_id == created.session_id
+
+
+def test_quarantine_is_durable_idempotent_and_corpus_scoped(schema: str) -> None:
+    """A poison delivery remains inspectable after a store restart."""
+    with closing(PostgresStore(DSN, schema=schema, corpus_id="one")) as store:
+        saved = store.quarantine("kafka:group:alerts:0", "7", "bm90IEpTT04=", "invalid JSON")
+        duplicate = store.quarantine("kafka:group:alerts:0", "7", "changed", "later reason")
+        assert duplicate.record_id == saved.record_id
+        assert duplicate.raw_base64 == saved.raw_base64
+        store.mark_quarantine_retried(saved.record_id, "session-1")
+    with (
+        closing(PostgresStore(DSN, schema=schema, corpus_id="one")) as reopened,
+        closing(PostgresStore(DSN, schema=schema, corpus_id="two")) as other,
+    ):
+        restored = reopened.get_quarantine(saved.record_id)
+        assert restored is not None and restored.retry_session_id == "session-1"
+        assert reopened.list_quarantine() == [restored]
+        assert other.get_quarantine(saved.record_id) is None
+        assert other.list_quarantine() == []
+
+
+def test_stamped_v4_sessions_migrate_to_all_new_operational_tables(schema: str) -> None:
+    """The combined layout preserves an old session while adding three new stores."""
+    with closing(PostgresStore(DSN, schema=schema)) as store:
+        old = store.create_session({"alertname": "existing"})
+        store.update_artefacts(old.session_id, root_cause={"summary": "original"})
+    with closing(_raw_connection(schema)) as conn:
+        for table in ("intake_receipts", "intake_quarantine", "outcome_feedback"):
+            conn.execute(sql.SQL("DROP TABLE {}").format(sql.Identifier(table)))
+        conn.execute("UPDATE schema_version SET version = 4")
+    with closing(PostgresStore(DSN, schema=schema)) as store:
+        assert store.schema_version == STORE_SCHEMA_VERSION
+        preserved = store.get_session(old.session_id)
+        assert preserved is not None and preserved.root_cause == {"summary": "original"}
+        receipt, opened = store.open_idempotent_session("http", "retry", "hash", {}, {})
+        assert opened and store.get_intake_receipt("http", "retry", "hash") == receipt
+        quarantined = store.quarantine("kafka:g:t:0", "7", "", "Kafka tombstone")
+        assert store.get_quarantine(quarantined.record_id) == quarantined
+        with store._db.read() as conn:
+            assert conn.execute("SELECT count(*) AS n FROM outcome_feedback").fetchone()["n"] == 0
