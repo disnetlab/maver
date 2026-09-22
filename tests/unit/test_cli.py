@@ -5,6 +5,7 @@ import logging
 import pathlib
 from unittest import mock
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
@@ -36,6 +37,49 @@ def test_version_flag_reports_the_package_version() -> None:
 def test_bare_invocation_shows_help_rather_than_running_something() -> None:
     result = runner.invoke(app, [])
     assert "Usage" in result.output
+
+
+def test_remote_approval_reports_disconnected_server_without_traceback() -> None:
+    """The approval path shares the same connection failure behavior as incident start."""
+
+    def disconnected(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    client = httpx.Client(base_url="http://maver", transport=httpx.MockTransport(disconnected))
+    with mock.patch("maver.cli.httpx.Client", return_value=client):
+        result = runner.invoke(app, ["approvals", "list", "--url", "http://maver"])
+    assert result.exit_code == 1
+    assert "could not reach MAVER: connection refused" in result.output
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize(
+    ("body", "content_type", "expected"),
+    [
+        ({"detail": "decision already made"}, "application/json", "decision already made"),
+        (["unexpected", "shape"], "application/json", "409 Conflict"),
+        ("unexpected", "application/json", "409 Conflict"),
+        ("<html>unavailable</html>", "text/html", "409 Conflict"),
+    ],
+)
+def test_remote_approval_reports_http_refusal_for_any_response_body(
+    body: object, content_type: str, expected: str
+) -> None:
+    """A server or proxy refusal remains a concise command failure."""
+    content = json.dumps(body) if content_type == "application/json" else str(body)
+    client = httpx.Client(
+        base_url="http://maver",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                409, text=content, headers={"content-type": content_type}, request=request
+            )
+        ),
+    )
+    with mock.patch("maver.cli.httpx.Client", return_value=client):
+        result = runner.invoke(app, ["approvals", "deny", "r1", "--url", "http://maver"])
+    assert result.exit_code == 1
+    assert expected in result.output
+    assert "Traceback" not in result.output
 
 
 def test_the_configured_log_level_reaches_the_root_logger(

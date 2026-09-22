@@ -128,11 +128,7 @@ def queue_retry(
         url: The running deployment with access to the same store.
     """
     body = _json_object(corrected) if corrected else None
-    try:
-        receipt = _api(url, "POST", f"/quarantine/{record_id}/retry", json=body)
-    except httpx.HTTPStatusError as exc:
-        typer.echo(_detail(exc.response), err=True)
-        raise typer.Exit(code=1) from exc
+    receipt = _api(url, "POST", f"/quarantine/{record_id}/retry", json=body)
     typer.echo(json.dumps(receipt, indent=2, sort_keys=True))
 
 
@@ -297,14 +293,7 @@ def incidents_start(
         for error in exc.errors():
             typer.echo(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}", err=True)
         raise typer.Exit(code=2) from exc
-    try:
-        receipt = _api(url, "POST", "/incidents", json=body)
-    except httpx.HTTPStatusError as exc:
-        typer.echo(_detail(exc.response), err=True)
-        raise typer.Exit(code=1) from exc
-    except httpx.RequestError as exc:
-        typer.echo(f"could not reach MAVER: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
+    receipt = _api(url, "POST", "/incidents", json=body)
     typer.echo(json.dumps(receipt, indent=2, sort_keys=True))
 
 
@@ -365,24 +354,17 @@ def incidents_reconcile_decide(
     """Record the live observation and decide through the running server."""
     if action not in {"close", "replan"}:
         raise typer.BadParameter("action must be close or replan")
-    try:
-        result = _api(
-            url,
-            "POST",
-            f"/incidents/{session_id}/reconciliation",
-            json={
-                "action": action,
-                "observed_state": observed_state,
-                "reason": reason,
-                "decided_by": decided_by,
-            },
-        )
-    except httpx.HTTPStatusError as exc:
-        typer.echo(_detail(exc.response), err=True)
-        raise typer.Exit(code=1) from exc
-    except httpx.RequestError as exc:
-        typer.echo(f"could not reach MAVER: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
+    result = _api(
+        url,
+        "POST",
+        f"/incidents/{session_id}/reconciliation",
+        json={
+            "action": action,
+            "observed_state": observed_state,
+            "reason": reason,
+            "decided_by": decided_by,
+        },
+    )
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
 
 
@@ -414,14 +396,7 @@ def incidents_feedback(
     except ValidationError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2) from exc
-    try:
-        receipt = _api(url, "POST", f"/incidents/{session_id}/feedback", json=body)
-    except httpx.HTTPStatusError as exc:
-        typer.echo(_detail(exc.response), err=True)
-        raise typer.Exit(code=1) from exc
-    except httpx.RequestError as exc:
-        typer.echo(f"could not reach MAVER: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
+    receipt = _api(url, "POST", f"/incidents/{session_id}/feedback", json=body)
     typer.echo(json.dumps(receipt, indent=2, sort_keys=True))
 
 
@@ -723,21 +698,26 @@ def _approvals() -> Iterator[ApprovalStore]:
 
 def _api(url: str, method: str, path: str, **kwargs: Any) -> Any:
     """Call one API route, turning a refusal into an exit code rather than a traceback."""
-    with httpx.Client(base_url=url.rstrip("/"), timeout=30.0) as client:
-        response = client.request(method, f"/api/v1{path}", **kwargs)
-    if response.status_code == 404:
-        typer.echo(_detail(response), err=True)
-        raise typer.Exit(code=1)
-    response.raise_for_status()
+    try:
+        with httpx.Client(base_url=url.rstrip("/"), timeout=30.0) as client:
+            response = client.request(method, f"/api/v1{path}", **kwargs)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        typer.echo(_detail(exc.response), err=True)
+        raise typer.Exit(code=1) from exc
+    except httpx.RequestError as exc:
+        typer.echo(f"could not reach MAVER: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     return response.json()
 
 
 def _detail(response: httpx.Response) -> str:
     """Read the reason a route refused, falling back to its status line."""
     try:
-        detail = response.json().get("detail")
+        body = response.json()
     except ValueError:
-        detail = None
+        body = None
+    detail = body.get("detail") if isinstance(body, dict) else None
     return str(detail or f"{response.status_code} {response.reason_phrase}")
 
 
