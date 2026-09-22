@@ -23,7 +23,10 @@ from typing import Any
 
 import pytest
 
+from maver.api.deps import Service
+from maver.api.recover import recover_active
 from maver.audit.journal import ListSink
+from maver.contracts.lifecycle import RunStatus
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from maver.memory.factory import build_storage
 from maver.middleware.authority import ApprovalPending
@@ -185,5 +188,68 @@ async def test_an_incident_parks_and_resumes_on_postgres(tmp_path: pathlib.Path)
         runs = storage.runs.runs_for(session.session_id)
         assert [r.agent_name for r in runs] == ["rca", "planning", "execution", "execution"]
         assert [r.status for r in runs][-2:] == ["awaiting_human", "succeeded"]
+    finally:
+        storage.close()
+
+
+@pytest.mark.skipif(not DSN, reason="set POSTGRES_TEST_DSN to run this")
+async def test_interrupted_approval_is_reconciled_on_postgres_startup(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A stored decided write survives restart as evidence, never as a replay job."""
+    settings = Settings(
+        server=ServerSettings(workdir=tmp_path, resume_interrupted_incidents=True),
+        memory=MemorySettings(
+            backend="postgres",
+            postgres_dsn=DSN,
+            postgres_schema=f"maver_recovery_{uuid.uuid4().hex[:8]}",
+            enabled=False,
+            learning_enabled=False,
+        ),
+        verify=VerifySettings(enabled=False),
+        authority=AuthoritySettings(mode="prompt", timeout_s=1800),
+    )
+    storage = build_storage(settings)
+    COMMANDS.clear()
+    try:
+        deploy = Deployment(
+            settings=settings,
+            storage=storage,
+            completion=FakeModel(),
+            profile=PROFILE,
+            transport_for=lambda session_id: FakeTransport(),
+            sink=ListSink(),
+        )
+        session = storage.sessions.create_session(ALERT)
+        checkpoint = {
+            "schema_version": 1,
+            "session_id": session.session_id,
+            "stage": "execution",
+            "request_id": "approved-before-crash",
+            "target_stage": "full",
+            "state": {"session_id": session.session_id},
+        }
+        storage.sessions.set_run_status(
+            session.session_id,
+            RunStatus.RESUMING,
+            current_stage="execution",
+            checkpoint=checkpoint,
+            awaiting_request_id="approved-before-crash",
+        )
+        assert [row.session_id for row in storage.sessions.resuming_sessions()] == [
+            session.session_id
+        ]
+        service = Service(deployment=deploy, schedule_resume=lambda request_id: None)
+        await recover_active(service)
+        parked = storage.sessions.get_session(session.session_id)
+        assert parked is not None
+        assert parked.run_status == RunStatus.NEEDS_RECONCILIATION
+        assert parked.checkpoint == checkpoint
+        assert parked.awaiting_request_id == "approved-before-crash"
+        assert storage.sessions.resuming_sessions() == []
+        assert service.runs.live() == []
+        assert writes() == []
+        await recover_active(service)
+        assert storage.sessions.get_session(session.session_id) == parked
     finally:
         storage.close()

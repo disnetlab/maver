@@ -179,6 +179,33 @@ class MemoryStoreContract:
 
     # SessionStore ---------------------------------------------------------------
 
+    def test_resuming_sessions_keep_approval_evidence_out_of_active_recovery(
+        self, store: OperationalStore
+    ) -> None:
+        """Both backends expose only interrupted approval continuations here."""
+        session = store.create_session({"alertname": "ApprovedWrite"})
+        checkpoint = {"request_id": "approval-1", "stage": "execution"}
+        store.set_run_status(
+            session.session_id,
+            RunStatus.RESUMING,
+            current_stage="execution",
+            checkpoint=checkpoint,
+            awaiting_request_id="approval-1",
+        )
+        assert store.running_sessions() == []
+        candidates = store.resuming_sessions()
+        assert [record.session_id for record in candidates] == [session.session_id]
+        assert candidates[0].checkpoint == checkpoint
+        assert candidates[0].awaiting_request_id == "approval-1"
+        store.set_run_status(
+            session.session_id,
+            RunStatus.NEEDS_RECONCILIATION,
+            current_stage="execution",
+            checkpoint=checkpoint,
+            awaiting_request_id="approval-1",
+        )
+        assert store.resuming_sessions() == []
+
     def test_replan_admission_closes_once_and_rolls_back_with_its_replacement(
         self, store: OperationalStore
     ) -> None:

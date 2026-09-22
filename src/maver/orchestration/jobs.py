@@ -25,7 +25,7 @@ from maver.contracts.lifecycle import LifecycleState, RunStatus
 from maver.memory.ports import ApprovalRecord
 from maver.orchestration.control import RunRegistry
 from maver.orchestration.inflight import clear_held_episodes, held_episode
-from maver.orchestration.resume import approves_on_timeout, load_checkpoint
+from maver.orchestration.resume import ApprovalCheckpoint, approves_on_timeout, load_checkpoint
 from maver.orchestration.runner import Deployment, resume_after_decision
 from maver.orchestration.scheduler import scheduler_for
 
@@ -175,25 +175,51 @@ async def resume_approval(request_id: str, **_: Any) -> str:
         return loaded
     checkpoint = loaded[0]
 
+    session = deployment.storage.sessions.get_session(checkpoint.session_id)
+    if session is None or session.run_status == RunStatus.NEEDS_RECONCILIATION:
+        # A restored scheduler job can race startup recovery. In particular, an
+        # adapter's abandon path must not close a run already parked for review.
+        return "already_resumed"
+
     held = held_episode(checkpoint.session_id)
+    if (
+        deployment.settings.server.resume_interrupted_incidents
+        and session.run_status == RunStatus.RESUMING
+        and checkpoint.session_id not in _RUNS.live()
+        and held is None
+    ):
+        # A restored scheduler job can fire before startup recovery scans this row.
+        # RESUMING means the previous process may already have dispatched the write.
+        deployment.storage.sessions.set_run_status(
+            checkpoint.session_id,
+            RunStatus.NEEDS_RECONCILIATION,
+            current_stage=session.current_stage,
+            checkpoint=session.checkpoint,
+            awaiting_request_id=request_id,
+        )
+        return "needs_reconciliation"
+
     if held is not None:
         return await held.finish(request_id)
     if checkpoint.adapter:
         return await _abandon(checkpoint.session_id, checkpoint.adapter, request_id, deployment)
-    return await _resume_tracked(checkpoint.session_id, request_id, deployment)
+    return await _resume_tracked(checkpoint.session_id, request_id, deployment, checkpoint)
 
 
-async def _resume_tracked(session_id: str, request_id: str, deployment: Deployment) -> str:
+async def _resume_tracked(
+    session_id: str,
+    request_id: str,
+    deployment: Deployment,
+    approval_checkpoint: ApprovalCheckpoint,
+) -> str:
     """Continue a parked incident as a run this process can see it is carrying.
 
     A continuation is the rest of an incident — minutes to hours of model calls against
     a cluster the approved write has already changed — and it ran as a scheduler job in
     neither the run registry nor the task set. So the drain returned at once and the
-    scheduler's shutdown cancelled the coroutine, and the single incident a human had
-    just approved a write for was the one the drain did not protect. Registering it is
-    what makes the drain wait, and recording the cancellation is what leaves a terminal
-    record when the wait runs out instead of a session saying `resuming` on a process
-    that is gone.
+    scheduler's shutdown cancelled the coroutine. Registering it makes the drain wait;
+    when opt-in recovery is enabled, cancellation after the approved call starts leaves
+    the incident for explicit reconciliation because the write may have happened.
     """
     _RUNS.register(session_id)
     task = asyncio.current_task()
@@ -203,7 +229,24 @@ async def _resume_tracked(session_id: str, request_id: str, deployment: Deployme
         return await resume_after_decision(request_id, deployment)
     except asyncio.CancelledError:
         _log.info("the continuation of session %s was cancelled", session_id)
-        record_cancellation(deployment, session_id)
+        session = deployment.storage.sessions.get_session(session_id)
+        if (
+            deployment.settings.server.resume_interrupted_incidents
+            and _RUNS.draining
+            and session is not None
+            and session.run_status in (RunStatus.RESUMING, RunStatus.RUNNING)
+        ):
+            # The approved call may have crossed the transport boundary already.
+            # Keep its original checkpoint for an operator to inspect or replan from.
+            deployment.storage.sessions.set_run_status(
+                session_id,
+                RunStatus.NEEDS_RECONCILIATION,
+                current_stage=session.current_stage,
+                checkpoint=session.checkpoint or approval_checkpoint.model_dump(mode="json"),
+                awaiting_request_id=request_id,
+            )
+        else:
+            record_cancellation(deployment, session_id)
         raise
     finally:
         _RUNS.unregister(session_id)

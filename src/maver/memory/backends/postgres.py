@@ -1150,6 +1150,16 @@ class PostgresStore:
             ).fetchall()
         return [_to_session(row) for row in rows]
 
+    def resuming_sessions(self) -> list[SessionRecord]:
+        """Return approval continuations whose write outcome may be uncertain."""
+        with self._db.read() as conn:
+            rows = conn.execute(
+                "SELECT * FROM sessions WHERE corpus_id = %s AND run_status = %s "
+                "ORDER BY started_at",
+                (self.corpus_id, RunStatus.RESUMING.value),
+            ).fetchall()
+        return [_to_session(row) for row in rows]
+
     def reconciliation_sessions(self) -> list[SessionRecord]:
         """Return unresolved interrupted writes for intake deduplication."""
         with self._db.read() as conn:

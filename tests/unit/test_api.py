@@ -28,9 +28,10 @@ from maver.audit.journal import ListSink
 from maver.contracts.lifecycle import RunStatus
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from maver.memory.factory import build_storage
+from maver.middleware.authority import ApprovalPending
 from maver.middleware.human_approval import authorities
 from maver.orchestration import scheduler
-from maver.orchestration.jobs import resume_approval
+from maver.orchestration.jobs import bind_deployment, resume_approval, unbind_deployment
 from maver.orchestration.runner import Deployment, resume_after_decision, run_incident
 from maver.roles import registry as role_registry
 from maver.roles.registry import registered_roles
@@ -245,6 +246,126 @@ async def test_opt_in_restart_resumes_an_interrupted_diagnosis(tmp_path: pathlib
     finished = deploy.storage.sessions.get_session(session.session_id)
     assert finished is not None and finished.run_status == RunStatus.COMPLETED
     assert model.calls == 2
+
+
+async def test_opt_in_restart_parks_interrupted_approval_without_replaying(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A decided write may already have crossed the transport before process loss."""
+    deploy = deployment(tmp_path)
+    deploy = dataclasses.replace(
+        deploy,
+        settings=deploy.settings.model_copy(
+            update={
+                "server": deploy.settings.server.model_copy(
+                    update={"resume_interrupted_incidents": True}
+                )
+            }
+        ),
+    )
+    session = deploy.storage.sessions.create_session(ALERT)
+    saved = {
+        "schema_version": 1,
+        "session_id": session.session_id,
+        "stage": "execution",
+        "request_id": "decision-1",
+        "target_stage": "full",
+        "state": {"session_id": session.session_id},
+    }
+    deploy.storage.sessions.set_run_status(
+        session.session_id,
+        RunStatus.RESUMING,
+        current_stage="execution",
+        checkpoint=saved,
+        awaiting_request_id="decision-1",
+    )
+    service = Service(deployment=deploy, schedule_resume=lambda request_id: None)
+    await recover_active(service)
+    parked = deploy.storage.sessions.get_session(session.session_id)
+    assert parked is not None
+    assert parked.run_status == RunStatus.NEEDS_RECONCILIATION
+    assert parked.checkpoint == saved
+    assert parked.awaiting_request_id == "decision-1"
+    assert service.runs.live() == []
+    await recover_active(service)
+    assert deploy.storage.sessions.get_session(session.session_id) == parked
+    deploy.storage.close()
+
+
+async def test_opt_in_restart_parks_a_stage_started_after_approval(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A later read-only stage cannot prove the approved write's outcome."""
+    deploy = deployment(tmp_path)
+    deploy = dataclasses.replace(
+        deploy,
+        settings=deploy.settings.model_copy(
+            update={
+                "server": deploy.settings.server.model_copy(
+                    update={"resume_interrupted_incidents": True}
+                )
+            }
+        ),
+    )
+    session = deploy.storage.sessions.create_session(ALERT)
+    saved = {
+        "kind": "active_stage",
+        "version": 1,
+        "stage": "verify",
+        "approval_origin": {"request_id": "decision-1", "stage": "execution"},
+        "state": {"session_id": session.session_id},
+    }
+    deploy.storage.sessions.set_run_status(
+        session.session_id, RunStatus.RUNNING, current_stage="verify", checkpoint=saved
+    )
+    service = Service(deployment=deploy, schedule_resume=lambda request_id: None)
+    await recover_active(service)
+    parked = deploy.storage.sessions.get_session(session.session_id)
+    assert parked is not None and parked.run_status == RunStatus.NEEDS_RECONCILIATION
+    assert parked.checkpoint == saved
+    assert service.runs.live() == []
+    await recover_active(service)
+    assert deploy.storage.sessions.get_session(session.session_id) == parked
+    deploy.storage.close()
+
+
+async def test_restored_approval_job_cannot_beat_startup_reconciliation(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The scheduler starts before the recovery scan, so its job must fail closed."""
+    model = ParkingModel()
+    deploy = dataclasses.replace(deployment(tmp_path), completion=model)
+    object.__setattr__(deploy.settings.server, "resume_interrupted_incidents", True)
+    session = deploy.storage.sessions.create_session(ALERT)
+    with pytest.raises(ApprovalPending):
+        await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+    paused = deploy.storage.sessions.get_session(session.session_id)
+    assert paused is not None and paused.checkpoint is not None
+    request_id = paused.awaiting_request_id
+    assert request_id is not None
+    assert deploy.storage.approvals.decide(
+        request_id, status="approved", decided_by="operator", reason="approved"
+    )
+    deploy.storage.sessions.set_run_status(
+        session.session_id,
+        RunStatus.RESUMING,
+        current_stage=paused.current_stage,
+        checkpoint=paused.checkpoint,
+        awaiting_request_id=request_id,
+    )
+    calls_before = list(model.callers)
+    bind_deployment(deploy)
+    try:
+        assert await resume_approval(request_id) == "needs_reconciliation"
+        assert await resume_approval(request_id) == "already_resumed"
+    finally:
+        unbind_deployment()
+    parked = deploy.storage.sessions.get_session(session.session_id)
+    assert parked is not None and parked.run_status == RunStatus.NEEDS_RECONCILIATION
+    assert parked.checkpoint == paused.checkpoint
+    assert parked.awaiting_request_id == request_id
+    assert model.callers == calls_before
+    deploy.storage.close()
 
 
 @pytest.mark.parametrize("draining", [False, True])
@@ -1055,6 +1176,7 @@ async def test_an_approval_that_restarts_an_incident_is_one_the_drain_can_see(
     # an event loop that has since closed. This lifespan starts and stops its own.
     monkeypatch.setattr(scheduler, "_SCHEDULER", None)
     deploy = dataclasses.replace(deployment(tmp_path), completion=StallsOnceResumed())
+    object.__setattr__(deploy.settings.server, "resume_interrupted_incidents", True)
     object.__setattr__(deploy.settings.server, "drain_timeout_s", 0.0)
     resumed: list[asyncio.Task[str]] = []
     app = create_app(
@@ -1083,7 +1205,10 @@ async def test_an_approval_that_restarts_an_incident_is_one_the_drain_can_see(
 
     await asyncio.gather(*resumed, return_exceptions=True)
     record = deploy.storage.sessions.get_session(session_id)
-    assert record.run_status == RunStatus.CANCELLED.value, "a continuation is still over"
+    assert record.run_status == RunStatus.NEEDS_RECONCILIATION.value
+    assert record.checkpoint is not None
+    assert record.checkpoint["approval_origin"]["request_id"] == request_id
+    assert record.awaiting_request_id == request_id
     deploy.storage.close()
 
 

@@ -18,6 +18,21 @@ _log = logging.getLogger(__name__)
 async def recover_active(service: Service) -> None:
     """Schedule safe continuations; park ambiguous runs for explicit reconciliation."""
     deployment = service.deployment
+    # A decided approval may already have dispatched its write before the old process
+    # died. The saved approval checkpoint predates that dispatch, so replay is unsafe.
+    for record in await asyncio.to_thread(deployment.storage.sessions.resuming_sessions):
+        _log.error(
+            "incident %s needs reconciliation after an interrupted approval continuation",
+            record.session_id,
+        )
+        await asyncio.to_thread(
+            deployment.storage.sessions.set_run_status,
+            record.session_id,
+            RunStatus.NEEDS_RECONCILIATION,
+            current_stage=record.current_stage,
+            checkpoint=record.checkpoint,
+            awaiting_request_id=record.awaiting_request_id,
+        )
     records = await asyncio.to_thread(deployment.storage.sessions.running_sessions)
     serial = asyncio.Semaphore(1)
     for record in records:

@@ -399,6 +399,7 @@ def _nodes(
     deps: IncidentDeps,
     resources: IncidentResources,
     pipeline: ResolvedPipeline | None = None,
+    approval_origin: ApprovalCheckpoint | None = None,
 ) -> dict[str, NodeFn]:
     """The graph's roles, with the diagnosing one composed if a second pass is configured.
 
@@ -426,14 +427,19 @@ def _nodes(
         )
     if deployment.settings.server.resume_interrupted_incidents and pipeline is not None:
         for stage, node in tuple(nodes.items()):
-            nodes[stage] = _checkpointed_node(stage, node, deployment)
+            nodes[stage] = _checkpointed_node(stage, node, deployment, approval_origin)
     return nodes
 
 
 _STATE_ADAPTER = TypeAdapter(IncidentState)
 
 
-def _checkpointed_node(stage: str, node: NodeFn, deployment: Deployment) -> NodeFn:
+def _checkpointed_node(
+    stage: str,
+    node: NodeFn,
+    deployment: Deployment,
+    approval_origin: ApprovalCheckpoint | None = None,
+) -> NodeFn:
     """Persist pre-stage state; startup recovery refuses execution-stage replay."""
 
     async def checkpointed(state: IncidentState) -> StateDelta:
@@ -444,6 +450,8 @@ def _checkpointed_node(stage: str, node: NodeFn, deployment: Deployment) -> Node
             "adapter": deployment.adapter.name if deployment.adapter is not None else "",
             "state": _STATE_ADAPTER.dump_python(state, mode="json"),
         }
+        if approval_origin is not None:
+            checkpoint["approval_origin"] = approval_origin.model_dump(mode="json")
         await asyncio.to_thread(
             deployment.storage.sessions.set_run_status,
             state["session_id"],
@@ -1244,7 +1252,7 @@ async def resume_after_decision(request_id: str, deployment: Deployment) -> str:
             # The same composition the first pass ran under. Building the roles a second
             # way here would let a continuation re-enter a diagnosis without the second
             # opinion the arm is defined by, and the run would silently be two arms.
-            nodes = _nodes(deployment, deps, resources, pipeline)
+            nodes = _nodes(deployment, deps, resources, pipeline, checkpoint)
             try:
                 # The shape the incident was running, not the graph by assumption. Always on
                 # the sequential executor: the graph executor cannot be entered part-way

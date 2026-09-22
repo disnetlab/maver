@@ -96,7 +96,9 @@ async def _decide_reconciliation(
             )
         if not isinstance(state, dict) or state.get("session_id") != session_id:
             raise HTTPException(status_code=409, detail="saved checkpoint is incomplete")
-        saved_target = state.get("target_stage")
+        # Approval checkpoints store this explicitly as well as in the state. The
+        # latter can be absent for a continuation of an older incident.
+        saved_target = state.get("target_stage", checkpoint.get("target_stage"))
         if saved_target not in {"full", "diagnose"}:
             raise HTTPException(status_code=409, detail="saved target stage cannot be restored")
         target = str(saved_target)

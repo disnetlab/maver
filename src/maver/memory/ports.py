@@ -369,6 +369,10 @@ class SessionStore(Protocol):
         """Read sessions left running by a prior process, oldest first."""
         ...
 
+    def resuming_sessions(self) -> list[SessionRecord]:
+        """Read interrupted approval continuations, oldest first."""
+        ...
+
     def reconciliation_sessions(self) -> list[SessionRecord]:
         """Read sessions awaiting an operator's interrupted-write decision."""
         ...

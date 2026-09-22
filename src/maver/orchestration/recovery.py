@@ -71,6 +71,8 @@ def safe_stage(record: SessionRecord, deployment: Deployment) -> str | None:
     checkpoint = record.checkpoint or {}
     if checkpoint.get("kind") != "active_stage" or checkpoint.get("version") != 1:
         return None
+    if checkpoint.get("approval_origin"):
+        return None
     if checkpoint.get("adapter") or deployment.adapter is not None:
         return None
     state = checkpoint.get("state")
