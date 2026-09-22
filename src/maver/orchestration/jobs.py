@@ -350,8 +350,13 @@ def _sweep(deployment: Deployment) -> str:
     """
     approvals = deployment.storage.approvals
     now = datetime.now(UTC).isoformat()
-    for record in approvals.list_requests(status="pending"):
-        _approved_on_expiry(deployment, record, now)
+    awaiting = deployment.storage.sessions.awaiting_sessions()
+    for session in awaiting:
+        if session.awaiting_request_id is None:
+            continue
+        pending = approvals.get_request(session.awaiting_request_id)
+        if pending is not None and pending.status == "pending":
+            _approved_on_expiry(deployment, pending, now)
     for record in approvals.expire_due(now=now):
         _log.info(
             "approval %s passed its deadline with no decision and no armed timeout",
@@ -359,7 +364,7 @@ def _sweep(deployment: Deployment) -> str:
         )
 
     resumed = 0
-    for session in deployment.storage.sessions.awaiting_sessions():
+    for session in awaiting:
         request_id = session.awaiting_request_id
         if request_id is None:
             continue

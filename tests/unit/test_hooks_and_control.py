@@ -170,6 +170,9 @@ async def test_the_approval_sweep_does_not_reread_the_whole_approval_history(
         approvals.decide(f"old-{i}", status="approved", decided_by="an operator")
         sessions.set_run_status(old.session_id, RunStatus.COMPLETED)
 
+    unrelated = sessions.create_session({"alertname": "NotParked"})
+    approvals.create_request(_request("unrelated", unrelated.session_id, expires_at=later))
+
     decided = sessions.create_session({"alertname": "DecidedElsewhere"})
     approvals.create_request(_request("decided", decided.session_id, expires_at=later))
     sessions.set_run_status(
@@ -208,6 +211,6 @@ async def test_the_approval_sweep_does_not_reread_the_whole_approval_history(
 
     assert sorted(scheduled) == ["decided", "overdue"]
     assert approvals.get_request("overdue").status == "timed_out"
-    assert counting.listed == ["pending"], "the answered requests are never listed again"
+    assert counting.listed == [], "the sweep reads only requests held by parked sessions"
     assert counted_sessions.session_reads == 0, "nor read one at a time behind them"
     storage.close()
