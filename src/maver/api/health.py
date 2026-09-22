@@ -13,6 +13,7 @@ accepted now would certainly fail, and advisory when the failure is expected and
 self-clearing.
 """
 
+import asyncio
 import os
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -72,7 +73,12 @@ async def readyz(service: ServiceDep) -> JSONResponse:
         The same body either way, with 503 when a required check failed. The shape does
         not change with the verdict, so a reader parses one thing.
     """
-    checks = [_startup(service), _draining(service), _store(service), _queue(service)]
+    checks = [
+        _startup(service),
+        _draining(service),
+        await asyncio.to_thread(_store, service),
+        _queue(service),
+    ]
     ready = all(check.ok for check in checks if check.required)
     body: dict[str, Any] = {
         "status": "ready" if ready else "not ready",
