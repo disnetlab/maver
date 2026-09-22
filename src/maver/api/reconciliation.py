@@ -15,7 +15,6 @@ from maver.pipelines import restore_selection
 
 router = APIRouter()
 _log = logging.getLogger(__name__)
-_pending_decisions: set[asyncio.Task[dict[str, Any]]] = set()
 
 
 class ReconciliationDecision(BaseModel):
@@ -125,15 +124,19 @@ async def decide_reconciliation(
         finally:
             service.runs.release(claim)
 
-    # The transaction may commit after an HTTP caller disconnects. Keep a strong task
-    # reference and finish scheduling even when that caller is cancelled.
+    # A cancelled request still waits for the committed admission to be scheduled.
+    # The request itself remains in the server's drain until this finishes.
     decision = asyncio.create_task(commit_and_schedule())
-    _pending_decisions.add(decision)
-
-    def settled(task: asyncio.Task[dict[str, Any]]) -> None:
-        _pending_decisions.discard(task)
-        if not task.cancelled() and (error := task.exception()) is not None:
-            _log.error("replan decision for %s failed: %s", session_id, error)
-
-    decision.add_done_callback(settled)
-    return await asyncio.shield(decision)
+    cancelled = False
+    while not decision.done():
+        try:
+            await asyncio.shield(decision)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            break
+    if cancelled:
+        if not decision.cancelled() and (error := decision.exception()) is not None:
+            _log.error("replan decision failed after request cancellation", exc_info=error)
+        raise asyncio.CancelledError
+    return decision.result()

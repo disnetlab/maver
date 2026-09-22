@@ -520,6 +520,8 @@ async def test_cancelled_replan_request_still_schedules_committed_replacement(
         try:
             assert await asyncio.to_thread(entered.wait, 5)
             request.cancel()
+            await asyncio.sleep(0)
+            assert not request.done(), "the request must wait for the decision to finish"
         finally:
             release.set()
         await asyncio.gather(request, return_exceptions=True)
