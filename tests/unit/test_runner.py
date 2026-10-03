@@ -24,7 +24,7 @@ from maver.orchestration.runner import (
     run_incident,
     tool_context_for,
 )
-from maver.settings.authority import AuthoritySettings
+from maver.settings.authority import AuthorityRule, AuthoritySettings
 from maver.settings.groups import (
     MemorySettings,
     PipelineSettings,
@@ -385,8 +385,26 @@ async def test_a_deployment_that_widens_writes_reaches_the_tool_and_not_only_the
     assert not answer.startswith("error:")
 
 
+@pytest.mark.parametrize(
+    ("authority", "exec_allowed"),
+    [
+        (AuthoritySettings(mode="auto"), False),
+        (AuthoritySettings(mode="auto", kubectl_exec_requires_approval=False), True),
+        (AuthoritySettings(mode="prompt", kubectl_exec_requires_approval=False), False),
+        (
+            AuthoritySettings(
+                mode="auto",
+                kubectl_exec_requires_approval=False,
+                rules=(AuthorityRule(name="no-exec", selectors=("verb:exec",), mode="deny"),),
+            ),
+            False,
+        ),
+    ],
+)
 async def test_the_tool_context_carries_the_gates_mode_and_the_configured_kubectl(
     tmp_path: pathlib.Path,
+    authority: AuthoritySettings,
+    exec_allowed: bool,
 ) -> None:
     """Two values a tool cannot honestly read for itself, sourced where they are settled.
 
@@ -400,7 +418,7 @@ async def test_the_tool_context_carries_the_gates_mode_and_the_configured_kubect
     settings = Settings(
         server=ServerSettings(workdir=tmp_path),
         memory=MemorySettings(enabled=False, learning_enabled=False),
-        authority=AuthoritySettings(mode="auto"),
+        authority=authority,
         transport=TransportSettings(kubectl_binary="/usr/local/bin/kubectl"),
     )
     deploy = Deployment(
@@ -415,7 +433,8 @@ async def test_the_tool_context_carries_the_gates_mode_and_the_configured_kubect
             deploy, resources, "execution", "s1", Journal(session_id="s1", stage="execution")
         )
 
-    assert ctx.authority_mode == "auto"
+    assert ctx.authority_mode == authority.mode
+    assert ctx.kubectl_exec_auto_approved is exec_allowed
     assert ctx.kubectl_binary == "/usr/local/bin/kubectl"
 
 

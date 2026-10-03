@@ -176,6 +176,7 @@ def subprocess_env(ctx: ToolContext) -> dict[str, str]:
         kubectl_binary=ctx.kubectl_binary,
         exec_timeout_s=float(ctx.settings.kubectl_timeout_s),
         authority_mode=ctx.authority_mode,
+        kubectl_exec_auto_approved=ctx.kubectl_exec_auto_approved,
     )
     return applied
 

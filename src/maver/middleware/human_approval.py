@@ -36,6 +36,7 @@ from maver.middleware.authority import (
     DenyAll,
 )
 from maver.settings.authority import AuthoritySettings, Mode
+from maver.tools.policy import ActionClass
 
 __all__ = [
     "ApprovalGrant",
@@ -184,6 +185,10 @@ class HumanApproval:
                 "targets": list(request.targets),
                 "rule": request.rule,
                 "run_id": request.run_id,
+                "requires_human_approval": (
+                    request.action is ActionClass.EXEC
+                    and self._settings.kubectl_exec_requires_approval
+                ),
             },
             tool_call_id=request.tool_call_id,
             tool_name=request.tool,

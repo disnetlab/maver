@@ -252,6 +252,12 @@ def approves_on_timeout(
     """
     if record.status != "pending" or not _has_expired(record.expires_at, now):
         return None
+    # Silence is not human approval. Preserve the requirement recorded at admission
+    # even if settings change while the request waits, and cover older exec records.
+    if record.payload.get("requires_human_approval") or (
+        record.payload.get("action") == "exec" and authority.kubectl_exec_requires_approval
+    ):
+        return None
     name = record.payload.get("rule")
     for rule in authority.rules:
         if rule.name == name and rule.on_timeout == "approve":

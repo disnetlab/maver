@@ -699,6 +699,14 @@ def test_no_shipped_arm_carries_an_authority_stanza() -> None:
         assert "authority" not in yaml.safe_load(path.read_text()).get("settings", {}), path.name
 
 
+def test_exec_approval_opt_out_is_explicit_and_read_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert AuthoritySettings(mode="auto").kubectl_exec_requires_approval is True
+    monkeypatch.setenv("MAVER_AUTHORITY__KUBECTL_EXEC_REQUIRES_APPROVAL", "false")
+    assert Settings().authority.kubectl_exec_requires_approval is False
+
+
 def test_production_may_not_run_every_cluster_write_unattended(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

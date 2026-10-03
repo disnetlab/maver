@@ -66,6 +66,10 @@ AUTHORITY_REFUSAL = (
     "kubectl writes through the shell are not approval-gated; this deployment "
     "requires approval (authority.mode={}), so writes are refused here"
 )
+EXEC_REFUSAL = (
+    "kubectl exec through the shell requires explicit unattended permission; "
+    "use exec_kubectl_cmd_safely so the approval gate can authorize the command"
+)
 """The one refusal the archive did not have.
 
 Every other cluster write in this system passes the approval gate. A command inside a
@@ -146,6 +150,7 @@ def shim_env(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> pathlib
     monkeypatch.setenv("KUBECTL_EXEC_TIMEOUT_SECONDS", "120")
     monkeypatch.setenv("AGENT_STAGE", "execution")
     monkeypatch.setenv("MAVER_AUTHORITY_MODE", "auto")
+    monkeypatch.setenv("MAVER_KUBECTL_EXEC_AUTO_APPROVED", "true")
     return tmp_path
 
 
@@ -174,7 +179,7 @@ def test_every_refusal_is_the_one_the_archive_showed_the_model() -> None:
     shipped = _templates(SHIPPED)
 
     assert ARCHIVED - shipped == set()
-    assert shipped - ARCHIVED == {AUTHORITY_REFUSAL}
+    assert shipped - ARCHIVED == {AUTHORITY_REFUSAL, EXEC_REFUSAL}
 
 
 @pytest.mark.parity
@@ -219,6 +224,46 @@ def test_a_write_from_the_remediating_stage_runs(
     assert main(["delete", "pod/x", "-n", "shop"]) == 0
 
     assert "delete pod/x -n shop" in capfd.readouterr().out
+
+
+@pytest.mark.parametrize("stage", ["rca", "planning", "verify", "execution"])
+def test_exec_is_refused_before_launching_kubectl_without_explicit_opt_out(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    shim_env: pathlib.Path,
+    stage: str,
+) -> None:
+    monkeypatch.setenv("AGENT_STAGE", stage)
+    monkeypatch.delenv("MAVER_KUBECTL_EXEC_AUTO_APPROVED", raising=False)
+    # A missing executable would fail differently if authorization allowed dispatch.
+    monkeypatch.setenv("KUBECTL_REAL_BINARY", "/does/not/exist")
+    assert main(["exec", "pod/web", "--", "touch", "/tmp/probe"]) == 1
+    assert "use exec_kubectl_cmd_safely" in capsys.readouterr().err
+
+
+def test_explicit_unattended_exec_permission_reaches_the_stub(
+    monkeypatch: pytest.MonkeyPatch,
+    shim_env: pathlib.Path,
+    usable_stdin: None,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("AGENT_STAGE", "rca")
+    monkeypatch.setenv("MAVER_KUBECTL_EXEC_AUTO_APPROVED", "true")
+    assert main(["exec", "pod/web", "--", "touch", "/tmp/probe"]) == 0
+    assert "exec pod/web -- touch /tmp/probe" in capfd.readouterr().out
+
+
+@pytest.mark.parametrize("mode", ["prompt", "deny", ""])
+def test_shell_exec_opt_out_still_requires_automatic_authority(
+    monkeypatch: pytest.MonkeyPatch,
+    shim_env: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    mode: str,
+) -> None:
+    monkeypatch.setenv("MAVER_KUBECTL_EXEC_AUTO_APPROVED", "true")
+    monkeypatch.setenv("MAVER_AUTHORITY_MODE", mode)
+    assert main(["exec", "pod/web", "--", "touch", "/tmp/probe"]) == 1
+    assert "use exec_kubectl_cmd_safely" in capsys.readouterr().err
 
 
 def test_a_write_is_refused_where_a_human_approves_writes(

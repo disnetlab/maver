@@ -20,7 +20,13 @@ from typing import Any
 from maver.settings.groups import ToolSettings
 from maver.tools.context import ToolContext, deliver, redact
 from maver.tools.errors import OUTPUT_LIMIT, tool_error
-from maver.tools.policy import ActionClass, ToolPolicy, may_write, register_policy
+from maver.tools.policy import (
+    ActionClass,
+    ToolPolicy,
+    exec_is_authorized,
+    may_write,
+    register_policy,
+)
 from maver.tools.registry import Authority, tool
 
 __all__ = [
@@ -241,11 +247,9 @@ def classify(argv: Sequence[str], policy: KubernetesPolicy = DEFAULT_POLICY) -> 
     if verb in _BLOCKED_VERBS:
         return "blocked"
     if verb == "exec":
-        # Its own class, not a read. An in-container command cannot be proven
-        # read-only, but the diagnostic roles used it for read-only inspection in every
-        # measured run, so folding it into `write` would change what was measured.
-        # Naming it lets the approval policy hold or deny it without a code change, and
-        # lets the event log record that its authority was never provable.
+        # Its own class, not a read: in-container commands can mutate application
+        # state. The gate requires human approval by default, including diagnostic
+        # roles; unattended experiments opt out explicitly.
         return "exec"
     if verb == "rollout":
         sub = argv[idx + 1].lower() if idx is not None and idx + 1 < len(argv) else ""
@@ -426,11 +430,10 @@ async def exec_kubectl_cmd_safely(ctx: ToolContext, cmd: str, save_as: str | Non
     refusal = _reject(argv, policy)
     if refusal is not None:
         return refusal
-    # `exec` is exempt, as it is at the gate: an in-container command was permitted for
-    # every role in every measured run, and refusing it here would change that.
-    if classify(argv, policy) == "write" and not may_write(
-        _TOOL, ctx.role, ctx.widened_write_stages
-    ):
+    kind = classify(argv, policy)
+    if kind == "exec" and not exec_is_authorized(ctx.session_id, ctx.role, cmd):
+        return tool_error("kubectl exec requires authorization through the approval gate")
+    if kind == "write" and not may_write(_TOOL, ctx.role, ctx.widened_write_stages):
         return _stage_refusal(ctx.role)
 
     argv = _append_delete_wait_false(_bound_blocking_wait(argv, ctx.transport.timeout_seconds))

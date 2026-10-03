@@ -11,7 +11,9 @@ sandbox call, because the sandboxes are capable of running arbitrary code — an
 refuse them outside the execution stage, which would break diagnosis in every role.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -34,12 +36,31 @@ class ActionClass(StrEnum):
     EXEC = "exec"
     """A command run inside a container.
 
-    Its own class because it cannot be proven read-only and was permitted for every role
-    in every measured run. Treating it as a read would hide it from the record; treating
-    it as a write would change what was measured. It passes by default, is recorded as
-    an unprovable-authority call, and a policy rule can hold or deny it.
+    It cannot be proven read-only. Diagnostic roles may request it, but human approval
+    is required by default, independently of automatic approval for ordinary writes.
+    Unattended experiments must explicitly disable that requirement.
     """
     BLOCKED = "blocked"
+
+
+_EXEC_DISPATCH: ContextVar[tuple[str, str, str] | None] = ContextVar(
+    "authorized_exec_dispatch", default=None
+)
+
+
+@contextmanager
+def authorized_exec(session_id: str, stage: str, command: str) -> Iterator[None]:
+    """Let the tool dispatch only the command approved by the enclosing gate."""
+    token = _EXEC_DISPATCH.set((session_id, stage, command))
+    try:
+        yield
+    finally:
+        _EXEC_DISPATCH.reset(token)
+
+
+def exec_is_authorized(session_id: str, stage: str, command: str) -> bool:
+    """Check the gate's scoped authorization, including incident and role identity."""
+    return _EXEC_DISPATCH.get() == (session_id, stage, command)
 
 
 def _no_selectors(arguments: Mapping[str, Any]) -> tuple[str, ...]:

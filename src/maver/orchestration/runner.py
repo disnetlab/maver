@@ -1386,6 +1386,11 @@ async def _replay_inner(
         # Reported as a refusal rather than raised: the role can say so and move on.
         return f"error: {checkpoint.tool_name} is not available in this configuration"
 
+    # A phased role (single.diagnosis/single.mitigation) normally rebinds its tools
+    # before dispatch. Replay precedes that role loop, so preserve the same phase
+    # identity here for both the gate's authorization and the tool's own checks.
+    bound = replace(bound, ctx=replace(bound.ctx, role=checkpoint.stage))
+
     async def dispatch(request: ToolRequest) -> ToolResult:
         return ToolResult(
             tool_call_id=request.call_id,
@@ -1460,6 +1465,11 @@ def tool_context_for(
         # a role's PATH, where a write never reaches the gate, so the shim there refuses
         # one unless this deployment approves writes unattended.
         authority_mode=deployment.settings.authority.mode,
+        kubectl_exec_auto_approved=(
+            not deployment.settings.authority.kubectl_exec_requires_approval
+            and deployment.settings.authority.mode == "auto"
+            and not deployment.settings.authority.rules
+        ),
         kubectl_binary=deployment.settings.transport.kubectl_binary,
         widened_write_stages=deployment.settings.authority.additional_write_stages,
         scope=resources.scope,

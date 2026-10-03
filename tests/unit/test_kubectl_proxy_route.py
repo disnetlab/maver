@@ -180,6 +180,7 @@ async def test_the_deployments_own_settings_reach_the_shim(
     )
 
     assert shim[0]["authority_mode"] == "prompt"
+    assert shim[0]["kubectl_exec_auto_approved"] is False
     assert shim[0]["kubectl_binary"] == "/opt/bin/kubectl"
     assert shim[0]["exec_timeout_s"] == 137.0
     assert shim[0]["proxy_url"] == PROXY

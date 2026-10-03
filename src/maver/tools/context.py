@@ -255,6 +255,12 @@ class ToolContext:
     reach the subprocess environment. Defaults to the fail-closed mode, matching
     ``authority.mode``, so a context built without it refuses shell writes.
     """
+    kubectl_exec_auto_approved: bool = False
+    """Whether the proxy shim may run exec without a tool-level approval pause.
+
+    Computed from the explicit opt-out, automatic authority, and absence of rules.
+    Rules require the structured tool route, where command selectors can be matched.
+    """
     kubectl_binary: str = "kubectl"
     """The real kubectl the proxy route execs, from ``transport.kubectl_binary``.
 

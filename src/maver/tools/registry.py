@@ -55,8 +55,9 @@ Authority = Literal["read", "write", "exec", "blocked"]
 
 The approval gate decides on this, not on :data:`ToolSafety`, because a single kubectl
 tool serves both ``get pods`` and ``delete deployment``. ``exec`` is its own class rather
-than a kind of write: diagnostic roles use ``kubectl exec`` for read-only inspection, and
-folding it into ``write`` would change behaviour every published measurement rests on.
+than a read: in-container commands can mutate application state. Diagnostic roles may
+request them, but they require human approval by default. Unattended experiments must
+explicitly opt out through authority settings.
 """
 
 RETRIEVAL_PROVENANCE = "retrieval"

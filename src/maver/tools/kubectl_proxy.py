@@ -270,6 +270,7 @@ def apply_proxy_env(
     kubectl_binary: str,
     exec_timeout_s: float,
     authority_mode: str,
+    kubectl_exec_auto_approved: bool = False,
 ) -> dict[str, str]:
     """Wire a sandbox subprocess so that its ``kubectl`` is this module's shim.
 
@@ -290,6 +291,8 @@ def apply_proxy_env(
         exec_timeout_s: How long one kubectl may run.
         authority_mode: The deployment's approval mode. Only ``auto`` permits a write
             here, since a command inside a sandbox has no gate in front of it.
+        kubectl_exec_auto_approved: Explicit unattended permission for pod execution.
+            Otherwise use the structured tool, which can pause for human approval.
 
     Returns:
         The same mapping, wired.
@@ -308,6 +311,7 @@ def apply_proxy_env(
         "KUBECTL_REAL_BINARY": _resolved_binary(kubectl_binary, env.get("PATH", "")),
         "AGENT_STAGE": stage,
         "MAVER_AUTHORITY_MODE": authority_mode,
+        "MAVER_KUBECTL_EXEC_AUTO_APPROVED": "true" if kubectl_exec_auto_approved else "false",
     }
     env.update(values)
     shim_dir = _ensure_shim(session_dir, defaults=values)
@@ -436,8 +440,18 @@ def _authorisation_refusal(stage: str, argv: Sequence[str]) -> str | None:
                     "proxy_exec mode (credential/context override); rerun without it"
                 )
         return f"kubectl '{target}' is not permitted in proxy_exec mode"
-    # `exec` is not a write here, as it is not one at the gate: the diagnostic roles used
-    # an in-container command for read-only inspection in every measured run.
+    if kind == "exec":
+        # A subprocess cannot checkpoint an approval request. Never silently turn a
+        # required human decision into an unattended call through the shell route.
+        if (
+            os.environ.get("MAVER_KUBECTL_EXEC_AUTO_APPROVED", "").strip().lower() == "true"
+            and os.environ.get("MAVER_AUTHORITY_MODE", "").strip().lower() == "auto"
+        ):
+            return None
+        return (
+            "kubectl exec through the shell requires explicit unattended permission; "
+            "use exec_kubectl_cmd_safely so the approval gate can authorize the command"
+        )
     if kind != "write":
         return None
     if stage not in _WRITE_STAGES:

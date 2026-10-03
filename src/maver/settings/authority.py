@@ -85,6 +85,18 @@ class AuthoritySettings(SettingsGroup):
         "HITL_MODE",
         description="Approve writes automatically, ask a human, or refuse them all.",
     )
+    # Arbitrary pod execution can mutate application state even from a diagnostic
+    # role. Production systems should not expose it without HITL; prefer narrowly
+    # scoped application read tools with read-only credentials instead.
+    kubectl_exec_requires_approval: bool = setting(
+        True,
+        "MAVER_AUTHORITY__KUBECTL_EXEC_REQUIRES_APPROVAL",
+        description=(
+            "Require human approval for kubectl exec even under automatic write policies. "
+            "Disable only for explicitly unattended deployments such as SREGym experiments; "
+            "false still respects prompt/deny policies."
+        ),
+    )
     rules: tuple[AuthorityRule, ...] = setting(
         (),
         "MAVER_AUTHORITY__RULES",

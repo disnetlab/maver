@@ -24,7 +24,7 @@ from maver.middleware.base import ToolHandler, ToolRequest
 from maver.middleware.human_approval import take_grant
 from maver.settings.authority import AuthoritySettings, Mode
 from maver.settings.groups import ToolSettings
-from maver.tools.policy import ActionClass, ToolPolicy, policy_for
+from maver.tools.policy import ActionClass, ToolPolicy, authorized_exec, policy_for
 
 __all__ = ["WriteGate"]
 
@@ -104,6 +104,17 @@ class WriteGate:
     def _may_write(self, policy: ToolPolicy, stage: str) -> bool:
         return stage in (policy.write_stages | self._settings.additional_write_stages)
 
+    @staticmethod
+    async def _dispatch(
+        request: ToolRequest, handler: ToolHandler, action: ActionClass
+    ) -> ToolResult:
+        if action is ActionClass.EXEC:
+            with authorized_exec(
+                request.session_id, request.role, str(request.arguments.get("cmd", ""))
+            ):
+                return await handler(request)
+        return await handler(request)
+
     async def wrap_tool_call(self, request: ToolRequest, handler: ToolHandler) -> ToolResult:
         """Decide, then dispatch or refuse.
 
@@ -147,22 +158,27 @@ class WriteGate:
         rule = self._settings.rule_for(tool=request.name, stage=request.role, selectors=selectors)
         mode = rule.mode if rule is not None else self._settings.mode
 
+        if (
+            action is ActionClass.EXEC
+            and self._settings.kubectl_exec_requires_approval
+            and mode == "auto"
+        ):
+            # An auto rule may approve API writes, but cannot silently approve an
+            # arbitrary in-container command. Explicit denials still take precedence.
+            mode = "prompt"
+
         if action is ActionClass.EXEC and mode == "auto":
-            # Permitted for every role, as measured, but never silently: the record is
-            # what makes the residual risk auditable rather than merely disclosed.
+            # Only the explicit unattended opt-out can reach this branch.
             self._record(
                 request,
                 policy="auto",
                 decision="approved",
                 reason="in-container command; authority not provable",
             )
-            return await handler(request)
+            return await self._dispatch(request, handler, action)
 
-        # An in-container command is exempt from the stage check, as it was in every
-        # measured run, and exempt from nothing else. Reading that exemption as covering
-        # the authority too is what let `kubectl exec -- rm -rf /data` dispatch under
-        # `prompt` and under `deny`: the class exists so an unprovable action is
-        # recorded as one, not so it can skip the decision.
+        # Diagnostic roles may ask a human to authorize pod execution. This is an
+        # approval boundary, not a guarantee that those roles cannot mutate state.
         if action is not ActionClass.EXEC and not self._may_write(policy, request.role):
             refusal = policy.stage_refusal(request.role)
             self._record(
@@ -187,7 +203,7 @@ class WriteGate:
         )
 
         grant = take_grant()
-        if grant is not None:
+        if grant is not None and not (action is ActionClass.EXEC and mode == "deny"):
             # A replay of a decided request. It is checked against what was actually
             # approved rather than trusted: a grant that covered a different call would
             # let a resume dispatch something no operator ever saw, and the transcript
@@ -211,7 +227,7 @@ class WriteGate:
                 reason="replaying an approved request",
                 request_id=grant.request_id,
             )
-            return await handler(request)
+            return await self._dispatch(request, handler, action)
 
         try:
             decision = await self._authorities[mode].authorise(action_request)
@@ -242,4 +258,4 @@ class WriteGate:
             # Byte-identical to the prototype's wording. The model reads this as a tool
             # result and carries on, and the containment analysis keys on it.
             return self._refuse(request, f"denied by HITL gate: {decision.reason}")
-        return await handler(request)
+        return await self._dispatch(request, handler, action)

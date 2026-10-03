@@ -17,8 +17,9 @@ from maver.middleware.authority import (
     DenyAll,
 )
 from maver.middleware.base import ToolRequest
+from maver.middleware.human_approval import approval_granted
 from maver.middleware.write_gate import WriteGate
-from maver.settings.authority import AuthorityRule, AuthoritySettings
+from maver.settings.authority import AuthorityRule, AuthoritySettings, Mode
 from maver.settings.groups import ServerSettings, ToolSettings
 from maver.settings.root import Settings
 from maver.tools import kubernetes  # noqa: F401 - registers the kubectl policy
@@ -148,15 +149,30 @@ async def test_a_blocked_command_keeps_the_tool_s_own_refusal() -> None:
 # --- the exec class ---------------------------------------------------------------
 
 
-async def test_an_in_container_command_passes_but_is_recorded() -> None:
-    """Permitted for every role under an unattended deployment, as measured, but never
-    silently. Its authority cannot be proven, so the record is what makes the residual
-    risk auditable instead of merely disclosed.
-    """
+@pytest.mark.parametrize("stage", ["rca", "planning", "verify", "execution"])
+async def test_exec_requires_human_approval_even_when_writes_are_automatic(stage: str) -> None:
     sink = ListSink()
-    result = await gate(AuthoritySettings(mode="auto"), sink).wrap_tool_call(
-        call("kubectl exec pod -- cat /etc/hosts", role="rca"), handler
-    )
+    dispatched = False
+
+    async def dispatch(request: ToolRequest) -> ToolResult:
+        nonlocal dispatched
+        dispatched = True
+        return await handler(request)
+
+    with pytest.raises(ApprovalPending):
+        await gate(AuthoritySettings(mode="auto"), sink).wrap_tool_call(
+            call("kubectl exec -n shop pod/web -- touch /tmp/probe", role=stage), dispatch
+        )
+    assert not dispatched
+    assert [d.decision for d in decisions(sink)] == ["pending"]
+
+
+async def test_an_in_container_command_passes_but_is_recorded() -> None:
+    """The explicit experiment opt-out preserves unattended execution and its audit."""
+    sink = ListSink()
+    result = await gate(
+        AuthoritySettings(mode="auto", kubectl_exec_requires_approval=False), sink
+    ).wrap_tool_call(call("kubectl exec pod -- cat /etc/hosts", role="rca"), handler)
     assert result.content == DISPATCHED
     assert [d.reason for d in decisions(sink)] == ["in-container command; authority not provable"]
 
@@ -185,15 +201,36 @@ async def test_an_in_container_command_is_not_exempt_from_the_authority() -> Non
     assert result.content == "denied by HITL gate: writes are disabled"
 
 
-async def test_an_in_container_command_keeps_its_exemption_from_the_stage_check() -> None:
-    """Only the authority binds it. Reading a file inside a container is how a
-    diagnosing role sees a config the API server never had, and every measured run
-    allowed it from every role."""
+async def test_an_auto_rule_cannot_bypass_the_exec_human_requirement() -> None:
     sink = ListSink()
-    result = await gate(AuthoritySettings(mode="auto"), sink).wrap_tool_call(
-        call("kubectl exec pod -- cat /etc/nginx/nginx.conf", role="rca"), handler
+    settings = AuthoritySettings(
+        rules=(AuthorityRule(name="automatic", mode="auto"),),
     )
-    assert result.content == DISPATCHED
+    with pytest.raises(ApprovalPending):
+        await gate(settings, sink).wrap_tool_call(
+            call("kubectl exec pod -- cat /etc/nginx/nginx.conf", role="rca"), handler
+        )
+
+
+async def test_exec_replay_respects_a_current_denial() -> None:
+    request = call("kubectl exec pod -- touch /tmp/probe", role="rca")
+    with approval_granted("approved-earlier", tool=request.name, arguments=request.arguments):
+        result = await gate(AuthoritySettings(mode="deny"), ListSink()).wrap_tool_call(
+            request, handler
+        )
+    assert result.content.startswith("denied by HITL gate")
+
+
+@pytest.mark.parametrize("mode", ["prompt", "deny"])
+async def test_exec_opt_out_does_not_override_stricter_authority(mode: Mode) -> None:
+    settings = AuthoritySettings(mode=mode, kubectl_exec_requires_approval=False)
+    request = call("kubectl exec pod -- touch /tmp/probe", role="rca")
+    if mode == "prompt":
+        with pytest.raises(ApprovalPending):
+            await gate(settings, ListSink()).wrap_tool_call(request, handler)
+    else:
+        result = await gate(settings, ListSink()).wrap_tool_call(request, handler)
+        assert result.content.startswith("denied by HITL gate")
 
 
 async def test_a_rule_can_hold_an_in_container_command() -> None:

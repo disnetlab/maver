@@ -80,9 +80,8 @@ def test_exec_is_its_own_class_and_not_a_read() -> None:
     """An in-container command cannot be proven read-only.
 
     Classified as a read it would skip the gate, which is what the prototype did. It is
-    kept permitted so measured behaviour is unchanged, but naming it lets an operator
-    hold or deny it by policy and lets the event log record that its authority was never
-    provable.
+    kept separate so human approval can govern diagnostic pod execution without
+    granting diagnostic roles ordinary Kubernetes API writes.
     """
     assert classify(tokenize("kubectl exec pod -- ls"), POLICY) == "exec"
 
@@ -327,6 +326,14 @@ def _context(tmp_path: Path, role: str, widened: frozenset[str] = frozenset()) -
         journal=Journal(session_id="s1", stage=role),
         widened_write_stages=widened,
     )
+
+
+@pytest.mark.parametrize("stage", ["rca", "planning", "verify", "execution"])
+async def test_exec_cannot_dispatch_without_the_gate(tmp_path: Path, stage: str) -> None:
+    result = await exec_kubectl_cmd_safely(
+        _context(tmp_path, stage), cmd="kubectl exec pod/web -- touch /tmp/probe"
+    )
+    assert result == "error: kubectl exec requires authorization through the approval gate"
 
 
 async def test_a_cluster_write_is_refused_inside_the_tool_and_not_only_at_the_gate(

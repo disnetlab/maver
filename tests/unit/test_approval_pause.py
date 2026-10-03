@@ -30,6 +30,7 @@ from maver.middleware.human_approval import approval_granted, authorities, take_
 from maver.orchestration import jobs
 from maver.orchestration.resume import (
     ApprovalCheckpoint,
+    approves_on_timeout,
     denial_result,
     load_checkpoint,
     restored_state,
@@ -381,6 +382,52 @@ async def parked_with(tmp_path: pathlib.Path) -> tuple[Deployment, str, str]:
     return deploy, session.session_id, stored.awaiting_request_id
 
 
+async def test_diagnostic_exec_parks_then_dispatches_only_after_human_approval(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Exercise the real pipeline, persisted request, replay gate and tool dispatch."""
+    command = "kubectl exec -n shop pod/web -- touch /tmp/probe"
+
+    class PodExecModel(ResumingModel):
+        asked = False
+
+        async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
+            if caller == "rca" and not self.asked:
+                self.asked = True
+                return self._turn(("pod-exec", "exec_kubectl_cmd_safely", {"cmd": command}))
+            return await super().complete(request, caller=caller)
+
+    rule = AuthorityRule(name="automatic-writes", mode="auto", on_timeout="approve")
+    deploy, _ = deployment(tmp_path, rules=(rule,))
+    object.__setattr__(deploy, "completion", PodExecModel())
+    session = deploy.storage.sessions.create_session(ALERT)
+    COMMANDS.clear()
+    try:
+        with pytest.raises(ApprovalPending):
+            await run_incident(ALERT, session.session_id, deploy, fire_post_hooks=False)
+        assert not any("exec" in argv for argv in COMMANDS)
+        parked = deploy.storage.sessions.get_session(session.session_id)
+        assert parked is not None and parked.awaiting_request_id
+        assert parked.current_stage == "rca"
+        record = deploy.storage.approvals.get_request(parked.awaiting_request_id)
+        assert record is not None
+        assert record.payload["arguments"] == {"cmd": command}
+        assert record.payload["requires_human_approval"] is True
+        future = (datetime.now(UTC) + timedelta(hours=3)).isoformat()
+        assert approves_on_timeout(record, deploy.settings.authority, now=future) is None
+        # A later opt-out must not auto-approve a request raised as human-only.
+        unattended = AuthoritySettings(kubectl_exec_requires_approval=False, rules=(rule,))
+        assert approves_on_timeout(record, unattended, now=future) is None
+
+        deploy.storage.approvals.decide(
+            record.request_id, status="approved", decided_by="operator", reason="reviewed"
+        )
+        await resume_after_decision(record.request_id, deploy)
+        assert sum("exec" in argv for argv in COMMANDS) == 1
+    finally:
+        deploy.storage.close()
+
+
 async def test_an_approval_resumes_the_same_incident(tmp_path: pathlib.Path) -> None:
     """The whole point of a durable pause: the decision continues the run it belongs to
     rather than starting another one.
@@ -591,9 +638,10 @@ class SingleModeModel:
     at turn zero has not seen the write's result and is answered with the write again.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, command: dict[str, Any] | None = None) -> None:
         self.callers: list[str] = []
         self.requests: list[ModelRequest] = []
+        self.command = command if command is not None else PATCH
 
     async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
         self.callers.append(caller)
@@ -606,7 +654,7 @@ class SingleModeModel:
             name: str = "submit_diagnosis"
             arguments: dict[str, Any] = {"solution": "svc/user targets a port nothing listens on"}
         elif not applied:
-            name, arguments = "exec_kubectl_cmd_safely", PATCH
+            name, arguments = "exec_kubectl_cmd_safely", self.command
         else:
             name, arguments = "submit_mitigation", {"succeeded": True, "summary": "patched"}
         return ModelResponse(
@@ -627,7 +675,20 @@ class SingleModeModel:
         )
 
 
-async def test_a_single_agent_run_parks_and_resumes(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        (PATCH, ["patch", "svc", "user", "-p", "{}"]),
+        (
+            {"cmd": "kubectl exec pod/web -- touch /tmp/probe"},
+            ["exec", "pod/web", "--", "touch", "/tmp/probe"],
+        ),
+    ],
+    ids=["patch", "exec"],
+)
+async def test_a_single_agent_run_parks_and_resumes(
+    tmp_path: pathlib.Path, arguments: dict[str, Any], expected: list[str]
+) -> None:
     """A phase label is not a role, and every map on the resume path is keyed by role.
 
     The single-agent configuration labels its phases `single.diagnosis` and
@@ -648,7 +709,7 @@ async def test_a_single_agent_run_parks_and_resumes(tmp_path: pathlib.Path) -> N
     deploy = Deployment(
         settings=settings,
         storage=storage,
-        completion=SingleModeModel(),
+        completion=SingleModeModel(arguments),
         profile=PROFILE,
         transport_for=lambda session_id: FakeTransport(),
         authorities=authorities(
@@ -689,7 +750,8 @@ async def test_a_single_agent_run_parks_and_resumes(tmp_path: pathlib.Path) -> N
         }
     ]
     # The replay, and no second attempt at the mutation the cluster has already taken.
-    assert COMMANDS == [["patch", "svc", "user", "-p", "{}"]]
+    assert len(COMMANDS) == 1
+    assert COMMANDS[0] == expected
     finished = storage.sessions.get_session(session.session_id)
     assert finished is not None and finished.run_status != "resuming"
     storage.close()
