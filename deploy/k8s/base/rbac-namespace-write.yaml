@@ -56,9 +56,9 @@ rules:
 
   # `kubectl exec`. A create verb, and it is here rather than in the read role because
   # a command run inside a container cannot be proven read-only. The tool layer gives it
-  # its own authority class for the same reason: every measured run permitted it, the
-  # audit record says its authority was never provable, and an approval rule can hold or
-  # deny it without a code change. A namespace bound read-only therefore has no exec,
+  # its own authority class for the same reason. It requires human approval by default,
+  # including for diagnostic roles and deployments whose general mode or matching rule
+  # is `auto`; `deny` still denies it. A namespace bound read-only therefore has no exec,
   # and kubectl says so plainly when a role tries.
   - apiGroups: [""]
     resources: ["pods/exec"]

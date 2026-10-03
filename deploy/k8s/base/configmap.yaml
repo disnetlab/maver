@@ -33,8 +33,12 @@ data:
   # Authority. `prompt` is the shipped default and this file states it, because the
   # prototype's ConfigMap set `auto` on a service holding cluster write permissions.
   # A request nobody answers within the timeout is denied; approving on expiry is
-  # available per policy rule and never globally.
+  # available per policy rule and never globally. Exec remains human-approved even
+  # under an auto rule: production deployments should not expose arbitrary in-container
+  # execution without HITL because it can mutate application state outside Kubernetes
+  # API verb controls.
   MAVER_AUTHORITY__MODE: "prompt"
+  MAVER_AUTHORITY__KUBECTL_EXEC_REQUIRES_APPROVAL: "true"
   MAVER_AUTHORITY__TIMEOUT_S: "1800"
 
   # Pipeline and mechanisms.

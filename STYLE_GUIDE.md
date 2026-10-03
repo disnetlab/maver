@@ -57,16 +57,20 @@ If you find yourself wanting `if benchmark == ...` anywhere under `src/maver/` o
   lists. Register a new tool and its description together, and name which agents may
   use it. YAML selection never changes its canonical authority role or deployment
   write policy. Startup validation rejects unknown tools and incompatible submissions.
-- **Only Execution writes.** This is enforced twice on purpose: by the approval gate,
-  which refuses a write from a stage the tool's policy does not name, and again inside
-  the tool by a stage check of its own, because a gate that was misconfigured or absent
-  should not be enough to let a diagnostic role mutate a cluster. The allowlist is not
-  one of the two: `exec_kubectl_cmd_safely` is on every role's list, because the
-  diagnostic roles read the cluster with it.
-- **Every cluster write passes the approval gate.** The gate is a `wrap_tool_call`
-  hook, so it covers any write-capable tool in any stage rather than a hand-picked
-  set of call sites. Read-only commands auto-approve. A denied write fails closed and
-  is recorded in the event log as a policy refusal.
+- **Only Execution issues classified Kubernetes API writes.** This is enforced twice on
+  purpose: by the approval gate, which refuses a write from a stage the tool's policy
+  does not name, and again inside the tool by a stage check of its own, because a gate
+  that was misconfigured or absent should not be enough to let a diagnostic role issue
+  one. `kubectl exec` is a separate action class: diagnostic roles may request it, but
+  it requires human approval by default because an in-container command can mutate
+  application state even without a Kubernetes API write.
+- **Structured write and exec calls pass the approval gate.** The gate is a
+  `wrap_tool_call` hook, so it covers any write-capable tool in any
+  stage rather than a hand-picked set of call sites. Read-only commands auto-approve. A
+  denied write or exec fails closed and is recorded in the event log as a policy
+  refusal. SREGym's proxy shell cannot pause for HITL, so it refuses shell-based exec
+  unless the deployment explicitly selects the unattended exception. Ordinary API
+  writes through that shell route require an authorized stage and automatic authority.
 - **Tool output is part of the interface.** Prompts are written against the exact
   shape of what tools return. Changing a tool's output format is a behaviour change
   that belongs in a parity run, not a cleanup commit.

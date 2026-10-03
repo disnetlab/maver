@@ -59,7 +59,9 @@ services:
       # the MCP server, and `scripts/sregym-mcp-port-forward.sh` binds that forward on
       # the docker bridge as well as on loopback for exactly this container.
       MAVER_ADAPTERS__SREGYM__KUBECTL_PROXY_URL: http://host.docker.internal:16444
-      # Unattended: nobody is waiting to approve a write during a sweep.
+      # Unattended Kubernetes writes: nobody is waiting to approve them during a sweep.
+      # Kubectl exec retains its separate human-approval default. Reproducing historical
+      # shell exec requires explicitly applying examples/sregym-unattended.yaml.
       MAVER_AUTHORITY__MODE: auto
       # And therefore not a production deployment. The settings layer refuses
       # environment=production with authority=auto, and the image bakes `production` in,

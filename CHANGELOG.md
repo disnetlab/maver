@@ -9,6 +9,23 @@ published comparisons, which are single-variable only while the schema does not 
 with the configuration. The procedure is in STYLE_GUIDE.md, "Typed artifacts are
 frozen".
 
+## Explicit approval boundary for kubectl exec
+
+`kubectl exec` now requires human approval by default, even when the global authority
+mode or a matching rule is `auto`. Deny decisions retain precedence, and approval
+timeouts cannot auto-approve exec while the boundary is enabled. Diagnostic roles may
+still exec after approval; the boundary governs approval rather than assigning exec to
+one workflow stage.
+
+The proxy shell cannot suspend a command for approval, so it refuses exec by default.
+SREGym also hides `exec_kubectl_cmd_safely` by default; human-approved exec requires
+`MAVER_ADAPTERS__SREGYM__MCP_KUBECTL_TOOLS=true` to expose that structured tool, which
+uses the configured proxy transport despite the setting's historical name. Set
+`MAVER_AUTHORITY__KUBECTL_EXEC_REQUIRES_APPROVAL=false` together with
+`MAVER_AUTHORITY__MODE=auto` only when explicitly reproducing unattended SREGym behavior.
+The SREGym adapter does not opt out automatically, and
+`examples/sregym-unattended.yaml` records the required Compose configuration.
+
 ## Feedback and background-work race fixes
 
 Learning now retains pending intents when temporarily disabled, and its repair sweep
@@ -399,9 +416,11 @@ change a reported number are recorded here rather than left to the commit log.
   the results describe. The proxy route is back and is what the adapter configures
   (`adapters.sregym.kubectl_proxy_url`, `http://127.0.0.1:16444`); the MCP kubectl tools
   are hidden unless `adapters.sregym.mcp_kubectl_tools` says otherwise, and telemetry
-  still arrives over MCP. One thing is new rather than restored: a write through the
-  shell is refused unless the deployment approves writes automatically, because that
-  path cannot be held for a person the way the kubectl tool's can.
+  still arrives over MCP. The shell cannot pause for approval, so `kubectl exec` is
+  refused there unless the deployment explicitly disables the exec approval boundary
+  as well as selecting automatic authority. The structured tool route can pause, but is
+  unavailable unless the deployment enables `mcp_kubectl_tools`; despite that historical
+  name, it uses the proxy transport configured by the adapter.
 
 - **The AIOpsLab analysis answer says who decided it.** Two hand-written rules in the
   taxonomy mapper override the model's own classification — an operator mutation to a

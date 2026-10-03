@@ -60,9 +60,9 @@ the data archive, not here.
 | Claim | Kind | Command |
 |---|---|---|
 | Roles exchange typed artifacts, never transcripts, and one incident runs end to end under either executor | D | `uv run pytest tests/unit/test_runner.py` |
-| Only execution writes: a stage-aware gate refuses a write from any other role, and the kubectl tool refuses it again on its own | D | `uv run pytest tests/unit/test_write_gate.py tests/unit/test_kubernetes_tool.py` |
+| Only execution writes through classified Kubernetes mutations: a stage-aware gate refuses them from other roles, and the kubectl tool refuses them again on its own; diagnostic roles may use separately approved `kubectl exec` | D | `uv run pytest tests/unit/test_write_gate.py tests/unit/test_kubernetes_tool.py` |
 | A stage-aware gate classifies read, write, exec and blocked, and refuses a write outside the stages that may issue one | D | `uv run pytest tests/unit/test_write_gate.py tests/unit/test_kubernetes_tool.py` |
-| Any write can be held for a person: the run parks durably, and a decision resumes the same incident from the role that was interrupted | D | `uv run pytest tests/unit/test_approval_pause.py` |
+| Any write can be held for a person, and `kubectl exec` requires one by default even under automatic write authority: the run parks durably, and a decision resumes the same incident from the role that was interrupted | D | `uv run pytest tests/unit/test_approval_pause.py` |
 | Execution opens on a forced read, and a submission with no command behind it is refused for the submit guard's budget of two rejections; a third is accepted, recorded as a bypass on the run row and in the event log | D | `uv run pytest tests/unit/test_roles_execution.py tests/unit/test_loop.py` |
 | Verification returns to planning or diagnosis within the shared remediation budget and an optional tighter Verify cap | D | `uv run pytest tests/unit/test_routing.py tests/unit/test_roles_verify.py` |
 | Records carry lifecycle states, and retrieval demotes an invalidated record without hiding it | D | `uv run pytest tests/unit/test_lifecycle.py` |
@@ -218,6 +218,14 @@ Under SREGym, kubectl reaches the cluster through the harness's own filtering pr
 sandbox shell runs a real kubectl against a credential-free endpoint the harness serves,
 which is the route every measured run took. The MCP kubectl tools are hidden by default,
 so the model reaches the cluster from the shell and telemetry still arrives over MCP.
+The proxy shell cannot pause for approval, so it refuses `kubectl exec` by default and
+directs the role to `exec_kubectl_cmd_safely`; that structured tool is also hidden by
+default. Set `MAVER_ADAPTERS__SREGYM__MCP_KUBECTL_TOOLS=true` to expose it for
+human-approved exec. Despite the setting's historical name, the tool uses the configured
+proxy transport. Reproducing historical unattended shell exec requires the explicit
+authority opt-out in
+[examples/sregym-unattended.yaml](examples/sregym-unattended.yaml); selecting the adapter
+does not enable it.
 [The SREGym guide](docs/adapters/sregym.md) covers that route's settings, loading an archived corpus with
 `maver memory import`, and the leave-one-out map an imported corpus needs.
 

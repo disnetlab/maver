@@ -14,6 +14,51 @@ address it are `adapters.sregym.kubectl_proxy_url` and the three timeouts beside
 This page covers recovery-loop configuration and running the memory arms against
 a corpus distilled by an earlier system.
 
+## Unattended kubectl exec
+
+`kubectl exec` is useful in SREGym for container-level diagnostics, but it is arbitrary
+code execution inside an application container. It can mutate files, processes,
+databases or other application state even when the Kubernetes API credential cannot
+write objects. A prompt asking the model to use exec only for reads is guidance, not an
+enforced boundary.
+
+MAVER therefore requires human approval for exec by default, including when
+`authority.mode` or a matching authority rule is `auto`. A `deny` decision still denies
+the call, and an approval timeout does not turn into automatic approval. Diagnostic
+roles may exec after a person approves the request; this setting is an approval boundary,
+not a promise that only the Execution role can exec.
+
+The SREGym proxy shell cannot park and resume a command for human review. With the safe
+default it refuses shell-based exec and directs the role to
+`exec_kubectl_cmd_safely`, whose tool route can pause. SREGym also hides that structured
+tool by default because `mcp_kubectl_tools` defaults to false. To make human-approved pod
+exec available, expose the tool explicitly:
+
+```dotenv
+MAVER_ADAPTERS__SREGYM__MCP_KUBECTL_TOOLS=true
+```
+
+The setting retains its historical name, but the structured kubectl tool uses the
+adapter's configured proxy transport. Enabling it exposes the approval-capable route; it
+does not disable approval. Historical unattended sweeps instead used shell-based exec
+for container diagnostics. The shell path is available only when authority is rule-free,
+the global mode is `auto`, and exec approval is explicitly disabled. If
+`authority.rules` contains any rule, shell exec is refused regardless of whether that
+rule would match; use the structured tool route so the gate can evaluate it. To reproduce
+the historical rule-free posture, configure no authority rules and set both:
+
+```dotenv
+MAVER_AUTHORITY__MODE=auto
+MAVER_AUTHORITY__KUBECTL_EXEC_REQUIRES_APPROVAL=false
+```
+
+[The Compose override](../../examples/sregym-unattended.yaml) expresses the same pair in
+the deployment's actual YAML format. Apply it explicitly; selecting the SREGym adapter
+does not change either authority setting or opt out of exec approval. This opt-out allows
+arbitrary application-state mutation through shell exec only while the authority rule
+list remains empty. Production deployments should instead expose narrow,
+application-specific read tools or read-only application credentials.
+
 ## Recovery-loop configuration
 
 For a new verification-enabled run, set these in the agent container's environment

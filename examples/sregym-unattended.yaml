@@ -1,0 +1,18 @@
+# Docker Compose override for reproducing historical unattended SREGym runs.
+# Apply explicitly with the evaluation deployment; the SREGym adapter does not select
+# either authority setting:
+#
+#   REVISION=$(git rev-parse HEAD) docker compose \
+#     -f deploy/docker/docker-compose.eval.yml \
+#     -f examples/sregym-unattended.yaml up -d --build --force-recreate
+#
+# Shell-based kubectl exec is used for container diagnostics, but it is arbitrary code
+# execution inside application containers. Prompting it to be read-only does not enforce
+# that restriction, and commands can mutate files, processes and application state.
+# Do not use this override in production. Prefer narrow per-application read tools or
+# read-only application credentials there.
+services:
+  maver-eval:
+    environment:
+      MAVER_AUTHORITY__MODE: auto
+      MAVER_AUTHORITY__KUBECTL_EXEC_REQUIRES_APPROVAL: "false"

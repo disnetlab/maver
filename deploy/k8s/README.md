@@ -86,7 +86,11 @@ fault-injection namespace.
 
 Reads are broad, writes are narrow, and the split is enforced twice: by RBAC here, and by
 the approval gate in the process, which holds every cluster write until a person decides
-it unless `MAVER_AUTHORITY__MODE` says otherwise.
+it unless `MAVER_AUTHORITY__MODE` says otherwise. `kubectl exec` is a separate boundary:
+it requires human approval by default even in `auto` mode or under a matching `auto`
+rule, because an in-container command can mutate application state without a Kubernetes
+API write. A diagnostic role may therefore exec after approval; role name alone is not
+a read-only guarantee.
 
 Cluster-wide, the agent can read nodes, persistent volumes, storage classes, volume
 attachments, priority classes, ingress classes and node metrics, and can `get` a single
@@ -123,7 +127,9 @@ listed as a decision. Six things are decisions:
   looks like a stuck drain from every other angle; widening one so the eviction goes
   through is disabling the control rather than repairing the fault.
 - **`kubectl exec` in a read-only namespace.** Running a command inside a container
-  cannot be proven read-only, so it lives in the write role.
+  cannot be proven read-only, so it lives in the write role and requires human approval
+  by default. Production deployments should prefer application-specific read tools or
+  read-only application credentials over arbitrary exec.
 
 ## The approval surface has no authentication
 
