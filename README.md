@@ -243,6 +243,9 @@ running one problem and running a resumable sweep.
 the tool-allowlist rule, the write-gate invariant, the artifact-schema freeze, and the
 rule that keeps the graph library replaceable.
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local checks and the protected
+branch-and-pull-request workflow.
+
 ## Limitations and known issues
 
 The manuscript's numbers remain prototype results. Mechanism tests demonstrate
