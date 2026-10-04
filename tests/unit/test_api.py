@@ -1384,12 +1384,14 @@ async def test_an_approval_that_restarts_an_incident_is_one_the_drain_can_see(
     write for — the one whose write has already been replayed — was left at `resuming`
     with nothing to finish it and nothing reporting it as over.
     """
+    continuation_started = asyncio.Event()
 
     class StallsOnceResumed(ParkingModel):
         """Parks on the write, then never answers again once it has been replayed."""
 
         async def complete(self, request: ModelRequest, *, caller: str) -> ModelResponse:
             if caller == "execution" and self.callers.count("execution") >= 1:
+                continuation_started.set()
                 await asyncio.sleep(3600)
             return await super().complete(request, caller=caller)
 
@@ -1418,10 +1420,9 @@ async def test_an_approval_that_restarts_an_incident_is_one_the_drain_can_see(
             "awaiting_request_id"
         ]
         await http.post(f"/api/v1/hitl/{request_id}/decide", json={"approve": True})
-        for _ in range(200):  # until the continuation is under way
-            await asyncio.sleep(0.01)
-            if app.state.service.runs.live():
-                break
+        # Registration happens before replay. Wait for the next model call so the
+        # approved write and its active-stage checkpoint exist before shutdown.
+        await asyncio.wait_for(continuation_started.wait(), timeout=5.0)
         assert app.state.service.runs.live() == [session_id], "the drain waits on this"
 
     await asyncio.gather(*resumed, return_exceptions=True)
