@@ -2,6 +2,8 @@
 
 Create a branch from `main`, make a focused change, and open a pull request into
 `main`. Follow [STYLE_GUIDE.md](STYLE_GUIDE.md) for architectural conventions.
+Report suspected vulnerabilities privately as described in
+[SECURITY.md](SECURITY.md), rather than opening a public issue.
 
 `main` requires a pull request, resolved review conversations, and successful
 `check` and `postgres` CI jobs against the current base branch. These protections

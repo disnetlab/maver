@@ -1,15 +1,18 @@
 # MAVER
 
-**M**ulti-**A**gent **V**erification and **E**xperience-informed **R**ecovery: a memory-augmented multi-agent
-recovery framework whose default pipeline diagnoses and repairs live microservice
-incidents using a privately served open-weight language model.
+**M**ulti-**A**gent **V**erification and **E**xperience-informed **R**ecovery: a
+memory-augmented multi-agent framework for diagnosing and repairing live microservice
+incidents. MAVER is designed to be cloned, configured and adapted to a deployment;
+its default model profile targets a privately served open-weight language model.
 
-An alert enters over HTTP or optional Kafka intake. A read-only diagnosing role investigates cluster state,
-metrics, logs and traces and emits a typed `RootCause`. A planning role turns that
-record into a typed `Plan`. An execution role applies it under a check-and-set discipline and a write-authority
-gate. Two optional mechanisms sit around
-that spine: an independent verification role that can hand work back, and a gated
-second diagnostic opinion informed by an experience store of past incidents.
+An alert enters over HTTP or optional Kafka intake. A diagnosing role investigates
+cluster state, metrics, logs and traces and emits a typed `RootCause`; its ordinary
+tools are read-only, while `kubectl exec` is a separate action that requires human
+approval by default because it can mutate application state. A planning role turns
+the diagnosis into a typed `Plan`. An execution role applies it under a check-and-set
+discipline and a write-authority gate. Two optional mechanisms sit around that spine:
+an independent verification role that can hand work back, and a gated second
+diagnostic opinion informed by an experience store of past incidents.
 
 The intended deployment serves the model on your own infrastructure. Hosted model
 profiles and optional OTLP export are also supported; the selected endpoints and
@@ -74,7 +77,7 @@ the data archive, not here.
 | An environment's own fault injection is filtered out of every result before the model sees it, not only out of the ones a tool remembered to filter | D | `uv run pytest tests/unit/test_evidence_reaches_every_tool.py tests/unit/test_sregym_adapter.py` |
 | Private model endpoints and a deployment network policy support keeping telemetry on the operator's infrastructure | D | `configs/models/*.yaml` names the endpoint; `deploy/k8s/base/networkpolicy.yaml` is the egress boundary |
 | The reported recovery rates, the effect of verification, the denser-model comparison, and the throughput figures | A | the data archive that accompanies the manuscript |
-| Any of the archived rows can be re-measured end to end | I | the SREGym adapter, a served model, and a benchmark cluster |
+| An archived row can be re-measured end to end using its recorded source revision and configuration | I | the retained inputs, SREGym adapter, served model, benchmark cluster and accompanying data archive |
 
 One row deserves its own sentence, because it is the most easily overstated. **In every
 measured campaign the approval gate ran in automatic mode, so no request ever reached a
@@ -103,8 +106,8 @@ because the default transport executes it. RBAC is derived from the verbs the to
 layer can actually issue: one cluster-wide read-only role, and namespaced read and
 write roles an overlay binds per managed namespace. Secrets are in neither role.
 
-**The approval and incident routes have no authentication yet.** Until they do, the
-deployment guidance is the shipped NetworkPolicy and no ingress.
+**The approval and incident routes are unauthenticated.** Restrict them with the
+shipped NetworkPolicy and do not expose them through an ingress.
 
 See [incident operations](docs/operations.md) for durable intake, operator review,
 and recovery, and [Kubernetes deployment](deploy/k8s/README.md) for manifests,
@@ -200,7 +203,7 @@ src/maver/
   adapters/      the environment seam, SREGym and AIOpsLab adapters
   api/           intake, health, approvals, feedback and reconciliation
 
-configs/         model profiles, experiment arms, adapter settings
+configs/         model profiles, experiment arms, learning trigger settings
 deploy/          the container image, and Kubernetes manifests with two overlays
 examples/        alert payloads, HTTP client, and an offline customisation example
 scripts/         what an evaluation host runs outside this package
@@ -254,9 +257,9 @@ implementation behavior; they do not establish comparative recovery rates.
 **Deployment boundaries.** Account for these constraints when adapting the framework.
 
 - **No authentication or authorisation on the API.** Anyone who can reach the port can
-  approve a cluster write. The shipped NetworkPolicy and no ingress are the interim
-  posture, and a decision's `decided_by` is recorded as a claim rather than a verified
-  identity.
+  approve a cluster write. The shipped deployment restricts access with a NetworkPolicy
+  and no ingress, and a decision's `decided_by` is recorded as a claim rather than a
+  verified identity.
 - **Single tenant.** `memory.corpus_id` partitions the retrieval corpus, but nothing
   authenticates the caller who chose it. It is a research partition, not a security
   boundary; the supported deployment is one MAVER per tenant.
@@ -304,7 +307,7 @@ imply.
 
 ## Citing
 
-See `CITATION.cff`.
+See [CITATION.cff](CITATION.cff).
 
 ## Licence
 

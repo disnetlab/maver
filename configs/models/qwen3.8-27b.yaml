@@ -52,4 +52,4 @@ known_issues:
   - "Forcing a tool choice returns zero parsed calls on this parser, with and without thinking enabled. Only an automatic or omitted tool choice works, and the failure is silent: the turn records a tool-call finish reason with zero calls."
   - "Dense rather than sparse: several times slower per token than the 35B model and it emits more tokens per turn, so a per-problem timeout tuned for that model will cut runs short here."
   - "No repetition suppression at all. Temperature is the only guard against degeneration."
-  - "This endpoint is not currently served: the available accelerators cannot host it alongside the 35B model."
+  - "Provision an endpoint serving this model before selecting the profile; the example endpoint is a placeholder."

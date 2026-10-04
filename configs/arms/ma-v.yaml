@@ -2,10 +2,10 @@ schema_version: 1
 name: ma-v
 label: MA+V
 description: >
-  MA plus the verification role. After a clean apply, an independent read-only check
+  MA plus the verification role. After a clean apply, an independent verification check
   re-surveys the namespace, re-checks the firing alerts, and probes the affected request
   path, then either ends the incident or hands it back. Verification is blind to the
-  diagnosis by construction, with no setting that could make it sighted. Everything else
+  diagnosis in the default workflow. Everything else
   is identical to MA.
 model_profile: qwen3.6-35b-a3b
 frozen: true

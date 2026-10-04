@@ -1,9 +1,17 @@
 # Kubernetes manifests
 
+Run these commands from the repository root with a kind cluster already running and
+with matching node and image architectures. `make image` builds `linux/amd64`; customize
+the Docker build platform first when the kind nodes use another architecture.
+
 ```bash
-kubectl apply -k deploy/k8s/overlays/local        # kind, a locally built image
-kubectl apply -k deploy/k8s/overlays/production   # a real cluster, digest-pinned
+make image
+kind load docker-image maver:local
+kubectl apply -k deploy/k8s/overlays/local
 ```
+
+For the production overlay, replace its all-zero image digest and add workload-namespace
+role bindings first, then run `kubectl apply -k deploy/k8s/overlays/production`.
 
 `base/` is not meant to be applied on its own. It has no image digest, its ConfigMap
 points at service names your cluster may not have, and it binds nothing in a workload
@@ -12,10 +20,11 @@ namespace, so an overlay is where a deployment becomes a deployment.
 ## Applying overlays safely
 
 **Apply an overlay with `-k`, never a file inside it with `-f`.** The files under
-`overlays/` are patches rather than manifests. `kubectl apply -f overlays/*/configmap-patch.yaml`
-replaces `maver-config` with only the keys that patch names and silently drops every other
-one. Settings default conservatively, so the pod comes back up with the alert consumer
-disabled and the memory store off, with no startup error identifying the dropped keys.
+`overlays/` are patches rather than manifests. Running
+`kubectl apply -f deploy/k8s/overlays/*/configmap-patch.yaml` replaces `maver-config`
+with only the keys that patch names and silently drops every other one. Settings default
+conservatively, so the pod comes back up with the alert consumer disabled and the memory
+store off, with no startup error identifying the dropped keys.
 
 **A `configMapGenerator` cannot read files outside its own kustomization root** without
 `--load-restrictor LoadRestrictionsNone`, which turns off a safety check. That is why the
@@ -64,7 +73,7 @@ replans and inconclusive rechecks keep their own accounting.
 To select named pipelines, mount a YAML file and set `MAVER_CUSTOMISATION` to its
 container path. The [built-in example](../../examples/verify-handbacks.yaml) defines
 two pipelines with different caps. Custom Python implementations must be included
-in the image and registered through `maver/custom.py`. See
+in the image and registered through `src/maver/custom.py`. See
 [the customisation guide](../../docs/customisation.md) for configuration and selection.
 
 ## Granting access to a workload namespace
@@ -74,8 +83,9 @@ bind the namespaced roles where you want the agent to work:
 
 ```bash
 sed 's/REPLACE_TARGET_NAMESPACE/shop/' \
-  overlays/production/rolebindings.example.yaml > overlays/production/rolebinding-shop.yaml
-# then add the file to overlays/production/kustomization.yaml
+  deploy/k8s/overlays/production/rolebindings.example.yaml \
+  > deploy/k8s/overlays/production/rolebinding-shop.yaml
+# then add the file to deploy/k8s/overlays/production/kustomization.yaml
 ```
 
 Bind the read role in every namespace the agent should be able to see, and the write role
@@ -133,9 +143,9 @@ listed as a decision. Six things are decisions:
 
 ## The approval surface has no authentication
 
-This is tracked and not yet fixed. The API that lists pending writes and approves them is
-served on the same port as everything else, and anything that can reach port 8080 can
-approve a cluster write. Until authentication lands the containment is the NetworkPolicy:
+The API that lists pending writes and approves them is served on the same port as
+everything else, and anything that can reach port 8080 can approve a cluster write.
+The shipped deployment contains this unauthenticated surface with the NetworkPolicy:
 
 - ingress on 8080 only from namespaces labelled `maver.dev/operator=true`;
 - no `Ingress` object, in this repository or in your cluster;

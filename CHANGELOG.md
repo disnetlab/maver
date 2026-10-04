@@ -172,11 +172,11 @@ authority change.
 
 ## Execution scope and bounded Verify hand-backs
 
-Migrate prototype revisions `cb1ed3b6462feaa090c4c7b3c273753c7aece20b`
+Port behavior recorded at prototype revisions `cb1ed3b6462feaa090c4c7b3c273753c7aece20b`
 (Execution prompt, 2026-09-11) and `00e37eadbc13bdaa8e9dec8794bd4bf3fa9270a6`
-(Verify hand-back cap and submission repair, 2026-09-16) at the author's request.
-The source commit supplies the Verify normalizer; the loop hook and wiring were
-still in the prototype working tree. MAVER supplies its own integration and audit record.
+(Verify hand-back cap and submission repair, 2026-09-16). The second revision contains
+the Verify normalizer; the corresponding prototype loop hook and wiring were not
+committed. MAVER therefore supplies its own integration and audit record.
 
 - Execution's default prompt now limits success to mechanical confirmation that
   planned changes applied. Persistent symptoms alone do not justify replanning.

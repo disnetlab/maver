@@ -60,9 +60,11 @@ faults. Execution's read-before-write behavior and approval policy are unchanged
 
 ## Start the agent
 
+From the MAVER repository root:
+
 ```bash
 make image                                            # builds maver:local
-MAVER_MODEL_ENDPOINT=http://vllm.internal:8000/v1 \
+MAVER_MODEL_ENDPOINT=http://your-model-host:8000/v1 \
   sudo -E scripts/aiopslab/deploy-agent.sh
 ```
 
@@ -214,7 +216,8 @@ tmux new-session -d -s aiopslab-sweep "cd /var/lib/aiopslab/src/AIOpsLab && \
   --bridge-token-file /var/lib/aiopslab/agent-config/bridge-token 2>&1 | \
   tee -a /var/lib/aiopslab/results/sweeps/my-sweep/console.log"
 
-scripts/aiopslab/watch-sweep.sh /var/lib/aiopslab/results/sweeps/my-sweep
+/path/to/maver/scripts/aiopslab/watch-sweep.sh \
+  /var/lib/aiopslab/results/sweeps/my-sweep
 ```
 
 The watcher only watches. It prints the grade tally, the last rows of `status.tsv` and
