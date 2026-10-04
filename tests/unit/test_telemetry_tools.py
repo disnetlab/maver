@@ -7,6 +7,7 @@ because a tool that pre-truncated would hide the pointer to the saved file.
 
 import asyncio
 import os
+import signal
 import stat
 from pathlib import Path
 from typing import Any
@@ -141,9 +142,9 @@ async def test_a_bounded_tool_reports_its_timeout_through_the_shared_builder(
     """
 
     class Hangs:
-        # No such process, so the group kill below finds nothing and says so the way a
-        # process that has already gone does.
-        pid = -1
+        # A positive sentinel matches the subprocess contract. ``killpg`` is mocked
+        # below, so this test never sends a signal to a real process group.
+        pid = 424_242
 
         async def communicate(self) -> tuple[bytes, bytes]:
             await asyncio.sleep(10)
@@ -156,7 +157,12 @@ async def test_a_bounded_tool_reports_its_timeout_through_the_shared_builder(
     async def spawn(*argv: object, **kwargs: object) -> Hangs:
         return Hangs()
 
+    def no_such_process(pid: int, sig: int) -> None:
+        assert (pid, sig) == (Hangs.pid, signal.SIGKILL)
+        raise ProcessLookupError
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(os, "killpg", no_such_process)
     monkeypatch.setattr(host, "_TIMEOUT_SECONDS", 0.05)
     ctx = ToolContext(
         transport=FakeTransport(),
