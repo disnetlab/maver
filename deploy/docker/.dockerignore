@@ -4,10 +4,12 @@
 # BuildKit's per-Dockerfile ignore support. One file, so the two cannot drift.
 .git
 .github
+.claude
 .venv
 .local-workspace
 __pycache__
 *.pyc
+.DS_Store
 .pytest_cache
 .mypy_cache
 .ruff_cache
