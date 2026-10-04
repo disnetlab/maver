@@ -579,11 +579,11 @@ httpx==0.28.1 \
     --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
     # via
     #   huggingface-hub
-    #   maver
     #   langchain-core
     #   langgraph-sdk
     #   langsmith
     #   litellm
+    #   maver
     #   openai
 huggingface-hub==1.29.0 \
     --hash=sha256:6ebb385a581435325cf6d5c5b233d5d4bc91175834d99fd65dae14379b36e9ad \
@@ -1140,11 +1140,11 @@ pydantic==2.13.5 \
     --hash=sha256:51a9c5f7b2f8e636f04c6cada605d9b6a3bf1348fdf945a3d8869b19bba0ee08
     # via
     #   fastapi
-    #   maver
     #   langchain-core
     #   langgraph
     #   langsmith
     #   litellm
+    #   maver
     #   openai
     #   pydantic-settings
 pydantic-core==2.46.5 \
@@ -1218,8 +1218,8 @@ pydantic-settings==2.15.0 \
     --hash=sha256:0ba092c291c94baceb5eff768aa0d56400a457585bc0175925a5a5510303da42 \
     --hash=sha256:694b793e84f766ba76a90ebdefc01d0a9a045dab0382bee70393da93712ad117
     # via
-    #   maver
     #   litellm
+    #   maver
 pygments==2.21.0 \
     --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9 \
     --hash=sha256:610ca751c9bc2492b38eb9a38a7fbc93edbbb2d7182edaf34e66ae493dee5c8c
@@ -1234,8 +1234,8 @@ python-dotenv==1.2.3 \
     --hash=sha256:904552145e8bfed22162c09dab1c2b9b54fefa7b23ba780f4f26ca0316b0f0d9 \
     --hash=sha256:a20a594dabeaa385725aa239d5244871c143ecb356add8a20fcf23773a6c3a35
     # via
-    #   maver
     #   litellm
+    #   maver
     #   pydantic-settings
     #   uvicorn
 pyyaml==6.0.3 \
@@ -1280,9 +1280,9 @@ pyyaml==6.0.3 \
     --hash=sha256:fc09d0aa354569bc501d4e787133afc08552722d3ab34836a80547331bb5d4a0
     # via
     #   huggingface-hub
-    #   maver
     #   kubernetes
     #   langchain-core
+    #   maver
     #   uvicorn
 referencing==0.37.0 \
     --hash=sha256:381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231 \

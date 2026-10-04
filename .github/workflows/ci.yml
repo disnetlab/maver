@@ -24,10 +24,13 @@ jobs:
       # The file a reviewer without uv installs from. It is generated, so it drifts
       # silently, and the drift is only visible to the person whose environment no
       # longer matches the one this job tested.
+      # Ignore comments, including indented dependency annotations: their ordering
+      # does not affect installation. Versions, markers and hashes still must match.
       - name: requirements.txt matches the lock
         run: |
           uv export --format requirements-txt --frozen --no-dev -o /tmp/requirements.txt
-          diff <(grep -v '^#' requirements.txt) <(grep -v '^#' /tmp/requirements.txt) \
+          diff <(grep -v '^[[:space:]]*#' requirements.txt) \
+               <(grep -v '^[[:space:]]*#' /tmp/requirements.txt) \
             || { echo "requirements.txt is stale: run make requirements"; exit 1; }
       # tests/unit/test_deploy.py renders both deploy overlays with `kubectl kustomize`,
       # which is local templating and contacts no cluster. Without the binary it would
