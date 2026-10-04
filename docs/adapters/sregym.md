@@ -61,8 +61,14 @@ application-specific read tools or read-only application credentials.
 
 ## Recovery-loop configuration
 
-For a new verification-enabled run, set these in the agent container's environment
-(`deploy/docker/maver.env` for the evaluation Compose deployment):
+For a fresh checkout, create the evaluation Compose environment file from the shipped
+example:
+
+```bash
+cp deploy/docker/maver.env.example deploy/docker/maver.env
+```
+
+For a new verification-enabled run, set these in `deploy/docker/maver.env`:
 
 ```dotenv
 MAVER_VERIFY__ENABLED=true
@@ -83,11 +89,11 @@ historical arm name alone does not restore the older prompt or control policy.
 ## Loading an archived corpus
 
 A memory arm can only be re-run against the corpus it was measured on, and that corpus
-lives in the prototype's PostgreSQL table rather than in a MAVER store. `maver memory import`
-reads it from a file:
+lives in the prototype's PostgreSQL table rather than in a MAVER store. From the MAVER
+repository root, `uv run maver memory import` reads it from a file:
 
 ```bash
-maver memory import corpus.jsonl --corpus so_gate_corpus_35b
+uv run maver memory import corpus.jsonl --corpus so_gate_corpus_35b
 ```
 
 The records go in through the same port the distilling pass writes through, so both
@@ -103,7 +109,7 @@ under `<workdir>/memory/`, and a scoped set of rows on PostgreSQL — so the run
 these records has to be configured for the same name:
 
 ```bash
-MAVER_MEMORY__CORPUS_ID=so_gate_corpus_35b   # legacy: MEMORY_EXPERIMENT_ID
+export MAVER_MEMORY__CORPUS_ID=so_gate_corpus_35b   # legacy: MEMORY_EXPERIMENT_ID
 ```
 
 ### The file

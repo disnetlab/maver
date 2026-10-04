@@ -2,8 +2,8 @@ schema_version: 1
 name: ma
 label: MA
 description: >
-  The three-role pipeline with every optional mechanism off: read-only diagnosis, a typed
-  remediation plan, and execution-only cluster writes. No verification loop, no second
+  The three-role pipeline with every optional mechanism off: diagnosis, a typed
+  remediation plan, and execution-only Kubernetes API mutations. No verification loop, no second
   opinion, no retrieval, no playbook. This is the reference every mechanism is priced
   against.
 model_profile: qwen3.6-35b-a3b

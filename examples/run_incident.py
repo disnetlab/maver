@@ -8,8 +8,8 @@ the two URLs, which is the point — an operator's own alerting can post the sam
     maver serve &
     python examples/run_incident.py examples/alerts/high-error-rate.json
 
-Pass ``--target-stage diagnose`` to stop after the diagnosis without touching the
-cluster, which is what an environment that grades detection separately asks for.
+Pass ``--target-stage diagnose`` to stop after diagnosis, before the planning and
+execution stages, as an environment that grades detection separately requires.
 """
 
 import argparse
@@ -79,7 +79,7 @@ def _arguments() -> Any:
         "--target-stage",
         default="full",
         choices=("full", "diagnose"),
-        help="How far to run. `diagnose` stops before anything is changed.",
+        help="How far to run. `diagnose` stops before planning and execution.",
     )
     parser.add_argument("--poll", type=float, default=5.0, help="Seconds between polls.")
     parser.add_argument("--timeout", type=float, default=3600.0, help="Seconds to wait.")

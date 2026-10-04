@@ -6,14 +6,24 @@ authors:
   - family-names: Guo
     given-names: Yifeng
     affiliation: The University of Melbourne
+  - family-names: Setiawan
+    given-names: Stefanus Stanley Yoga
+    affiliation: The University of Melbourne
+  - family-names: Islam
+    given-names: Muhammed Tawfiqul
+    affiliation: The University of Melbourne
+  - family-names: Toosi
+    given-names: Adel N.
+    affiliation: The University of Melbourne
 repository-code: "https://github.com/evenodderguy/maver"
 license: MIT
 version: 0.1.0
 abstract: >-
   MAVER diagnoses and repairs live Kubernetes microservice incidents with a pipeline of
-  typed roles driven by a privately served open-weight language model. Diagnosis and
-  planning are read-only; a single execution role holds every write-capable tool and
-  applies its plan under a check-and-set discipline behind a stage-aware approval gate.
+  typed roles driven by a privately served open-weight language model. The default
+  workflow separates diagnosis, planning and execution. A stage-aware approval gate
+  restricts classified Kubernetes API mutations to execution, which applies its plan
+  under a check-and-set discipline. Pod execution requires human approval by default.
   Optional mechanisms add an independent verification role that can hand work back and
   a gated second diagnostic opinion informed by an experience store of past incidents.
 keywords:

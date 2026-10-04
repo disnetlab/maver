@@ -40,6 +40,9 @@ pipelines:
 default_pipeline: quick_check
 ```
 
+Save the configuration above as `configs/local.yaml`, then run from the repository
+root:
+
 ```sh
 export MAVER_CUSTOMISATION=configs/local.yaml
 uv run maver config check

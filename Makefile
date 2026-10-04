@@ -21,9 +21,9 @@ typecheck:  ## Static type check
 test:  ## Run the unit and contract suites
 	uv run pytest -m "not integration"
 
-# Two of these diff the shipped prompts against the prototype tree, which is not part
-# of this repository, and report as skips without it. `-ra` is on in pyproject, so the
-# run says which ones and why rather than passing quietly.
+# The prototype inputs these checks read are frozen under tests/fixtures/prototype.
+# MAVER_PROTOTYPE_ROOT can select a live checkout for a cross-check. Deliberately
+# diverged inputs report their skip reasons through the configured pytest -ra option.
 test-parity:  ## Run only the checks that guard the published numbers
 	uv run pytest -m parity
 
