@@ -41,9 +41,9 @@ holds_constant:
 not_reproducible:
   - >
     Its retrieval. The campaign ran a hybrid ranker blending vector similarity at 0.6 with
-    lexical score at 0.4. Kira ships lexical ranking only, because an offline sweep over
+    lexical score at 0.4. MAVER ships lexical ranking only, because an offline sweep over
     this corpus found it the ceiling, so this file cannot express what that campaign
-    retrieved with. A vector ranker registered in the `kira.rankers` group could.
+    retrieved with. A vector ranker registered in the `maver.rankers` group could.
   - >
     Its decoding, for the same reason as the single-agent arm: a frequency penalty of 0.3
     and a 300-second request timeout, both of which belong to a profile of their own.

@@ -119,8 +119,10 @@ data. Narrow compatibility imports restore previously scheduled approval and lea
 jobs into the MAVER runtime. Compose keeps the old physical workspace-volume names by default; set
 `MAVER_WORKSPACE_VOLUME` or `MAVER_EVAL_WORKSPACE_VOLUME` when the previous deployment
 used a custom Compose project name. Kubernetes adopters should retain their existing
-namespace and PVC bindings in their overlay when upgrading. The repository address
-has not changed, and historical experiment configurations retain their original bytes.
+namespace and PVC bindings in their overlay when upgrading. The repository is now
+[evenodderguy/maver](https://github.com/evenodderguy/maver); update an existing clone with
+`git remote set-url origin https://github.com/evenodderguy/maver.git`.
+Frozen prototype assets retain their original bytes.
 
 Every setting is a field on a nested model, and an unrecognised `MAVER_`-prefixed name
 stops the process rather than being ignored. `uv run maver config show` prints the

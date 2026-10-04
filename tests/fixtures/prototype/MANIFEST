@@ -1,7 +1,7 @@
 Frozen prototype text
 =====================
 
-The parity checks compare what Kira ships against the research prototype that produced
+The parity checks compare what MAVER ships against the research prototype that produced
 the published measurements. That prototype is a private tree: it is not published, and
 it will not sit beside a clone of this repository. Frozen here are exactly the files
 those checks open, byte for byte, in the layout they have there — so the comparison
@@ -35,7 +35,7 @@ tests/unit/test_frozen_prototype.py fails on a file the checks read that is miss
 here, and on a file here that no check reads.
 
 Three of those assets are the AIOpsLab adapter's, which ships its prompts inside its own
-package rather than under src/kira/prompts. They are frozen at the layout they have in
+package rather than under src/maver/prompts. They are frozen at the layout they have in
 the prototype, agent/prompts/runtime/aiopslab/, like every other file here.
 
 The prototype sources of the assets in test_prompt_assets.DELIBERATELY_DIVERGED are
@@ -45,10 +45,10 @@ text nothing compares — the divergence itself is documented at each entry.
 Refreezing
 ----------
 
-Point KIRA_PROTOTYPE_ROOT at a prototype checkout and confirm the checks still pass
+Point MAVER_PROTOTYPE_ROOT at a prototype checkout and confirm the checks still pass
 against it, which is what says the frozen copy and its source have not drifted apart:
 
-    KIRA_PROTOTYPE_ROOT=<checkout> uv run pytest tests/unit/test_prompt_assets.py \
+    MAVER_PROTOTYPE_ROOT=<checkout> uv run pytest tests/unit/test_prompt_assets.py \
         tests/unit/test_projections.py tests/unit/test_toolsets.py
 
 Then copy the same set forward and update commit, date and the exceptions above:
