@@ -6,7 +6,7 @@ authors:
   - family-names: Guo
     given-names: Yifeng
     affiliation: The University of Melbourne
-repository-code: "https://github.com/evenodderguy/kira"
+repository-code: "https://github.com/evenodderguy/maver"
 license: MIT
 version: 0.1.0
 abstract: >-
