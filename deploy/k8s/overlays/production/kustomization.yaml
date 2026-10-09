@@ -5,7 +5,7 @@
 # The image is pinned by digest rather than by tag, because a tag can be moved and two
 # pods under one manifest then run different code. The release fills the digest in:
 #
-#   docker buildx imagetools inspect ghcr.io/evenodderguy/maver:<version> \
+#   docker buildx imagetools inspect ghcr.io/disnetlab/maver:<version> \
 #     --format '{{.Manifest.Digest}}'
 #
 # The placeholder below is all zeros so that applying an unfilled overlay fails at the
@@ -20,7 +20,7 @@ namespace: maver
 resources:
   - ../../base
 images:
-  - name: ghcr.io/evenodderguy/maver
+  - name: ghcr.io/disnetlab/maver
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
 patches:
   - path: configmap-patch.yaml

@@ -10,7 +10,7 @@ namespace: maver
 resources:
   - ../../base
 images:
-  - name: ghcr.io/evenodderguy/maver
+  - name: ghcr.io/disnetlab/maver
     newName: maver
     newTag: local
 patches:

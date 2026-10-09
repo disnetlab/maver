@@ -10,6 +10,9 @@ kind load docker-image maver:local
 kubectl apply -k deploy/k8s/overlays/local
 ```
 
+The build tags target `ghcr.io/disnetlab/maver`; `make image` does not publish them.
+Publish the image to a registry your cluster can pull from before using the production
+overlay.
 For the production overlay, replace its all-zero image digest and add workload-namespace
 role bindings first, then run `kubectl apply -k deploy/k8s/overlays/production`.
 

@@ -39,7 +39,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: maver
-          image: ghcr.io/evenodderguy/maver:0.1.0
+          image: ghcr.io/disnetlab/maver:0.1.0
           imagePullPolicy: IfNotPresent
           # No command or args. The image's CMD is `maver serve`, and it has no
           # entrypoint so that `docker run <image> <anything>` still works; Kubernetes

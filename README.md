@@ -123,8 +123,8 @@ jobs into the MAVER runtime. Compose keeps the old physical workspace-volume nam
 `MAVER_WORKSPACE_VOLUME` or `MAVER_EVAL_WORKSPACE_VOLUME` when the previous deployment
 used a custom Compose project name. Kubernetes adopters should retain their existing
 namespace and PVC bindings in their overlay when upgrading. The repository is now
-[evenodderguy/maver](https://github.com/evenodderguy/maver); update an existing clone with
-`git remote set-url origin https://github.com/evenodderguy/maver.git`.
+[disnetlab/maver](https://github.com/disnetlab/maver); update an existing clone with
+`git remote set-url origin git@github.com:disnetlab/maver.git`.
 Frozen prototype assets retain their original bytes.
 
 Every setting is a field on a nested model, and an unrecognised `MAVER_`-prefixed name
