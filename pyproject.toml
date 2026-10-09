@@ -110,9 +110,9 @@ sregym = "maver.adapters.sregym"
 aiopslab = "maver.adapters.aiopslab:ADAPTER"
 
 [project.urls]
-Homepage = "https://github.com/evenodderguy/maver"
-Repository = "https://github.com/evenodderguy/maver"
-Issues = "https://github.com/evenodderguy/maver/issues"
+Homepage = "https://github.com/disnetlab/maver"
+Repository = "https://github.com/disnetlab/maver"
+Issues = "https://github.com/disnetlab/maver/issues"
 
 [dependency-groups]
 dev = [{ include-group = "lint" }, { include-group = "test" }]

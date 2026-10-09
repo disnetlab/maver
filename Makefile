@@ -76,7 +76,7 @@ image:  ## Build the runtime image
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg REVISION=$(REVISION) \
 	  -f deploy/docker/Dockerfile \
-	  -t ghcr.io/evenodderguy/maver:$(VERSION) \
+	  -t ghcr.io/disnetlab/maver:$(VERSION) \
 	  -t maver:local .
 
 # The same Dockerfile with the sregym extra. k8s-agent:local is an interoperability
@@ -88,7 +88,7 @@ image-eval:  ## Build the evaluation image
 	  --build-arg REVISION=$(REVISION) \
 	  --build-arg EXTRAS=sregym \
 	  -f deploy/docker/Dockerfile \
-	  -t ghcr.io/evenodderguy/maver-sregym:$(VERSION) \
+	  -t ghcr.io/disnetlab/maver-sregym:$(VERSION) \
 	  -t k8s-agent:local .
 
 # Compose cannot run git, so the revision the image records has to be handed to it.

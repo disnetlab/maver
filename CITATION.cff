@@ -15,7 +15,7 @@ authors:
   - family-names: Toosi
     given-names: Adel N.
     affiliation: The University of Melbourne
-repository-code: "https://github.com/evenodderguy/maver"
+repository-code: "https://github.com/disnetlab/maver"
 license: MIT
 version: 0.1.0
 abstract: >-

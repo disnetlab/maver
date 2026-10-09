@@ -18,5 +18,5 @@ resources:
   - networkpolicy.yaml
   - poddisruptionbudget.yaml
 images:
-  - name: ghcr.io/evenodderguy/maver
+  - name: ghcr.io/disnetlab/maver
     newTag: "0.1.0"
