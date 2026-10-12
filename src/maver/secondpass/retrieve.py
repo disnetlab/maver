@@ -19,6 +19,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from maver.memory.ports import SearchHit, SearchScope
+from maver.memory.retrieval import Retriever
 from maver.secondpass.types import (
     NamedQuery,
     Precedent,
@@ -96,11 +97,24 @@ class StorePrecedents:
         if ctx.memory is None:
             raise PrecedentSourceError("no experience store is configured for this run")
 
-        # Exclusion travels with the query rather than being read from the environment
-        # at call time. The prototype over-fetched by the exclusion count and filtered
-        # afterwards, which is a heuristic and not a guarantee: more excluded rows in
-        # the over-fetched head than the count and the final list comes back short.
+        # Exclusion travels with the query. The selected retrieval policy owns whether
+        # it is applied before scoring or after historical lane selection.
         exclude = sorted(ctx.withheld_record_ids)
+        historical = (
+            isinstance(ctx.memory, Retriever) and ctx.memory.retrieval_policy == "historical"
+        )
+        query_metadata = (
+            {
+                key: value
+                for key, value in {
+                    "alert_name": str(ctx.alert.get("alertname") or "").strip(),
+                    "namespace": str(ctx.alert.get("namespace") or "").strip(),
+                }.items()
+                if value
+            }
+            if historical
+            else {}
+        )
 
         seen: set[str] = set()
         merged: list[Precedent] = []
@@ -115,9 +129,21 @@ class StorePrecedents:
                 # the database takes and nothing above can cut it short: a timeout is a
                 # coroutine, and a coroutine cannot run while the loop is inside a
                 # synchronous call. Same call, same reason, as the retrieval tool.
-                hits = await asyncio.to_thread(
-                    ctx.memory.search, query.text, scope=self.scope, exclude=exclude
-                )
+                if historical:
+                    # Keep the narrow custom-store port unchanged. Only the concrete
+                    # historical retriever receives the new optional keyword.
+                    assert isinstance(ctx.memory, Retriever)
+                    hits = await asyncio.to_thread(
+                        ctx.memory.search,
+                        query.text,
+                        scope=self.scope,
+                        exclude=exclude,
+                        query_metadata=query_metadata or None,
+                    )
+                else:
+                    hits = await asyncio.to_thread(
+                        ctx.memory.search, query.text, scope=self.scope, exclude=exclude
+                    )
             except Exception as exc:
                 raise PrecedentSourceError(f"searching for {query.name!r} failed: {exc}") from exc
             hits = hits[: self.k]

@@ -35,8 +35,10 @@ verdict changes the next retrieval and nothing has to be reindexed. See
 """
 
 import logging
+import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from typing import Literal
 
 from maver.contracts.lifecycle import LifecycleState
 from maver.memory.lifecycle import LIFECYCLE_WEIGHTS, weight_for
@@ -46,6 +48,7 @@ from maver.memory.ranking import Bm25Ranker, Ranker
 __all__ = ["Retriever"]
 
 _log = logging.getLogger(__name__)
+_QUERY_WORDS = re.compile(r"[A-Za-z0-9]+")
 
 
 @dataclass(frozen=True)
@@ -79,12 +82,23 @@ class Retriever:
     weights: Mapping[LifecycleState, float] = LIFECYCLE_WEIGHTS
     """What a record in each state is worth, from :func:`maver.memory.lifecycle.resolve_weights`."""
 
+    retrieval_policy: Literal["current", "historical"] = "current"
+    """Historical restores the text ranking policy, not vector or DB candidate parity."""
+
+    def __post_init__(self) -> None:
+        """Refuse historical retrieval with a scorer whose scale is unsupported."""
+        if self.retrieval_policy not in {"current", "historical"}:
+            raise ValueError(f"unsupported retrieval policy {self.retrieval_policy!r}")
+        if self.retrieval_policy == "historical" and type(self.ranker) is not Bm25Ranker:
+            raise ValueError("historical retrieval requires Bm25Ranker")
+
     def search(
         self,
         query: str,
         *,
         scope: SearchScope = "evidence",
         exclude: Sequence[str] = (),
+        query_metadata: Mapping[str, object] | None = None,
     ) -> list[SearchHit]:
         """Return the records worth showing, best first, possibly none.
 
@@ -93,6 +107,8 @@ class Retriever:
             scope: Match against the evidence projection or the lesson.
             exclude: Session ids to withhold. An evaluation harness supplies these so
                 a run cannot retrieve the record its own earlier attempt wrote.
+            query_metadata: Exact incident identifiers for historical boosts. Ignored
+                by the current policy; evaluation labels are never query identifiers.
 
         Returns:
             Hits carrying their scores, at most ``k`` of them.
@@ -101,6 +117,9 @@ class Retriever:
             # Before the backend, not after. A blank query is not a search, and asking
             # a database to narrow a corpus by nothing costs a round trip to be told so.
             return []
+
+        if self.retrieval_policy == "historical":
+            return self._historical_search(query, scope, exclude, query_metadata)
 
         candidates = self.text.candidates(query, limit=self.pool, scope=scope, exclude=exclude)
         if not candidates:
@@ -135,6 +154,58 @@ class Retriever:
         hits.sort(key=lambda hit: (-(hit.score or 0.0), hit.session_id))
         return hits[: self.k]
 
+    def _historical_search(
+        self,
+        query: str,
+        scope: SearchScope,
+        exclude: Sequence[str],
+        query_metadata: Mapping[str, object] | None,
+    ) -> list[SearchHit]:
+        """Apply the prototype's text-only lane over the current backend candidates."""
+        assert isinstance(self.ranker, Bm25Ranker)
+        if self.k <= 0:
+            return []
+        excluded = set(exclude)
+        requested = self.k + len(excluded)
+        lane_limit = max(requested * 10, 50)
+        # Prototype Postgres scores at least its 500-row pool before cutting the text
+        # lane. Keep MAVER's configured pool and candidate generator: SQL/vector parity
+        # cannot be recovered by selecting a policy. Excluded rows still affect IDF.
+        pool_limit = max(self.pool, lane_limit)
+        candidates = self.text.candidates(query, limit=pool_limit, scope=scope)
+        if len(candidates) >= pool_limit:
+            _log.warning(
+                "the candidate pool filled at %d records, so the newest were not scored; "
+                "raise memory.candidate_pool above the corpus size",
+                pool_limit,
+            )
+        candidates.sort(key=lambda memory: memory.session_id)
+        documents = [_document(memory, scope) for memory in candidates]
+        raw_lane = list(replace(self.ranker, min_score_per_token=0).rank(query, documents))[
+            :lane_limit
+        ]
+        states = self._current_states([candidates[index] for index, _ in raw_lane])
+        tokens = len(_QUERY_WORDS.findall(query))
+        ranked: list[tuple[SearchHit, str, int]] = []
+        for rank, (index, raw_score) in enumerate(raw_lane, start=1):
+            memory = candidates[index]
+            state = states.get(memory.session_id) or memory.lifecycle_state
+            boost = _metadata_boost(memory, query_metadata)
+            # The prototype tests raw magnitude after assigning reciprocal ranks;
+            # structured matches can clear a positive floor independently of text.
+            if (
+                self.ranker.min_score_per_token > 0
+                and tokens > 0
+                and abs(raw_score) / tokens < self.ranker.min_score_per_token
+                and boost == 0
+            ):
+                continue
+            score = weight_for(state.lower(), self.weights) / rank + boost
+            ranked.append((_to_hit(memory, scope, score, state), _memory_role(memory, state), rank))
+        ranked.sort(key=lambda item: (-(item[0].score or 0), item[2], item[0].session_id))
+        selected = _select_role_lanes(ranked, requested)
+        return [hit for hit in selected if hit.session_id not in excluded][: self.k]
+
     def open(self, session_id: str) -> SessionMemory | None:
         """Read one stored record whole, including what retrieval withholds.
 
@@ -168,6 +239,55 @@ def _document(memory: SessionMemory, scope: SearchScope) -> str:
     later incident cannot read an answer it has not reached.
     """
     return memory.lesson_text if scope == "lesson" else memory.evidence_text
+
+
+def _metadata_boost(memory: SessionMemory, query: Mapping[str, object] | None) -> float:
+    if not query:
+        return 0.0
+    matches = 0
+    for name in ("alert_name", "fault_category", "affected_resource", "namespace"):
+        wanted = str(query.get(name) or "").strip()
+        stored = str(getattr(memory, name) or "").strip()
+        matches += bool(wanted and stored and wanted == stored)
+    return min(matches * 0.05, 0.15)
+
+
+def _memory_role(memory: SessionMemory, state: str) -> str:
+    label = memory.evaluation_label.lower()
+    if memory.authoritative_correction and memory.evaluation_diagnosis_success is False:
+        return "corrected"
+    if label == "success":
+        return "positive"
+    if label in {"partial", "failure"}:
+        return "negative"
+    if label == "unknown":
+        return "unverified"
+    if state.lower() == "human_verified":
+        return "positive"
+    if state.lower() in {"invalidated", "halted"}:
+        return "negative"
+    return "unverified"
+
+
+def _select_role_lanes(
+    ranked: Sequence[tuple[SearchHit, str, int]], requested: int
+) -> list[SearchHit]:
+    if requested <= 0:
+        return []
+    positive = [hit for hit, role, _ in ranked if role in {"positive", "corrected"}]
+    negative = [hit for hit, role, _ in ranked if role == "negative"]
+    positive_cap = min(requested, (requested * 3 + 4) // 5)
+    negative_cap = min(requested - positive_cap, len(negative))
+    selected = positive[:positive_cap] + negative[:negative_cap]
+    selected_ids = {hit.session_id for hit in selected}
+    for unverified in (False, True):
+        for hit, role, _ in ranked:
+            if len(selected) >= requested:
+                break
+            if (role == "unverified") == unverified and hit.session_id not in selected_ids:
+                selected.append(hit)
+                selected_ids.add(hit.session_id)
+    return selected
 
 
 def _to_hit(

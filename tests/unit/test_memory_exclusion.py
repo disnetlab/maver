@@ -14,10 +14,14 @@ clears the relevance floor, and an exclusion test would pass without excluding a
 import json
 import pathlib
 from collections.abc import AsyncIterator
+from dataclasses import replace
+
+import pytest
 
 from maver.audit.journal import Journal, ListSink
 from maver.memory.factory import build_storage
-from maver.memory.ports import SessionMemory
+from maver.memory.ports import SessionMemory, SessionRecord
+from maver.memory.retrieval import Retriever
 from maver.orchestration.runner import Deployment, incident_context, tool_context_for
 from maver.settings.groups import MemorySettings, ServerSettings, VerifySettings
 from maver.settings.profiles import load_profile
@@ -142,6 +146,76 @@ async def test_a_record_s_labels_are_not_rendered_when_a_role_opens_it(
         assert opened.get("error") is None, "the record is readable; only its labels are not"
         assert "labels" not in opened
         assert "leak-the-answer" not in json.dumps(opened)
+
+
+@pytest.mark.parametrize("policy", ["current", "historical"])
+async def test_role_query_metadata_is_only_supplied_for_historical_context(
+    tmp_path: pathlib.Path,
+    policy: str,
+) -> None:
+    calls = []
+    session_reads = []
+
+    class RecordingRetriever(Retriever):
+        def search(self, query, **kwargs):
+            calls.append(kwargs)
+            return super().search(query, **kwargs)
+
+    class Sessions:
+        def get_session(self, sid):
+            session_reads.append(sid)
+            return SessionRecord(
+                session_id=sid,
+                started_at="",
+                alert={
+                    "alertname": " ProbeFailure ",
+                    "namespace": " shop ",
+                    "fault_category": "PRIVATE_FAULT",
+                    "_groundtruth": "PRIVATE_TRUTH",
+                },
+            )
+
+    deployment = _deployment(tmp_path)
+    async for ctx in _contexts(deployment):
+        retriever = RecordingRetriever(
+            text=ctx.memory.text,
+            ranker=ctx.memory.ranker,
+            retrieval_policy=policy,
+        )
+        ctx = replace(ctx, memory=retriever, sessions=Sessions())
+        result = str(await memory_search(ctx, query=QUERY))
+        assert "PRIVATE_" not in result
+        assert "evaluation_label" not in result
+        if policy == "historical":
+            assert calls[0]["query_metadata"] == {"alert_name": "ProbeFailure", "namespace": "shop"}
+            assert session_reads == ["sess-now"]
+        else:
+            assert "query_metadata" not in calls[0]
+            assert session_reads == []
+
+
+async def test_new_correction_authority_is_private_and_explicit_open_is_unchanged(
+    tmp_path: pathlib.Path,
+) -> None:
+    deployment = _deployment(tmp_path)
+    record = deployment.storage.index.open_record(WITHHELD)
+    deployment.storage.index.upsert_summary(
+        replace(
+            record,
+            authoritative_correction=True,
+            evaluation_label="failure",
+            evaluation_diagnosis_success=False,
+            corrected_cause="the established cause",
+        )
+    )
+    async for ctx in _contexts(deployment):
+        evidence = json.loads(str(await open_memory(ctx, session_id=WITHHELD)))
+        lesson = json.loads(str(await open_memory(ctx, session_id=WITHHELD, scope="lesson")))
+        assert "authoritative_correction" not in evidence
+        assert "authoritative_correction" not in lesson
+        assert "corrected_cause" not in evidence
+        assert lesson["evaluation_label"] == "failure"
+        assert "the established cause" in lesson["corrected_cause"]
 
 
 async def test_the_incident_s_own_set_is_unioned_with_the_process_floor(

@@ -398,7 +398,13 @@ class _SqliteSchema(StoreSchema):
             6: self._add_outcome_feedback,
             7: self._order_outcome_feedback,
             8: self._add_learning_intents,
+            9: self._add_correction_authority,
         }
+
+    def _add_correction_authority(self) -> None:
+        """Record the shared version; authority already fits in the JSON payload."""
+        with self._db.write() as conn:
+            _stamp(conn, 10)
 
     def _add_learning_intents(self) -> None:
         with self._db.write() as conn:
@@ -902,7 +908,12 @@ class SqliteStore:
                     corrected_cause=(
                         stored.corrected_cause if stored.verdict == "corrected" else ""
                     ),
+                    authoritative_correction=bool(
+                        stored.corrected_cause and stored.verdict == "corrected"
+                    ),
                 )
+                if stored.verdict == "corrected":
+                    payload["evaluation_diagnosis_success"] = False
                 conn.execute(
                     "UPDATE records_fts SET payload_json = ? WHERE session_id = ?",
                     (_dumps(payload), feedback.session_id),

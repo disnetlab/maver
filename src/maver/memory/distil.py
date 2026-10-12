@@ -114,6 +114,7 @@ def distil(
         affected_resource=str(root_cause.get("affected_resource") or ""),
         verification_verdict=_verdict(result, packet),
         corrected_cause=projections.corrected_cause,
+        authoritative_correction=projections.authoritative_correction,
         # From the stored signal rather than from the packet, which carries the alert as
         # the roles saw it: the packet is rendered whole into this pass's prompt, so the
         # environment's own keys are filtered out of it long before this point.

@@ -14,6 +14,43 @@ address it are `adapters.sregym.kubectl_proxy_url` and the three timeouts beside
 This page covers recovery-loop configuration and running the memory arms against
 a corpus distilled by an earlier system.
 
+## Retrieval policies
+
+General deployments use `memory.retrieval_policy: current`, which sorts lexical scores
+after lifecycle weighting. The `ma-s` and `ma-s-v` arms select `historical`, the
+prototype's text-only policy. You can also select it explicitly in YAML:
+
+```yaml
+memory:
+  retrieval_policy: historical
+  ranker: bm25
+  top_k: 3
+  min_score_per_token: 0.0
+```
+
+The environment override is `MAVER_MEMORY__RETRIEVAL_POLICY=historical`; use `current`
+to select the general deployment policy. Historical retrieval scores candidates with
+BM25, converts the text lane to reciprocal ranks, applies lifecycle weights and exact
+identifier metadata boosts, then selects positive/corrected, negative and unverified
+role lanes. It over-fetches by the withheld-record count and removes those records
+after ranking, preserving their contribution to the BM25 population. Withheld records
+are never delivered to the agent.
+
+The policy uses `evaluation_label`, `evaluation_diagnosis_success`,
+`authoritative_correction` and lifecycle states to assign lanes. Import the original
+corpus metadata as well as its evidence and lesson text; otherwise lane selection can
+differ. `authoritative_correction` is an explicit boolean, defaulting to false for
+older records; a correction string alone does not establish its authority.
+The second pass supplies the current
+incident's alert name and namespace for metadata boosts. Grades and correction labels
+used by ranking are not added to precedent cards.
+
+This option restores a text retrieval policy, not a historical deployment. The shared
+SQLite/PostgreSQL candidate normalizer remains MAVER's, and vector fusion from older
+campaigns is not implemented by this option. Matching an experiment still requires
+its corpus, exclusions, query construction, depth, lifecycle weights, model profile
+and prompts. Historical policy requires the BM25 ranker.
+
 ## Unattended kubectl exec
 
 `kubectl exec` is useful in SREGym for container-level diagnostics, but it is arbitrary

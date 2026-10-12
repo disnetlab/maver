@@ -24,6 +24,7 @@ settings:
     role_retrieval: false
     learning_enabled: false
     top_k: 3
+    retrieval_policy: historical
     min_score_per_token: 0.0
     second_pass:
       enabled: true

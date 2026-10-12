@@ -60,6 +60,16 @@ def test_the_retrieval_floor_reaches_the_retriever(tmp_path: pathlib.Path) -> No
         stack.close()
 
 
+def test_historical_policy_reaches_the_retriever(tmp_path: pathlib.Path) -> None:
+    stack = build_storage(settings_for(tmp_path, retrieval_policy="historical"))
+    try:
+        assert stack.retriever.retrieval_policy == "historical"
+        stack.index.upsert_summary(a_record("s", "pod failure"))
+        assert stack.retriever.search("pod failure")[0].score == 1.0
+    finally:
+        stack.close()
+
+
 def test_the_candidate_pool_reaches_the_backend_and_an_outgrown_one_says_so(
     tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture
 ) -> None:

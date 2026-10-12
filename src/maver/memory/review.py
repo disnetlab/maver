@@ -15,4 +15,8 @@ def reviewed_memory(
         evaluation_label="operator_confirmed" if verdict == "confirmed" else "operator_rejected",
         evaluation_source="operator",
         corrected_cause=corrected_cause if verdict == "corrected" else "",
+        authoritative_correction=bool(corrected_cause and verdict == "corrected"),
+        evaluation_diagnosis_success=(
+            False if verdict == "corrected" else memory.evaluation_diagnosis_success
+        ),
     )

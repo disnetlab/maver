@@ -274,6 +274,9 @@ class SessionMemory:
     core having to know what the key means.
     """
 
+    authoritative_correction: bool = False
+    """External correction authority, used privately for historical role selection."""
+
 
 @runtime_checkable
 class SessionStore(Protocol):

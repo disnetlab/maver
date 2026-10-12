@@ -34,8 +34,9 @@ _STATES = frozenset(member.value for member in LifecycleState)
 _FIELDS = frozenset(field.name for field in fields(SessionMemory))
 
 _FLAGS = frozenset({"evaluation_diagnosis_success", "evaluation_mitigation_success"})
+_BOOLS = frozenset({"authoritative_correction"})
 _NUMBERS = frozenset({"evaluation_diagnosis_score"})
-_STRINGS = _FIELDS - _FLAGS - _NUMBERS - {"labels"}
+_STRINGS = _FIELDS - _FLAGS - _BOOLS - _NUMBERS - {"labels"}
 """Derived rather than listed, so that a new text field on the record is importable in
 the commit that adds it. A field that is *not* text has to be named above, which is the
 one thing this arrangement makes noisy on purpose."""
@@ -171,6 +172,10 @@ def _record(payload: Mapping[str, Any], number: int) -> SessionMemory:
             values[key] = _text(key, value, number)
         elif key in _FLAGS:
             values[key] = _flag(key, value, number)
+        elif key in _BOOLS:
+            if not isinstance(value, bool):
+                raise MalformedRecord(_wrong(key, value, number, "true or false"))
+            values[key] = value
         elif key in _NUMBERS:
             values[key] = _number(key, value, number)
         else:

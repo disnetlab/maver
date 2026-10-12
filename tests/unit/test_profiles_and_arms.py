@@ -191,6 +191,10 @@ class TestShippedArms:
             memory = load_arm(name, ARMS).settings["memory"]
             assert memory["enabled"] and memory["min_score_per_token"] == 0.0
 
+    @pytest.mark.parametrize("name", ["ma-s", "ma-s-v"])
+    def test_text_memory_arms_select_historical_ordering(self, name: str) -> None:
+        assert load_arm(name, ARMS).settings["memory"]["retrieval_policy"] == "historical"
+
     def test_every_published_configuration_has_an_arm_file(self) -> None:
         """The manuscript publishes four pipeline configurations and a content-test
         partner. The combined one carries the interaction between the two mechanisms and

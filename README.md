@@ -94,6 +94,11 @@ so the manuscript's measurements should not be attributed to the current release
 identifies changes to prompts, submission handling and other experimental conditions.
 Reproducing a study requires its recorded source revision, configuration and data.
 
+The `ma-s` and `ma-s-v` arms select `memory.retrieval_policy: historical` to restore
+the prototype's text-only retrieval ordering. General deployments use `current`:
+lifecycle-weighted lexical scores. See [retrieval policies](docs/adapters/sregym.md#retrieval-policies)
+for selection, required metadata and the limits of historical replay.
+
 ## Running it
 
 ```
@@ -307,7 +312,11 @@ imply.
 
 ## Citing
 
-See [CITATION.cff](CITATION.cff).
+Use [CITATION.cff](CITATION.cff) from the release you used, and include its version
+and tag or full commit SHA in your citation. Cite the paper separately for its
+experimental results: those measurements came from the research prototype.
+The [release guide](docs/releasing.md) includes suggested release notes and the
+metadata and validation steps for publishing a citable software artifact.
 
 ## Licence
 

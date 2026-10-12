@@ -90,6 +90,7 @@ def build_storage(settings: Settings) -> StorageStack:
             text=store.records,
             k=settings.memory.top_k,
             pool=settings.memory.candidate_pool,
+            retrieval_policy=settings.memory.retrieval_policy,
             # Built here rather than defaulted, because the ranker decides how many
             # precedents a run is served and a campaign that ran under a different
             # relevance floor has no other way to say so.

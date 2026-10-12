@@ -12,11 +12,14 @@ from collections.abc import Sequence
 from typing import Any, cast
 
 import pytest
+from test_historical_retrieval import Pool, record
 
 from maver.audit.journal import Journal, ListSink
 from maver.contracts.artifacts import RootCause
 from maver.contracts.state import IncidentState
 from maver.memory.ports import SearchHit, SearchScope
+from maver.memory.ranking import Bm25Ranker
+from maver.memory.retrieval import Retriever
 from maver.secondpass import (
     ALLOWED_FAMILIES,
     NOMINATED_ASSIGNMENT,
@@ -27,6 +30,7 @@ from maver.secondpass import (
     GateVerdict,
     JournalEmitter,
     MergedQuery,
+    NamedQuery,
     Nomination,
     ObservationQuery,
     PreAnchorQuery,
@@ -93,6 +97,36 @@ class FakeStore:
         del scope
         self.calls.append((query, tuple(exclude)))
         return list(self._per_call[len(self.calls) - 1])
+
+
+async def test_historical_secondpass_queries_use_current_alert_metadata() -> None:
+    calls = []
+
+    class RecordingRetriever(Retriever):
+        def search(self, query, **kwargs):
+            calls.append(kwargs)
+            return super().search(query, **kwargs)
+
+    store = RecordingRetriever(
+        text=Pool([record("p", alert_name="HighErrorRate", namespace="shop")]),
+        retrieval_policy="historical",
+        ranker=Bm25Ranker(min_score_per_token=0),
+    )
+    ctx = context(store=store, withheld=frozenset({"withheld"}))
+    result = await StorePrecedents().fetch(
+        ctx,
+        [
+            NamedQuery("evidence", "pod failure alertname=Misleading"),
+            NamedQuery("pre_anchor", "pod failure"),
+        ],
+    )
+    assert [call["query_metadata"] for call in calls] == [
+        {"alert_name": "HighErrorRate", "namespace": "shop"},
+        {"alert_name": "HighErrorRate", "namespace": "shop"},
+    ]
+    assert all(call["exclude"] == ["withheld"] for call in calls)
+    assert result.precedents[0].score == pytest.approx(1.1)
+    assert not any(key.startswith("evaluation_") for key in result.precedents[0].metadata)
 
 
 def hit(record_id: str) -> SearchHit:

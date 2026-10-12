@@ -33,9 +33,10 @@ keep its clock while it waits.
 import asyncio
 import json
 from dataclasses import asdict
-from typing import Any
+from typing import Any, cast
 
 from maver.memory.ports import SearchScope
+from maver.memory.retrieval import Retriever
 from maver.tools.context import ToolContext
 from maver.tools.errors import tool_error
 from maver.tools.policy import read_only
@@ -125,9 +126,35 @@ async def memory_search(
     # A model asking for more than the configuration allows still gets the
     # configured cap, so the number of precedents in context stays a controlled
     # variable rather than something the model can vary mid-run.
-    hits = await asyncio.to_thread(
-        ctx.memory.search, query, scope=scope, exclude=ctx.memory_exclude
-    )
+    # Tool contexts can carry duck-typed custom stores at runtime as well as Retriever.
+    memory = cast(object, ctx.memory)
+    if isinstance(memory, Retriever) and memory.retrieval_policy == "historical":
+        # No new model arguments: use only the current incident's known identifiers.
+        # This is a context-based subset of the prototype's generic role metadata API.
+        alert: dict[str, Any] = {}
+        if ctx.sessions is not None:
+            session = await asyncio.to_thread(ctx.sessions.get_session, ctx.session_id)
+            if session is not None:
+                alert = session.alert
+        query_metadata = {
+            name: value
+            for name, value in {
+                "alert_name": str(alert.get("alertname") or "").strip(),
+                "namespace": str(alert.get("namespace") or ctx.scope.namespace or "").strip(),
+            }.items()
+            if value
+        }
+        hits = await asyncio.to_thread(
+            memory.search,
+            query,
+            scope=scope,
+            exclude=ctx.memory_exclude,
+            query_metadata=query_metadata or None,
+        )
+    else:
+        hits = await asyncio.to_thread(
+            ctx.memory.search, query, scope=scope, exclude=ctx.memory_exclude
+        )
     if n_results is not None and n_results > 0:
         hits = hits[:n_results]
     if not hits:
@@ -211,6 +238,8 @@ async def open_memory(
     # The environment's own keys, and the only place a whole record is rendered for a
     # model. Under an evaluation harness one of them is the ground-truth fault label.
     payload.pop("labels", None)
+
+    payload.pop("authoritative_correction", None)
 
     if not payload.get("verification_verdict"):
         payload.pop("verification_verdict", None)

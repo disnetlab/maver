@@ -38,6 +38,7 @@ from typing import Any
 
 from maver.contracts.artifacts import ExecutionResult, RootCause
 from maver.contracts.events import InterventionEvent
+from maver.contracts.parsing import decode_container
 from maver.llm.types import Message, ToolChoice
 from maver.prompts.loader import compose_role_prompt, read_runtime, render
 from maver.roles.base import RoleContext, RoleOutcome, RoleSpec
@@ -129,7 +130,8 @@ def _submit_guard(
         return read_runtime("execution", "submit_without_command.txt")
     if not str(args.get("final_state_summary") or "").strip():
         return read_runtime("execution", "submit_without_summary.txt")
-    steps = args.get("steps")
+    # Match ExecutionResult's container decoding; item semantics remain schema-validated.
+    steps = decode_container(args.get("steps"))
     if not isinstance(steps, list) or len(steps) == 0:
         return read_runtime("execution", "submit_without_steps.txt")
     return None
