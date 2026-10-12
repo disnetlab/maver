@@ -20,8 +20,9 @@ license: MIT
 version: 0.1.0
 abstract: >-
   MAVER diagnoses and repairs live Kubernetes microservice incidents with a pipeline of
-  typed roles driven by a privately served open-weight language model. The default
-  workflow separates diagnosis, planning and execution. A stage-aware approval gate
+  typed roles driven by a configurable language model. The default model profile
+  targets a privately served open-weight model; hosted providers are also supported.
+  The default workflow separates diagnosis, planning and execution. A stage-aware approval gate
   restricts classified Kubernetes API mutations to execution, which applies its plan
   under a check-and-set discipline. Pod execution requires human approval by default.
   Optional mechanisms add an independent verification role that can hand work back and

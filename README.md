@@ -312,7 +312,11 @@ imply.
 
 ## Citing
 
-See [CITATION.cff](CITATION.cff).
+Use [CITATION.cff](CITATION.cff) from the release you used, and include its version
+and tag or full commit SHA in your citation. Cite the paper separately for its
+experimental results: those measurements came from the research prototype.
+The [release guide](docs/releasing.md) includes suggested release notes and the
+metadata and validation steps for publishing a citable software artifact.
 
 ## Licence
 

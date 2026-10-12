@@ -26,3 +26,5 @@ Database changes should also pass `make test-postgres` with `POSTGRES_TEST_DSN`
 pointing to a test database. When changing dependencies, refresh both `uv.lock` and
 `requirements.txt` with `make lock`; CI checks the exported requirements against
 the lock.
+
+For a citable software release, follow [the release guide](docs/releasing.md).
