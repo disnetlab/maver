@@ -18,6 +18,7 @@ authors:
 repository-code: "https://github.com/disnetlab/maver"
 license: MIT
 version: 0.1.0
+date-released: 2026-10-12
 abstract: >-
   MAVER diagnoses and repairs live Kubernetes microservice incidents with a pipeline of
   typed roles driven by a configurable language model. The default model profile
