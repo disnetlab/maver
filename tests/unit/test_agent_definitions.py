@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 import yaml
 from pydantic import ConfigDict, Field, ValidationError
+from test_runner import deployment
 
 from maver.adapters.base import RoleOverlay
 from maver.agents import (
@@ -22,12 +23,21 @@ from maver.agents import (
     builtin_registry,
 )
 from maver.audit.journal import Journal, ListSink
-from maver.contracts.artifacts import Plan
+from maver.contracts.artifacts import Plan, RootCause
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from maver.middleware.base import MiddlewareStack, TurnContext
+from maver.orchestration.runner import run_incident
+from maver.orchestration.runtime import load_runtime
+from maver.pipelines import (
+    PipelineCatalog,
+    StageDefinition,
+    Transition,
+    WorkflowDefinition,
+)
+from maver.pipelines import builtin_registry as pipeline_registry
 from maver.roles import policy, rca
 from maver.roles.base import RoleContext, RoleOutcome
-from maver.settings.groups import MemorySettings, PipelineSettings
+from maver.settings.groups import MemorySettings, PipelineSettings, PromptSettings
 from maver.settings.profiles import load_profile
 from maver.settings.root import Settings
 from maver.tools.allowlists import ROLE_TOOLSETS
@@ -406,3 +416,151 @@ def test_prompt_override_is_validated_before_runtime(tmp_path: Path) -> None:
     definition = builtin_registry().resolve("database", entry, override_dir=tmp_path)
     assert definition.spec.prompt == "database"
     assert definition.spec.name == "rca"
+
+
+async def test_selected_pipeline_composes_inherited_yaml_agent_and_private_middleware(
+    tmp_path: Path,
+) -> None:
+    """Exercise the runner boundary between inheritance, selection, prompts and state."""
+
+    class ReviewConfig(ComponentConfig):
+        prefix: str = "Python default"
+
+    class Review:
+        name = "review"
+
+        def __init__(self, prefix: str) -> None:
+            self.prefix = prefix
+            self.calls = 0
+
+        def before_model(self, ctx: TurnContext, request: ModelRequest) -> ModelRequest:
+            assert ctx.run_state is not None and ctx.agent_state is not None
+            self.calls += 1
+            ctx.agent_state.middleware.update(
+                calls=self.calls, token=ctx.run_state.metadata["token"]
+            )
+            ctx.run_state.middleware["last_stage"] = ctx.agent_state.stage
+            ctx.run_state.add_context(
+                f"Review context for {ctx.agent_state.stage}",
+                source=self.name,
+                recipient=ctx.agent_state.id,
+            )
+            return replace(request, system=f"{self.prefix}\n{request.system}")
+
+    def review_factory(config: ComponentConfig, ctx: RoleContext) -> Review:
+        assert isinstance(config, ReviewConfig)
+        return Review(config.prefix)
+
+    class Route:
+        def select(self, alert: Any, metadata: Any) -> str:
+            return metadata["route"]
+
+    prompts = tmp_path / "prompts"
+    (prompts / "roles").mkdir(parents=True)
+    (prompts / "roles/database_final.txt").write_text("Final database prompt.")
+    entries = yaml.safe_load(
+        """
+        agents:
+          final_database:
+            implementation: large_database
+            config:
+              schemas: [orders, customers]
+              prompt: database_final
+              tools: [submit_root_cause]
+              middleware:
+                - name: review
+                  config: {prefix: YAML review prefix}
+        pipelines:
+          fallback:
+            implementation: diagnose
+            agents: {rca: final_database}
+          selected_review:
+            implementation: two_reviews
+            agents: {first: final_database, second: final_database}
+        """
+    )
+    registry = builtin_registry()
+    registry.register("large_database", LargeDatabaseAgent)
+    registry.register_middleware("review", review_factory, config_type=ReviewConfig)
+    definitions = registry.resolve_many(entries["agents"], override_dir=prompts)
+    workflows = pipeline_registry()
+    workflows.register(
+        WorkflowDefinition(
+            name="two_reviews",
+            version="1",
+            entry="first",
+            stages=tuple(
+                StageDefinition(stage, "rca", RootCause, "root_cause")
+                for stage in ("first", "second")
+            ),
+            transitions={
+                "first": Transition(("second",), lambda s, c, p: "second"),
+                "second": Transition((None,), lambda s, c, p: None),
+            },
+        )
+    )
+    catalog = PipelineCatalog(
+        workflows.resolve_many(entries["pipelines"], agents=definitions), default="fallback"
+    )
+    deploy, sink, _ = deployment(tmp_path, pipeline={"auto_snapshot": False})
+    model = Recorder()
+    deploy = replace(
+        deploy,
+        completion=model,
+        pipelines=catalog,
+        pipeline_selectors=(Route(),),
+        settings=deploy.settings.model_copy(
+            update={"prompts": PromptSettings(override_dir=prompts)}
+        ),
+    )
+    metadata = {"route": "selected_review", "token": "private-composition-token"}
+    try:
+        session = deploy.storage.sessions.create_session(FIXTURE["alert"])
+        final = await run_incident(
+            FIXTURE["alert"],
+            session.session_id,
+            deploy,
+            fire_post_hooks=False,
+            metadata=metadata,
+        )
+        runtime = final["runtime"]
+        assert runtime.selection["name"] == "selected_review"
+        assert runtime.selection["source"] == "selector"
+        assert runtime.steps == 2 and final["root_cause"] is not None
+        first, second = runtime.agents.values()
+        assert first.id != second.id and first.messages is not second.messages
+        assert [first.stage, second.stage] == ["first", "second"]
+        assert first.definition == second.definition == "final_database"
+        assert first.role == second.role == "rca"
+        assert (
+            first.middleware
+            == second.middleware
+            == {
+                "calls": 1,
+                "token": metadata["token"],
+            }
+        )
+        assert runtime.middleware == {"last_stage": "second"}
+        assert len(model.requests) == 2
+        for stage, other, request in zip(
+            ("first", "second"), ("second", "first"), model.requests, strict=True
+        ):
+            assert request.system.startswith("YAML review prefix\n")
+            assert "Final database prompt." in request.system
+            messages = json.dumps(request.messages)
+            assert "Schemas: orders, customers" in messages
+            assert f"Review context for {stage}" in messages
+            assert f"Review context for {other}" not in messages
+            assert all(message["role"] == "user" for message in request.messages)
+            assert metadata["token"] not in request.system + messages
+            assert [tool.name for tool in request.tools] == ["submit_root_cause"]
+        assert runtime.metadata == metadata
+        assert load_runtime(deploy.storage.sessions, session.session_id) == runtime
+        assert definitions["final_database"].config.limits.max_turns == 20
+        assert LargeDatabaseConfig().schemas == ["orders"]
+        assert not any(
+            event.payload.kind == "intervention" and event.payload.control == "hook_failure"
+            for event in sink.events
+        )
+    finally:
+        deploy.storage.close()
