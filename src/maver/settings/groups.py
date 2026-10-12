@@ -660,6 +660,16 @@ class MemorySettings(SettingsGroup):
             "namespaces as a constant inside the memory layer."
         ),
     )
+    retrieval_policy: Literal["current", "historical"] = setting(
+        "current",
+        "MAVER_MEMORY__RETRIEVAL_POLICY",
+        description=(
+            "Current weighted raw scores, or the historical text-only BM25 policy: "
+            "reciprocal rank, identifier boosts, role lanes and post-ranking exclusion. "
+            "Historical requires bm25 and does not reproduce vector or historical "
+            "database candidate generation."
+        ),
+    )
     ranker: str = setting(
         "bm25",
         "MAVER_MEMORY__RANKER",
@@ -680,6 +690,13 @@ class MemorySettings(SettingsGroup):
             "Present so a frozen arm can pin the exact ranking a past campaign used."
         ),
     )
+
+    @model_validator(mode="after")
+    def _historical_requires_bm25(self) -> "MemorySettings":
+        """Reject unsupported historical scoring instead of silently substituting it."""
+        if self.retrieval_policy == "historical" and self.ranker != "bm25":
+            raise ValueError("memory.retrieval_policy='historical' requires memory.ranker='bm25'")
+        return self
 
     @model_validator(mode="after")
     def _postgres_needs_a_dsn(self) -> "MemorySettings":

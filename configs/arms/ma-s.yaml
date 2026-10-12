@@ -32,6 +32,9 @@ settings:
     role_retrieval: false
     learning_enabled: false
     top_k: 3
+    # Restore the prototype's text-only rank fusion, metadata boosts, role lanes,
+    # and filtering after ranking. General deployments default to current ranking.
+    retrieval_policy: historical
     # Pinned to the value the cells ran at, which is also the shipped default: no
     # archived environment set a relevance floor, so every text match was admitted.
     # Named here so the arm still says so if the default ever moves.

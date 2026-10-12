@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Add selectable `memory.retrieval_policy: historical` for the prototype's text-only
+  retrieval: reciprocal ranks, lifecycle weights, identifier boosts, role lanes and
+  exclusion after ranking. The `ma-s` and `ma-s-v` arms select it; general deployments
+  retain `current` ranking. This restores a retrieval policy, not the complete historical
+  experiment environment or its vector retrieval variants.
+- Preserve explicit `authoritative_correction` provenance in corpus imports and storage
+  (store layout version 10). Existing records default to false; upgrades do not infer
+  external authority from a stored correction string.
+
 Schema changes and model-facing text. `SCHEMA_VERSION` in `src/maver/contracts/__init__.py` versions the
 submission schemas and the event contract together, and every run records it in its
 configuration snapshot.

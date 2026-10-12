@@ -368,8 +368,9 @@ class MemoryStoreContract:
         # A session that is not there is not an error, as it is not anywhere else here.
         store.set_state("no-such-session", LifecycleState.INVALIDATED)
 
+    @pytest.mark.parametrize("diagnosis_success", [None, True, False])
     def test_feedback_order_and_memory_metadata_are_one_store_contract(
-        self, store: OperationalStore, records: TextSearch
+        self, store: OperationalStore, records: TextSearch, diagnosis_success: bool | None
     ) -> None:
         """Clock order cannot disagree with the session and indexed review standing."""
         session = store.create_session({"alertname": "bad-port"})
@@ -380,6 +381,7 @@ class MemoryStoreContract:
             evidence="pods failed readiness",
             lesson="suspected image fault",
             lifecycle_state=LifecycleState.TENTATIVE_SUCCESS.value,
+            evaluation_diagnosis_success=diagnosis_success,
         )
         records.upsert_summary(original)
         first = store.record_feedback(
@@ -401,6 +403,8 @@ class MemoryStoreContract:
         assert session_after_first.state == LifecycleState.INVALIDATED.value
         assert memory_after_first.lifecycle_state == session_after_first.state
         assert memory_after_first.corrected_cause == "wrong targetPort"
+        assert memory_after_first.authoritative_correction is True
+        assert memory_after_first.evaluation_diagnosis_success is False
         assert memory_after_first.evidence_text == original.evidence_text
         assert memory_after_first.lesson_text == original.lesson_text
 
@@ -423,6 +427,8 @@ class MemoryStoreContract:
         assert memory_after_second is not None
         assert memory_after_second.lifecycle_state == LifecycleState.HUMAN_VERIFIED.value
         assert memory_after_second.corrected_cause == ""
+        assert memory_after_second.authoritative_correction is False
+        assert memory_after_second.evaluation_diagnosis_success is False
 
         # A delayed Learning write carrying the old state cannot restore it.
         records.upsert_summary(original)
@@ -430,13 +436,19 @@ class MemoryStoreContract:
         assert refreshed is not None
         assert refreshed.lifecycle_state == LifecycleState.HUMAN_VERIFIED.value
         assert refreshed.evaluation_source == "operator"
+        assert refreshed.evaluation_diagnosis_success is diagnosis_success
 
+    @pytest.mark.parametrize("diagnosis_success", [None, True, False])
     def test_guarded_corpus_write_preserves_record_when_review_changes(
-        self, store: OperationalStore, records: TextSearch
+        self, store: OperationalStore, records: TextSearch, diagnosis_success: bool | None
     ) -> None:
         session = store.create_session({})
         store.set_run_status(session.session_id, RunStatus.COMPLETED)
-        original = a_record(session.session_id, lesson="original lesson")
+        original = a_record(
+            session.session_id,
+            lesson="original lesson",
+            evaluation_diagnosis_success=diagnosis_success,
+        )
         records.upsert_summary(original, expected_feedback_sequence=0)
         review = store.record_feedback(
             OutcomeFeedback(
@@ -451,7 +463,11 @@ class MemoryStoreContract:
             )
         )
         reviewed = records.open_record(session.session_id)
-        replacement = a_record(session.session_id, lesson="replacement lesson")
+        replacement = a_record(
+            session.session_id,
+            lesson="replacement lesson",
+            evaluation_diagnosis_success=diagnosis_success,
+        )
         with pytest.raises(FeedbackChangedError):
             records.upsert_summary(replacement, expected_feedback_sequence=0)
         assert records.open_record(session.session_id) == reviewed
@@ -460,6 +476,8 @@ class MemoryStoreContract:
         written = records.open_record(session.session_id)
         assert written.lesson_text == "replacement lesson"
         assert written.corrected_cause == "wrong selector"
+        assert written.authoritative_correction is True
+        assert written.evaluation_diagnosis_success is False
         with pytest.raises(FeedbackChangedError):
             records.upsert_summary(a_record("missing-session"), expected_feedback_sequence=0)
         assert records.open_record("missing-session") is None
@@ -817,6 +835,7 @@ class MemoryStoreContract:
             evaluation_diagnosis_success=True,
             evaluation_diagnosis_score=0.9,
             evaluation_mitigation_success=False,
+            authoritative_correction=True,
         )
         records.upsert_summary(memory)
 

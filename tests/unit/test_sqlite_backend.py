@@ -72,6 +72,31 @@ def test_version_eight_adds_learning_intents(tmp_path: pathlib.Path) -> None:
         assert reopened.get_session(session.session_id) is not None
 
 
+def test_version_nine_preserves_records_without_inventing_correction_authority(
+    tmp_path: pathlib.Path,
+) -> None:
+    database = tmp_path / "version-nine.sqlite"
+    with contextlib.closing(SqliteStore(database)) as store:
+        store.records.upsert_summary(a_record("old", evidence="pod failure"))
+    with contextlib.closing(sqlite3.connect(database)) as conn:
+        payload = json.loads(
+            conn.execute(
+                "SELECT payload_json FROM records_fts WHERE session_id = 'old'"
+            ).fetchone()[0]
+        )
+        payload.pop("authoritative_correction", None)
+        conn.execute("UPDATE records_fts SET payload_json = ?", (json.dumps(payload),))
+        conn.execute("UPDATE schema_version SET version = 9")
+        conn.commit()
+    with contextlib.closing(SqliteStore(database)) as reopened:
+        assert reopened.schema_version == STORE_SCHEMA_VERSION
+        old = reopened.records.open_record("old")
+        assert old is not None and old.authoritative_correction is False
+        reopened.records.upsert_summary(dataclasses.replace(old, authoritative_correction=True))
+    with contextlib.closing(SqliteStore(database)) as reopened:
+        assert reopened.records.open_record("old").authoritative_correction is True
+
+
 def test_a_file_database_is_created_and_survives_reopening(tmp_path: pathlib.Path) -> None:
     """The one thing the contract cannot cover, because it runs against ":memory:"."""
     path = tmp_path / "nested" / "maver.db"

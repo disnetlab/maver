@@ -23,6 +23,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, contextmanager
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -115,6 +116,21 @@ def test_version_eight_adds_learning_intents(schema: str) -> None:
         assert reopened.schema_version == STORE_SCHEMA_VERSION
         assert reopened.pending_learning_intents() == []
         assert reopened.get_session(session.session_id) is not None
+
+
+def test_version_nine_adds_explicit_correction_authority(schema: str) -> None:
+    with closing(PostgresStore(DSN, schema=schema)) as store:
+        store.records.upsert_summary(a_record("old", evidence="pod failure"))
+    with _raw_connection(schema) as conn:
+        conn.execute("ALTER TABLE records DROP COLUMN authoritative_correction")
+        conn.execute("UPDATE schema_version SET version = 9")
+    with closing(PostgresStore(DSN, schema=schema)) as reopened:
+        assert reopened.schema_version == STORE_SCHEMA_VERSION
+        old = reopened.records.open_record("old")
+        assert old is not None and old.authoritative_correction is False
+        reopened.records.upsert_summary(replace(old, authoritative_correction=True))
+    with closing(PostgresStore(DSN, schema=schema)) as reopened:
+        assert reopened.records.open_record("old").authoritative_correction is True
 
 
 def test_old_feedback_table_accepts_new_reviews_after_sequence_migration(schema: str) -> None:

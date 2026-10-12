@@ -94,6 +94,11 @@ so the manuscript's measurements should not be attributed to the current release
 identifies changes to prompts, submission handling and other experimental conditions.
 Reproducing a study requires its recorded source revision, configuration and data.
 
+The `ma-s` and `ma-s-v` arms select `memory.retrieval_policy: historical` to restore
+the prototype's text-only retrieval ordering. General deployments use `current`:
+lifecycle-weighted lexical scores. See [retrieval policies](docs/adapters/sregym.md#retrieval-policies)
+for selection, required metadata and the limits of historical replay.
+
 ## Running it
 
 ```

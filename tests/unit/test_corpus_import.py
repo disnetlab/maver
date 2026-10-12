@@ -38,6 +38,7 @@ RECORD: dict[str, Any] = {
     "evaluation_diagnosis_score": 0.75,
     "evaluation_mitigation_success": False,
     "corrected_cause": "the Service selector was right and the target port was not",
+    "authoritative_correction": True,
     "labels": {"external_key": "k8s_target_port-misconfig"},
 }
 
@@ -87,10 +88,22 @@ def test_an_imported_record_is_retrieved_by_the_normal_path(tmp_path: pathlib.Pa
     assert stored is not None
     # Every field the file carried, including the ones retrieval withholds from a hit.
     assert stored.corrected_cause == RECORD["corrected_cause"]
+    assert stored.authoritative_correction is True
     assert stored.evaluation_diagnosis_score == 0.75
     assert stored.evaluation_mitigation_success is False
     assert stored.labels == {"external_key": "k8s_target_port-misconfig"}
     storage.close()
+
+
+def test_missing_correction_authority_defaults_false() -> None:
+    record = parse_records(json.dumps(OTHER))[0]
+    assert record.authoritative_correction is False
+
+
+@pytest.mark.parametrize("flag", [None, 0, 1, "false", {}, []])
+def test_imported_correction_authority_requires_a_boolean(flag: Any) -> None:
+    with pytest.raises(MalformedRecord, match="authoritative_correction must be true or false"):
+        parse_records(json.dumps({**RECORD, "authoritative_correction": flag}))
 
 
 def test_an_import_is_keyed_by_session_and_replaces_only_when_told_to(

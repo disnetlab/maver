@@ -302,6 +302,7 @@ CREATE TABLE IF NOT EXISTS records (
     evaluation_diagnosis_score    DOUBLE PRECISION,
     evaluation_mitigation_success BOOLEAN,
     corrected_cause               TEXT NOT NULL DEFAULT '',
+    authoritative_correction      BOOLEAN NOT NULL DEFAULT FALSE,
     labels                        JSONB NOT NULL DEFAULT '{{}}'::jsonb,
     evidence_terms                TEXT NOT NULL DEFAULT '',
     lesson_terms                  TEXT NOT NULL DEFAULT '',
@@ -649,6 +650,14 @@ class _PostgresSchema(StoreSchema):
             ).fetchall()
         if columns and "runtime" not in {row["attname"] for row in columns}:
             return 3
+        with self._db.read() as conn:
+            record = conn.execute("SELECT to_regclass('records') AS relation").fetchone()
+            authority = conn.execute(
+                "SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('records') "
+                "AND attname = 'authoritative_correction' AND NOT attisdropped"
+            ).fetchone()
+        if record is not None and record["relation"] is not None and authority is None:
+            return 9
         return STORE_SCHEMA_VERSION
 
     def _has_labels(self) -> bool:
@@ -675,7 +684,17 @@ class _PostgresSchema(StoreSchema):
             6: self._add_outcome_feedback,
             7: self._order_outcome_feedback,
             8: self._add_learning_intents,
+            9: self._add_correction_authority,
         }
+
+    def _add_correction_authority(self) -> None:
+        """Preserve explicit authority; old records are not inferred to be corrected."""
+        with self._db.write() as conn:
+            conn.execute(
+                "ALTER TABLE IF EXISTS records ADD COLUMN IF NOT EXISTS "
+                "authoritative_correction BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+            _stamp(conn, 10)
 
     def _add_learning_intents(self) -> None:
         with self._db.write() as conn:
@@ -1168,12 +1187,16 @@ class PostgresStore:
             )
             conn.execute(
                 "UPDATE records SET lifecycle_state = %s, evaluation_label = %s, "
-                "evaluation_source = 'operator', corrected_cause = %s "
+                "evaluation_source = 'operator', corrected_cause = %s, authoritative_correction = %s, "
+                "evaluation_diagnosis_success = CASE WHEN %s THEN FALSE "
+                "ELSE evaluation_diagnosis_success END "
                 "WHERE corpus_id = %s AND session_id = %s",
                 (
                     target.value,
                     "operator_confirmed" if stored.verdict == "confirmed" else "operator_rejected",
                     stored.corrected_cause if stored.verdict == "corrected" else "",
+                    bool(stored.corrected_cause and stored.verdict == "corrected"),
+                    stored.verdict == "corrected",
                     self.corpus_id,
                     feedback.session_id,
                 ),
