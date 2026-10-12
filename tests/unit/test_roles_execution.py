@@ -14,8 +14,8 @@ from typing import Any
 import pytest
 
 from maver.audit.journal import Journal, ListSink
-from maver.contracts.artifacts import Plan, RootCause
-from maver.contracts.events import InterventionEvent
+from maver.contracts.artifacts import ExecutionResult, Plan, RootCause
+from maver.contracts.events import InterventionEvent, SubmissionEvent
 from maver.llm.types import ModelRequest, ModelResponse, ToolCall, Usage
 from maver.middleware.base import MiddlewareStack
 from maver.prompts.loader import read_runtime
@@ -268,6 +268,10 @@ def test_the_host_repair_needs_both_the_classification_and_the_evidence(
         ({}, "before running a single command"),
         ({"final_state_summary": "  "}, "non-empty final_state_summary"),
         ({"final_state_summary": "patched", "steps": []}, "at least one step observation"),
+        ({"final_state_summary": "patched", "steps": "[]"}, "at least one step observation"),
+        ({"final_state_summary": "patched", "steps": "["}, "at least one step observation"),
+        ({"final_state_summary": "patched", "steps": "{}"}, "at least one step observation"),
+        ({"final_state_summary": "patched", "steps": "null"}, "at least one step observation"),
     ],
 )
 def test_the_submit_guard_refuses_a_remediation_that_was_never_attempted(
@@ -340,6 +344,121 @@ async def test_a_run_the_guard_passed_carries_no_bypass(tmp_path: pathlib.Path) 
 
     assert outcome.artifact is not None
     assert outcome.metadata["submit_guard"] == {"rejections": 0, "bypassed": False}
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [json.dumps(VALID_RESULT["steps"]), json.dumps([json.dumps(VALID_RESULT["steps"][0])])],
+    ids=["string-array", "string-array-with-string-item"],
+)
+async def test_string_steps_are_accepted_on_the_first_submission(
+    tmp_path: pathlib.Path, steps: str
+) -> None:
+    submission = {**VALID_RESULT, "steps": steps}
+    sink = ListSink()
+    # Enough responses to reach the old bypass, so the regression fails on false
+    # retries rather than an exhausted fake model.
+    ctx, model = context(tmp_path, model=FakeModel(*[submission] * 3), sink=sink)
+
+    outcome = await execution.EXECUTION.run(ctx)
+
+    assert len(model.requests) == 2  # Opening read, then the first submit.
+    assert outcome.artifact == ExecutionResult.model_validate(submission)
+    assert outcome.metadata["submit_guard"] == {"rejections": 0, "bypassed": False}
+    assert [
+        (e.payload.accepted, e.payload.attempt)
+        for e in sink.events
+        if isinstance(e.payload, SubmissionEvent) and e.payload.source == "role_loop"
+    ] == [(True, 1)]
+    assert not any(
+        isinstance(e.payload, InterventionEvent) and e.payload.control == "submit_guard"
+        for e in sink.events
+    )
+
+
+def test_string_steps_do_not_bypass_the_no_command_guard() -> None:
+    submission = {**VALID_RESULT, "steps": json.dumps(VALID_RESULT["steps"])}
+
+    assert execution._submit_guard(submission, 0, []) == REFUSAL
+
+
+@pytest.mark.parametrize("steps", ["[]", "[", "{}"])
+async def test_empty_or_malformed_steps_still_receive_guard_feedback(
+    tmp_path: pathlib.Path, steps: str
+) -> None:
+    invalid = {**VALID_RESULT, "steps": steps}
+    valid = {**VALID_RESULT, "steps": json.dumps(VALID_RESULT["steps"])}
+    ctx, model = context(tmp_path, model=FakeModel(invalid, valid))
+
+    outcome = await execution.EXECUTION.run(ctx)
+
+    assert len(model.requests) == 3
+    assert outcome.artifact == ExecutionResult.model_validate(valid)
+    assert outcome.metadata["submit_guard"]["rejections"] == 1
+    assert outcome.metadata["submit_guard"]["bypassed"] is False
+    assert submit_results(model, "submit_execution_result") == [
+        f"error: {read_runtime('execution', 'submit_without_steps.txt')}"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error_field"),
+    [({"steps": "[{}]"}, "step_index"), ({"needs_replan": True}, "replan_reason")],
+)
+async def test_decoded_steps_still_require_schema_valid_submission(
+    tmp_path: pathlib.Path, overrides: dict[str, Any], error_field: str
+) -> None:
+    valid = {**VALID_RESULT, "steps": json.dumps(VALID_RESULT["steps"])}
+    sink = ListSink()
+    ctx, model = context(tmp_path, model=FakeModel({**valid, **overrides}, valid), sink=sink)
+
+    outcome = await execution.EXECUTION.run(ctx)
+
+    assert len(model.requests) == 3
+    assert outcome.artifact == ExecutionResult.model_validate(valid)
+    assert outcome.metadata["submit_guard"] == {"rejections": 0, "bypassed": False}
+    rejected, accepted = [
+        e.payload
+        for e in sink.events
+        if isinstance(e.payload, SubmissionEvent) and e.payload.source == "role_loop"
+    ]
+    assert rejected.accepted is False and rejected.attempt == 1
+    assert error_field in (rejected.validation_error or "")
+    assert accepted.accepted is True and accepted.attempt == 2
+
+
+@pytest.mark.parametrize("steps", ["[]", "["])
+async def test_spent_steps_guard_still_bypasses_policy_but_not_schema(
+    tmp_path: pathlib.Path, steps: str
+) -> None:
+    invalid = {**VALID_RESULT, "steps": steps}
+    valid = {**VALID_RESULT, "steps": json.dumps(VALID_RESULT["steps"])}
+    sink = ListSink()
+    ctx, model = context(tmp_path, model=FakeModel(*[invalid] * 3, valid), sink=sink)
+
+    outcome = await execution.EXECUTION.run(ctx)
+
+    assert outcome.artifact is not None
+    assert outcome.metadata["submit_guard"]["rejections"] == 2
+    assert outcome.metadata["submit_guard"]["bypassed"] is True
+    submissions = [
+        e.payload
+        for e in sink.events
+        if isinstance(e.payload, SubmissionEvent) and e.payload.source == "role_loop"
+    ]
+    assert [s.accepted for s in submissions[:2]] == [False, False]
+    if steps == "[]":
+        # Empty steps are schema-valid: the third submit takes the existing bypass.
+        assert len(model.requests) == 4
+        assert outcome.artifact.steps == []
+        assert submissions[2].accepted is True
+    else:
+        # A malformed string remains schema-invalid even after the guard is spent.
+        assert len(model.requests) == 5
+        assert submissions[2].accepted is False
+        assert "ValidationError" in (submissions[2].validation_error or "")
+        assert submissions[3].accepted is True
+        assert outcome.artifact == ExecutionResult.model_validate(valid)
 
 
 async def test_an_empty_plan_short_circuits_without_a_model_call(tmp_path: pathlib.Path) -> None:
