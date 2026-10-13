@@ -82,4 +82,4 @@ services:
 
 volumes:
   maver-eval-workspace:
-    name: "${MAVER_EVAL_WORKSPACE_VOLUME:-docker_kira-eval-workspace}"
+    name: "${MAVER_EVAL_WORKSPACE_VOLUME:-docker_maver-eval-workspace}"

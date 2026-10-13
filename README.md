@@ -120,17 +120,16 @@ namespace access and persistent state.
 
 ## Configuration
 
-The package and command are now `maver`, and settings use the `MAVER_` prefix.
-Existing `KIRA_` setting names remain aliases; `MAVER_` wins when both are set.
-The PostgreSQL schema still defaults to `kira_memory` so the rename opens existing
-data. Narrow compatibility imports restore previously scheduled approval and learning
-jobs into the MAVER runtime. Compose keeps the old physical workspace-volume names by default; set
-`MAVER_WORKSPACE_VOLUME` or `MAVER_EVAL_WORKSPACE_VOLUME` when the previous deployment
-used a custom Compose project name. Kubernetes adopters should retain their existing
-namespace and PVC bindings in their overlay when upgrading. The repository is now
-[disnetlab/maver](https://github.com/disnetlab/maver); update an existing clone with
-`git remote set-url origin git@github.com:disnetlab/maver.git`.
-Frozen prototype assets retain their original bytes.
+The supported Python package and command are `maver`. Settings use the `MAVER_`
+prefix; unprefixed prototype aliases remain available for recorded experiments.
+The PostgreSQL schema defaults to `maver_memory`.
+Compose workspace volumes default to `docker_maver-workspace` and
+`docker_maver-eval-workspace`. To reuse existing data, explicitly set
+`MAVER_MEMORY__POSTGRES_SCHEMA` to the existing schema and `MAVER_WORKSPACE_VOLUME`
+or `MAVER_EVAL_WORKSPACE_VOLUME` to the existing physical volume name. Kubernetes
+upgrades must retain existing namespace and PVC bindings or migrate the workspace.
+See [deployment upgrade guidance](deploy/k8s/README.md#upgrading-existing-deployments)
+before upgrading a deployment with pending approvals or scheduled jobs.
 
 Every setting is a field on a nested model, and an unrecognised `MAVER_`-prefixed name
 stops the process rather than being ignored. `uv run maver config show` prints the

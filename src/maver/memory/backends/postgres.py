@@ -834,7 +834,7 @@ class PostgresStore:
         self,
         dsn: str,
         *,
-        schema: str = "kira_memory",
+        schema: str = "maver_memory",
         corpus_id: str = "default",
         connect_timeout: int = CONNECT_TIMEOUT_S,
         statement_timeout_ms: int = STATEMENT_TIMEOUT_MS,
@@ -1867,7 +1867,7 @@ class PostgresRecordIndex:
         self,
         connection: _Pool | str,
         *,
-        schema: str = "kira_memory",
+        schema: str = "maver_memory",
         corpus_id: str = "default",
     ) -> None:
         """Open or adopt a database, creating or migrating it to the current layout.

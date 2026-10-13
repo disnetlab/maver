@@ -469,7 +469,6 @@ class SecondPassSettings(SettingsGroup):
             "delivery",
             "MEMORY_SECOND_OPINION_MODE",
             "MAVER_MEMORY__SECOND_PASS__DELIVERY",
-            "KIRA_MEMORY__SECOND_PASS__DELIVERY",
         ):
             value = data.get(key)
             if not isinstance(value, str):
@@ -580,7 +579,7 @@ class MemorySettings(SettingsGroup):
         description="Connection string. Required by the postgres backend.",
     )
     postgres_schema: str = setting(
-        "kira_memory",
+        "maver_memory",
         "MAVER_MEMORY__POSTGRES_SCHEMA",
         "MEMORY_POSTGRES_SCHEMA",
         description="Schema holding the tables.",

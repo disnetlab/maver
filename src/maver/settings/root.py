@@ -127,7 +127,7 @@ class Settings(SettingsGroup):
     server: ServerSettings = Field(default_factory=ServerSettings)
     adapters: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
-        validation_alias=AliasChoices(ADAPTER_ENV_NAME, "KIRA_ADAPTERS"),
+        validation_alias=ADAPTER_ENV_NAME,
         description=(
             "Per-adapter configuration, keyed by registered adapter name and read from "
             "MAVER_ADAPTERS__<NAME>__<FIELD>. Untyped here on purpose: an adapter "
@@ -451,10 +451,10 @@ def unknown_prefixed_names(env: Mapping[str, str] | None = None) -> list[str]:
         # An adapter's own slice is checked by the adapter, at startup, against its own
         # model. Checking it here would mean the settings layer holding the field names
         # of every environment it exists not to know about.
-        if n.startswith((ENV_PREFIX, "KIRA_"))
+        if n.startswith(ENV_PREFIX)
         and n not in known
-        and n.removeprefix(ENV_PREFIX).removeprefix("KIRA_") not in _DIRECT_ENV_NAMES
-        and not n.startswith((_ADAPTER_SLICE_PREFIX, "KIRA_ADAPTERS__"))
+        and n.removeprefix(ENV_PREFIX) not in _DIRECT_ENV_NAMES
+        and not n.startswith(_ADAPTER_SLICE_PREFIX)
     )
 
 

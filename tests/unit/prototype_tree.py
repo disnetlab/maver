@@ -34,7 +34,7 @@ def prototype_root() -> Path:
         copy otherwise. A name that points nowhere falls back rather than failing: a
         stale export in a shell should not turn the comparisons off.
     """
-    named = os.environ.get(ENV_NAME, os.environ.get("KIRA_PROTOTYPE_ROOT"))
+    named = os.environ.get(ENV_NAME)
     if named and Path(named).is_dir():
         return Path(named)
     return FROZEN

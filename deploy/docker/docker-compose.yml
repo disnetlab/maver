@@ -61,4 +61,4 @@ services:
 
 volumes:
   maver-workspace:
-    name: "${MAVER_WORKSPACE_VOLUME:-docker_kira-workspace}"
+    name: "${MAVER_WORKSPACE_VOLUME:-docker_maver-workspace}"

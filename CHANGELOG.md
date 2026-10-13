@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Breaking:** remove previous package imports and prefixed environment-variable
+  aliases. The supported names are `maver` and `MAVER_`; unprefixed prototype aliases
+  remain available for recorded experiments. PostgreSQL now defaults
+  to `maver_memory`, and Compose physical workspace volumes default to
+  `docker_maver-workspace` and `docker_maver-eval-workspace`. Set explicit schema and
+  volume overrides to reuse existing data. Scheduled job stores referencing removed
+  modules cannot continue unchanged: drain pending approvals and scheduled jobs, or
+  migrate their stored references before upgrading. Preserve existing state; see
+  [deployment upgrade guidance](deploy/k8s/README.md#upgrading-existing-deployments).
 - Normalize Execution's string-encoded step arrays with the submission schema's shared
   decoder before checking for observations. Valid submissions no longer consume guard
   retries; command requirements, schema validation and the bounded fallback are unchanged.
@@ -245,11 +254,11 @@ agent behaviour defines a new experimental condition and requires its own eviden
 
 ### MAVER naming
 
-- Rename the Python package, CLI, entry-point groups, and deployment examples from
-  Kira to MAVER. Use `maver serve` and `MAVER_` settings. Old `KIRA_` settings remain
-  readable, with the new spelling taking precedence. Existing PostgreSQL data and
-  Compose workspace volumes keep their physical names. Frozen prompts and arm files
-  are unchanged; the rename changes no recovery policy.
+- Rename the previous framework's Python package, CLI, entry-point groups and
+  deployment examples to MAVER. Use `maver serve` and `MAVER_` settings. The initial
+  rename retained compatibility aliases and existing physical data names; the
+  compatibility removal and current defaults are documented under Unreleased.
+  Frozen prompts and arm files are unchanged; the rename changes no recovery policy.
 
 
 ### Schema version 1

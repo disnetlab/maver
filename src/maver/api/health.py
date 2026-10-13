@@ -28,7 +28,7 @@ __all__ = ["router"]
 
 router = APIRouter()
 
-_REVISION = os.environ.get("MAVER_REVISION", os.environ.get("KIRA_REVISION", "unknown"))
+_REVISION = os.environ.get("MAVER_REVISION", "unknown")
 """The commit this image was built from.
 
 Threaded in from the image's ``org.opencontainers.image.revision`` label, and reported

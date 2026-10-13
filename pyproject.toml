@@ -128,7 +128,7 @@ test = [
 required-version = ">=0.9"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/maver", "src/kira"]
+packages = ["src/maver"]
 
 [tool.ruff]
 line-length = 100
