@@ -1468,124 +1468,6 @@ wheels = [
 ]
 
 [[package]]
-name = "maver"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "apscheduler" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "kubernetes" },
-    { name = "langgraph" },
-    { name = "litellm" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc" },
-    { name = "opentelemetry-sdk" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "python-dotenv" },
-    { name = "pyyaml" },
-    { name = "snowballstemmer" },
-    { name = "sqlalchemy" },
-    { name = "typer" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.optional-dependencies]
-all = [
-    { name = "aiokafka" },
-    { name = "chromadb" },
-    { name = "httpx-sse" },
-    { name = "mcp" },
-    { name = "psycopg", extra = ["binary"] },
-]
-kafka = [
-    { name = "aiokafka" },
-]
-postgres = [
-    { name = "psycopg", extra = ["binary"] },
-]
-sregym = [
-    { name = "httpx-sse" },
-    { name = "mcp" },
-]
-vector = [
-    { name = "chromadb" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "respx" },
-    { name = "ruff" },
-    { name = "types-pyyaml" },
-]
-lint = [
-    { name = "mypy" },
-    { name = "ruff" },
-    { name = "types-pyyaml" },
-]
-test = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "respx" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiokafka", marker = "extra == 'kafka'", specifier = ">=0.12" },
-    { name = "apscheduler", specifier = ">=3.11" },
-    { name = "chromadb", marker = "extra == 'vector'", specifier = ">=1.0" },
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "httpx", specifier = ">=0.28" },
-    { name = "httpx-sse", marker = "extra == 'sregym'", specifier = ">=0.4" },
-    { name = "maver", extras = ["postgres", "vector", "kafka", "sregym"], marker = "extra == 'all'" },
-    { name = "kubernetes", specifier = ">=31.0" },
-    { name = "langgraph", specifier = ">=1.0" },
-    { name = "litellm", specifier = ">=1.70" },
-    { name = "mcp", marker = "extra == 'sregym'", specifier = ">=2.1" },
-    { name = "opentelemetry-api", specifier = ">=1.30" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.30" },
-    { name = "opentelemetry-sdk", specifier = ">=1.30" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
-    { name = "pydantic", specifier = ">=2.9" },
-    { name = "pydantic-settings", specifier = ">=2.6" },
-    { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "snowballstemmer", specifier = ">=3.1.1" },
-    { name = "sqlalchemy", specifier = ">=2.0" },
-    { name = "typer", specifier = ">=0.15" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
-]
-provides-extras = ["postgres", "vector", "kafka", "sregym", "all"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.15" },
-    { name = "pytest", specifier = ">=8.3" },
-    { name = "pytest-asyncio", specifier = ">=0.25" },
-    { name = "pytest-cov", specifier = ">=6.0" },
-    { name = "respx", specifier = ">=0.22" },
-    { name = "ruff", specifier = "==0.16.5" },
-    { name = "types-pyyaml", specifier = ">=6.0" },
-]
-lint = [
-    { name = "mypy", specifier = ">=1.15" },
-    { name = "ruff", specifier = "==0.16.5" },
-    { name = "types-pyyaml", specifier = ">=6.0" },
-]
-test = [
-    { name = "pytest", specifier = ">=8.3" },
-    { name = "pytest-asyncio", specifier = ">=0.25" },
-    { name = "pytest-cov", specifier = ">=6.0" },
-    { name = "respx", specifier = ">=0.22" },
-]
-
-[[package]]
 name = "kubernetes"
 version = "36.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1928,6 +1810,124 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/fb/df/5bd7a48c256faecd1d36edc13133e51397e41b73bb77e1a69deab746ebac/markupsafe-3.0.3-cp314-cp314t-win32.whl", hash = "sha256:915c04ba3851909ce68ccc2b8e2cd691618c4dc4c4232fb7982bca3f41fd8c3d", size = 14819, upload-time = "2025-09-27T18:37:26.285Z" },
     { url = "https://files.pythonhosted.org/packages/1a/8a/0402ba61a2f16038b48b39bccca271134be00c5c9f0f623208399333c448/markupsafe-3.0.3-cp314-cp314t-win_amd64.whl", hash = "sha256:4faffd047e07c38848ce017e8725090413cd80cbc23d86e55c587bf979e579c9", size = 15426, upload-time = "2025-09-27T18:37:27.316Z" },
     { url = "https://files.pythonhosted.org/packages/70/bc/6f1c2f612465f5fa89b95bead1f44dcb607670fd42891d8fdcd5d039f4f4/markupsafe-3.0.3-cp314-cp314t-win_arm64.whl", hash = "sha256:32001d6a8fc98c8cb5c947787c5d08b0a50663d139f1305bac5885d98d9b40fa", size = 14146, upload-time = "2025-09-27T18:37:28.327Z" },
+]
+
+[[package]]
+name = "maver"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "apscheduler" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "kubernetes" },
+    { name = "langgraph" },
+    { name = "litellm" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc" },
+    { name = "opentelemetry-sdk" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "python-dotenv" },
+    { name = "pyyaml" },
+    { name = "snowballstemmer" },
+    { name = "sqlalchemy" },
+    { name = "typer" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.optional-dependencies]
+all = [
+    { name = "aiokafka" },
+    { name = "chromadb" },
+    { name = "httpx-sse" },
+    { name = "mcp" },
+    { name = "psycopg", extra = ["binary"] },
+]
+kafka = [
+    { name = "aiokafka" },
+]
+postgres = [
+    { name = "psycopg", extra = ["binary"] },
+]
+sregym = [
+    { name = "httpx-sse" },
+    { name = "mcp" },
+]
+vector = [
+    { name = "chromadb" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "respx" },
+    { name = "ruff" },
+    { name = "types-pyyaml" },
+]
+lint = [
+    { name = "mypy" },
+    { name = "ruff" },
+    { name = "types-pyyaml" },
+]
+test = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "respx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiokafka", marker = "extra == 'kafka'", specifier = ">=0.12" },
+    { name = "apscheduler", specifier = ">=3.11" },
+    { name = "chromadb", marker = "extra == 'vector'", specifier = ">=1.0" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.28" },
+    { name = "httpx-sse", marker = "extra == 'sregym'", specifier = ">=0.4" },
+    { name = "kubernetes", specifier = ">=31.0" },
+    { name = "langgraph", specifier = ">=1.0" },
+    { name = "litellm", specifier = ">=1.70" },
+    { name = "maver", extras = ["postgres", "vector", "kafka", "sregym"], marker = "extra == 'all'" },
+    { name = "mcp", marker = "extra == 'sregym'", specifier = ">=2.1" },
+    { name = "opentelemetry-api", specifier = ">=1.30" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.30" },
+    { name = "opentelemetry-sdk", specifier = ">=1.30" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
+    { name = "pydantic", specifier = ">=2.9" },
+    { name = "pydantic-settings", specifier = ">=2.6" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "snowballstemmer", specifier = ">=3.1.1" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
+    { name = "typer", specifier = ">=0.15" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
+]
+provides-extras = ["postgres", "vector", "kafka", "sregym", "all"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.15" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio", specifier = ">=0.25" },
+    { name = "pytest-cov", specifier = ">=6.0" },
+    { name = "respx", specifier = ">=0.22" },
+    { name = "ruff", specifier = "==0.16.5" },
+    { name = "types-pyyaml", specifier = ">=6.0" },
+]
+lint = [
+    { name = "mypy", specifier = ">=1.15" },
+    { name = "ruff", specifier = "==0.16.5" },
+    { name = "types-pyyaml", specifier = ">=6.0" },
+]
+test = [
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio", specifier = ">=0.25" },
+    { name = "pytest-cov", specifier = ">=6.0" },
+    { name = "respx", specifier = ">=0.22" },
 ]
 
 [[package]]
@@ -3035,11 +3035,11 @@ wheels = [
 
 [[package]]
 name = "pyjwt"
-version = "2.13.0"
+version = "2.15.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3b/81/58d0ac84e1ef3a3843791d6954d94c0b33d526c75eeb1efbce9d0a4c4077/pyjwt-2.13.0.tar.gz", hash = "sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423", size = 107515, upload-time = "2026-05-21T19:54:36.618Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/02/a5/5197bfd06417837ac079921c66fa6393f1dea3557272a263cebfef69e432/pyjwt-2.15.0.tar.gz", hash = "sha256:b11c5f9791d7bf51c2b39a81ed669f6b2dbbd669df2942f6c60167e9e3d1abe4", size = 120513, upload-time = "2026-09-23T16:56:00.689Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/5e/ecf12fdb62546d64385c158514e9b2b671f7832108ef2ecd2020ce0af2d1/pyjwt-2.13.0-py3-none-any.whl", hash = "sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728", size = 31274, upload-time = "2026-05-21T19:54:35.362Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/55/40e45bf052ee8ee12a4dfd785519660f8effa7b065442b91646ec6828619/pyjwt-2.15.0-py3-none-any.whl", hash = "sha256:7a3742debf6b879e912dbb9819ceec1594be812452b78c5f2e2dfc56564954f8", size = 33680, upload-time = "2026-09-23T16:55:59.241Z" },
 ]
 
 [package.optional-dependencies]
