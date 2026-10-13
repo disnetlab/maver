@@ -33,6 +33,7 @@ def test_defaults_load() -> None:
     s = load_settings()
     assert s.pipeline.mode == "multi"
     assert s.memory.backend == "embedded"
+    assert s.memory.postgres_schema == "maver_memory"
 
 
 class TestAliases:

@@ -186,10 +186,33 @@ command.
 The rendered production ConfigMap must contain every key the base ConfigMap has. An
 overlay that drops one is the first trap above, happening quietly; the test asserts it.
 
-## Upgrading from Kira
+## Upgrading existing deployments
 
-MAVER's base manifests use new namespace and resource names. Stop the old deployment
-before starting MAVER against the same managed applications. Retain the existing
-namespace and PVC in an upgrade overlay, or migrate the workspace first; applying the
-new base alone creates separate resources and does not migrate data or stop Kira.
-The default PostgreSQL schema remains `kira_memory` so existing records stay available.
+The supported package and CLI are `maver`. Settings use the `MAVER_` prefix;
+unprefixed prototype aliases remain available for recorded experiments. Update
+operator environment files and deployment settings before upgrading.
+
+The PostgreSQL schema defaults to `maver_memory`. To reuse an existing schema, set
+`MAVER_MEMORY__POSTGRES_SCHEMA` to its actual name in your environment file or
+ConfigMap. Point it at the same database and retain a backup before upgrading;
+changing the default does not move existing records.
+
+Compose uses physical workspace volumes `docker_maver-workspace` and
+`docker_maver-eval-workspace` by default. To retain an existing volume, set
+`MAVER_WORKSPACE_VOLUME` or `MAVER_EVAL_WORKSPACE_VOLUME` to its actual name in the
+Compose interpolation environment (for example, export it in the host shell before
+running Compose). A service's `maver.env` file configures the container; it does not
+supply these Compose interpolation overrides. Changing a volume name starts a separate
+workspace rather than migrating its contents.
+
+For Kubernetes, retain the existing namespace and PVC in an upgrade overlay, or
+migrate the workspace before starting the new deployment. Applying the new base
+alone creates separate resources; it neither migrates existing state nor stops an
+existing deployment.
+
+Scheduled job stores with callable references to removed package modules cannot
+continue unchanged. Before upgrading, drain pending approvals and scheduled jobs
+under the existing deployment, or migrate their stored references to the supported
+MAVER modules and validate that the continuations can load. Preserve the database,
+job store and workspace during this process. Stop the existing deployment before
+starting the upgraded one against the same managed applications.

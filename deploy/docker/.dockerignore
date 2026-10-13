@@ -19,9 +19,12 @@ htmlcov
 # Secrets and per-host runtime state, mounted at run time, never built in.
 .env
 .env.local
-agent.env
-maver.env
-kira.env
+**/.env
+**/.env.*
+**/*.env
+# Keep configuration templates available without including operator secrets.
+!**/.env.example
+!**/.env.*.example
 kubeconfig
 workspace/
 

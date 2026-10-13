@@ -3,6 +3,8 @@
 import logging
 import pathlib
 import sys
+from importlib import import_module
+from inspect import signature
 
 import pytest
 
@@ -32,6 +34,19 @@ def settings_for(tmp_path: pathlib.Path, **memory: object) -> Settings:
         server=ServerSettings(workdir=tmp_path),
         memory=MemorySettings(**memory),  # type: ignore[arg-type]
     )
+
+
+def test_postgres_entry_points_share_the_configured_default_schema() -> None:
+    """Direct stores and standalone indexes must use the factory's default namespace.
+
+    Inspecting signatures keeps this check independent of a PostgreSQL connection.
+    """
+    pytest.importorskip("psycopg", reason="the postgres extra is not installed")
+    backend = import_module("maver.memory.backends.postgres")
+    default_schema = MemorySettings().postgres_schema
+    assert default_schema == "maver_memory"
+    for constructor in (backend.PostgresStore, backend.PostgresRecordIndex):
+        assert signature(constructor).parameters["schema"].default == default_schema
 
 
 def test_the_embedded_database_lives_under_this_deployment_s_workspace(

@@ -20,7 +20,7 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Remove every variable the settings model would read."""
     known = known_env_names()
     for name in list(os.environ):
-        if name.startswith(("MAVER_", "KIRA_")) or name in known:
+        if name.startswith("MAVER_") or name in known:
             monkeypatch.delenv(name, raising=False)
     # A developer's .env at the repo root must not steer the suite either.
     monkeypatch.chdir(os.environ.get("PYTEST_TMP_CWD", os.getcwd()))

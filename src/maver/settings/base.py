@@ -174,8 +174,7 @@ def alias(modern: str, *legacy: str) -> list[str]:
     Returns:
         The accepted names in precedence order.
     """
-    renamed = ["KIRA_" + modern.removeprefix(ENV_PREFIX)] if modern.startswith(ENV_PREFIX) else []
-    return [modern, *renamed, *legacy]
+    return [modern, *legacy]
 
 
 def setting(default: Any, modern: str, *legacy: str, description: str) -> Any:
